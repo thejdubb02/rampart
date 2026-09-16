@@ -56,6 +56,28 @@ class ReplyTest {
     }
 
     @Test
+    fun `a forward names the original sender and does not thread`() {
+        val body = Body(null, "The quote is attached.", messageId = listOf("<b@example.org>"))
+        val draft = forwardOf(message, body, "me@example.org")
+
+        assertEquals("Fwd: The quote for Tuesday", draft.subject)
+        assertEquals("", draft.to)
+        // Threading a forward onto a conversation the new recipient cannot see is worse
+        // than not threading it at all.
+        assertEquals(null, draft.inReplyTo)
+        assertTrue(draft.references.isEmpty())
+        assertTrue(draft.body.contains("dana@example.org"), draft.body)
+        assertTrue(draft.body.contains("The quote is attached."), draft.body)
+        assertTrue(!draft.replying)
+    }
+
+    @Test
+    fun `Fwd is added once and not again`() {
+        val once = forwardOf(message.copy(subject = "Fwd: The quote for Tuesday"), null, "me@example.org")
+        assertEquals("Fwd: The quote for Tuesday", once.subject)
+    }
+
+    @Test
     fun `recipients are split on commas and blanks dropped`() {
         val draft = Draft(from = "me@example.org", to = "a@example.org,  b@example.org , ", cc = " c@example.org")
         assertEquals(listOf("a@example.org", "b@example.org", "c@example.org"), draft.recipients)

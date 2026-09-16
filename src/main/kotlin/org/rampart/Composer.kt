@@ -75,9 +75,7 @@ data class Draft(
  * either wrong and the reply shows up as a new conversation.
  */
 internal fun replyTo(summary: Summary, body: Body?, from: String): Draft {
-    val original = body?.text
-        ?: body?.html?.let { renderHtml(it, Color.Unspecified, Color.Unspecified) {}.text.text }
-        ?: ""
+    val original = plainTextOf(body)
     val quoted = original.trim().lineSequence().joinToString("\n") { if (it.isEmpty()) ">" else "> $it" }
     val subject = summary.subject.trim()
     val answered = body?.messageId?.firstOrNull()
@@ -91,6 +89,34 @@ internal fun replyTo(summary: Summary, body: Body?, from: String): Draft {
         replying = true,
     )
 }
+
+/**
+ * A forward of [summary]. The original is quoted under a header naming who sent it and
+ * when, which is the convention every mail client renders the same way.
+ *
+ * No threading headers: a forward starts a new conversation with someone who was not in
+ * the old one, and attaching it to a thread they cannot see is worse than not threading.
+ */
+internal fun forwardOf(summary: Summary, body: Body?, from: String): Draft {
+    val subject = summary.subject.trim()
+    return Draft(
+        from = from,
+        subject = if (subject.startsWith("Fwd:", ignoreCase = true)) subject else "Fwd: $subject",
+        body = buildString {
+            append("\n\n---------- Forwarded message ----------\n")
+            append("From: ${summary.from} <${summary.fromEmail}>\n")
+            append("Date: ${summary.receivedAt.asLocalTime()}\n")
+            append("Subject: $subject\n\n")
+            append(plainTextOf(body))
+        },
+    )
+}
+
+/** The message as text, whichever way it arrived, so a quote never carries markup. */
+private fun plainTextOf(body: Body?): String =
+    body?.text
+        ?: body?.html?.let { renderHtml(it, Color.Unspecified, Color.Unspecified) {}.text.text }
+        ?: ""
 
 /**
  * The compose pane. Owns what the writer has typed and nothing else: sending, saving and

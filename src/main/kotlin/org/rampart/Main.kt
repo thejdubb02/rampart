@@ -527,6 +527,12 @@ private fun Reader(
                     sendError = null
                     composing = replyTo(message, body, from)
                 },
+                onForward = {
+                    val message = selected ?: return@Message
+                    val from = identities[here?.first].orEmpty().firstOrNull()?.email.orEmpty()
+                    sendError = null
+                    composing = forwardOf(message, body, from)
+                },
                 onLink = { confirm = it },
                 actions = actions,
             )
@@ -732,6 +738,7 @@ internal fun Message(
     summary: Summary?,
     body: Body?,
     onReply: () -> Unit = {},
+    onForward: () -> Unit = {},
     actions: MessageActions = MessageActions(),
     onLink: (String) -> Unit,
 ) {
@@ -755,6 +762,7 @@ internal fun Message(
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
             Text(summary.subject, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
             TextButton(onClick = onReply, enabled = body != null) { Text("Reply") }
+            TextButton(onClick = onForward, enabled = body != null) { Text("Forward") }
             actions.archive?.let { TextButton(onClick = it) { Text("Archive") } }
             actions.junk?.let { TextButton(onClick = it) { Text("Spam") } }
             actions.trash?.let { TextButton(onClick = it) { Text("Delete") } }
