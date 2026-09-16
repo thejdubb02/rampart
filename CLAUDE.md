@@ -30,15 +30,14 @@ Nothing built yet. When it is: `docs/` for decisions, the Gradle project at the 
 
 ## Test servers
 
-Two, both Stalwart, and use both because one server is not a compatibility test:
+Two Stalwart servers, and use both: one server is not a compatibility test. Their
+addresses, the admin surface and the credentials are not in this repo and are not
+going in it. They live in the operator's own notes and password manager. A real
+server to test against goes in a git-ignored local file, never in a commit.
 
-- `https://mail.example.org/jmap/` (ours, vps1). Admin surface on the
-  tailnet at `http://10.0.0.1:8080/`. Helper: `a local helper script` on vps1.
-- `https://mail.example.net/jmap/` (Mark's).
+## This repo is public
 
-Credentials in the password manager, never in this repo.
-
-## Going public
-
-It is private for now. Before it flips: check no host names, tailnet addresses or
-account details are in the history, not just the working tree.
+Host names, tailnet addresses, account details and credentials stay out of the
+working tree and out of the history. Check both before every push, not just the
+working tree: a scrubbed file with the original still one commit back is not
+scrubbed.
