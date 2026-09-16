@@ -21,7 +21,10 @@ class Screenshots {
 
     private fun shoot(name: String, width: Int, height: Int, dark: Boolean = false, content: @Composable () -> Unit) {
         val image = renderComposeScene(width, height) {
-            MaterialTheme(colorScheme = if (dark) RampartDarkColors else RampartColors) {
+            MaterialTheme(
+                colorScheme = if (dark) RampartDarkColors else RampartColors,
+                typography = RampartTypography,
+            ) {
                 Surface(Modifier.fillMaxSize()) { content() }
             }
         }
@@ -58,9 +61,14 @@ class Screenshots {
                 onSelect = { _, _ -> },
             )
             VerticalDivider()
-            MessageList(MESSAGES, MESSAGES[1], loading = false) {}
+            MessageList(MESSAGES, MESSAGES[1], loading = false, title = "Inbox") {}
             VerticalDivider()
-            Message(MESSAGES[1], Body(SAMPLE_HTML, null)) {}
+            Message(
+                summary = MESSAGES[1],
+                body = Body(SAMPLE_HTML, null),
+                actions = MessageActions(archive = {}, junk = {}, trash = {}),
+                onLink = {},
+            )
         }
     }
 }
@@ -80,8 +88,8 @@ private val MAILBOXES = listOf(
 )
 
 private val ACCOUNTS = listOf(
-    AccountMailboxes("work", "Work", MAILBOXES),
-    AccountMailboxes("personal", "Personal", MAILBOXES.take(3)),
+    AccountMailboxes("work", "Willhite Strategy", "justin@willhitestrategy.com", MAILBOXES),
+    AccountMailboxes("personal", "Skybox7", "admin@skybox7.com", MAILBOXES.take(3)),
 )
 
 private val MESSAGES = listOf(

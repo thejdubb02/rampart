@@ -11,6 +11,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -30,8 +37,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -68,35 +73,6 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-/** Bulwark's red. See docs/architecture.md. */
-private val RampartRed = Color(0xFFDB2D54)
-
-/**
- * Material's baseline schemes are faintly purple, which on a red-primary app reads as a
- * cast over everything. Mail is text on paper, so the neutrals are neutral.
- *
- * The brand red is lightened on dark: #DB2D54 on a near-black background is under the
- * contrast a link needs to be read at body size.
- */
-internal val RampartColors = lightColorScheme(
-    primary = RampartRed,
-    background = Color.White,
-    surface = Color.White,
-    surfaceVariant = Color(0xFFF1F1F4),
-    onSurfaceVariant = Color(0xFF1C1B1F),
-    outline = Color(0xFF6E6E78),
-)
-
-internal val RampartDarkColors = darkColorScheme(
-    primary = Color(0xFFFF7A96),
-    background = Color(0xFF131318),
-    surface = Color(0xFF131318),
-    onSurface = Color(0xFFE7E7EC),
-    surfaceVariant = Color(0xFF26262F),
-    onSurfaceVariant = Color(0xFFE7E7EC),
-    outline = Color(0xFF9D9DA9),
-)
-
 private val WHEN = DateTimeFormatter.ofPattern("d MMM  HH:mm").withZone(ZoneId.systemDefault())
 
 /** One signed in mailbox. Several of these is the point; the password is in none of them. */
@@ -105,7 +81,12 @@ internal class Session(val account: SavedAccount, val jmap: Jmap) {
 }
 
 /** What the sidebar needs to draw an account, with no live connection behind it. */
-internal data class AccountMailboxes(val key: String, val name: String, val mailboxes: List<Mailbox>)
+internal data class AccountMailboxes(
+    val key: String,
+    val name: String,
+    val email: String,
+    val mailboxes: List<Mailbox>,
+)
 
 fun main() = application {
     val density = LocalDensity.current
@@ -121,7 +102,10 @@ fun main() = application {
         val followSystem = isSystemInDarkTheme()
         var dark by remember { mutableStateOf(Settings.dark() ?: followSystem) }
         LaunchedEffect(dark) { WindowChrome.setDarkTitleBar(window, dark) }
-        MaterialTheme(colorScheme = if (dark) RampartDarkColors else RampartColors) {
+        MaterialTheme(
+            colorScheme = if (dark) RampartDarkColors else RampartColors,
+            typography = RampartTypography,
+        ) {
             Surface(Modifier.fillMaxSize()) {
                 App(
                     dark = dark,
@@ -482,9 +466,21 @@ private fun Reader(
                 modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.errorContainer).padding(10.dp),
             )
         }
+        SearchBar(
+            query = query,
+            onQueryChange = { query = it },
+            onSearch = {
+                showingResults = query.isNotBlank()
+                selected = null
+                body = null
+                scope.launch { reload() }
+            },
+        )
         Row(Modifier.fillMaxSize()) {
             Sidebar(
-                accounts = sessions.map { AccountMailboxes(it.key, it.account.name, mailboxes[it.key].orEmpty()) },
+                accounts = sessions.map {
+                    AccountMailboxes(it.key, it.account.name, it.account.email, mailboxes[it.key].orEmpty())
+                },
                 here = here,
                 dark = dark,
                 onToggleDark = onToggleDark,
@@ -502,19 +498,7 @@ private fun Reader(
                 emails = emails,
                 selected = selected,
                 loading = loading,
-                query = query,
-                onQueryChange = { query = it },
-                onSearch = {
-                    if (query.isBlank()) {
-                        showingResults = false
-                        scope.launch { reload() }
-                    } else {
-                        showingResults = true
-                        selected = null
-                        body = null
-                        scope.launch { reload() }
-                    }
-                },
+                title = here?.second?.name.orEmpty(),
                 onSelect = { selected = it },
             )
             VerticalDivider()
@@ -565,100 +549,153 @@ internal fun Sidebar(
     onWrite: () -> Unit,
     onSelect: (String, Mailbox) -> Unit,
 ) {
-    Column(Modifier.width(220.dp).fillMaxHeight()) {
+    Column(
+        Modifier.width(232.dp).fillMaxHeight()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(horizontal = 12.dp, vertical = 14.dp),
+    ) {
         Button(
             onClick = onWrite,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-        ) { Text("Write") }
-        LazyColumn(Modifier.weight(1f)) {
-            accounts.forEach { account ->
-                // With one account the heading is noise. With two it is the only way to
-                // tell one Inbox from the other.
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth().height(38.dp),
+        ) { Text("Write", style = MaterialTheme.typography.labelLarge) }
+
+        Spacer(Modifier.height(14.dp))
+
+        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            accounts.forEachIndexed { index, account ->
+                // With one account the heading is noise. With two it is the only way to tell
+                // one Inbox from the other.
                 if (accounts.size > 1) {
                     item(key = "head-${account.key}") {
                         Text(
-                            account.name,
+                            account.name.uppercase(),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.outline,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 14.dp, bottom = 4.dp),
+                            modifier = Modifier.fillMaxWidth()
+                                .padding(start = 10.dp, end = 10.dp, top = if (index == 0) 4.dp else 16.dp, bottom = 4.dp),
                         )
                     }
                 }
                 items(account.mailboxes, key = { "${account.key}/${it.id}" }) { box ->
-                    val selected = here?.first == account.key && here.second.id == box.id
-                    Row(
-                        modifier = Modifier.fillMaxWidth()
-                            .background(if (selected) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent)
-                            .clickable { onSelect(account.key, box) }
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Text(
-                            box.name,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                            modifier = Modifier.weight(1f, false),
-                        )
-                        if (box.unread > 0) {
-                            Text(
-                                "${box.unread}",
-                                color = MaterialTheme.colorScheme.primary,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
-                    }
+                    FolderRow(
+                        name = box.name,
+                        unread = box.unread,
+                        selected = here?.first == account.key && here.second.id == box.id,
+                        onClick = { onSelect(account.key, box) },
+                    )
                 }
             }
         }
-        HorizontalDivider()
+
+        Spacer(Modifier.height(8.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Spacer(Modifier.height(8.dp))
+
+        accounts.forEach { account ->
+            Row(
+                Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Avatar(account.name, account.email, 26.dp)
+                Spacer(Modifier.width(9.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        account.name,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        account.email,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+            Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(onClick = onAddAccount) { Text("Add account") }
-            TextButton(onClick = { onToggleDark(!dark) }) { Text(if (dark) "Light" else "Dark") }
+            TextButton(onClick = onAddAccount) { Text("Add account", style = MaterialTheme.typography.bodySmall) }
+            TextButton(onClick = { onToggleDark(!dark) }) {
+                Text(if (dark) "Light" else "Dark", style = MaterialTheme.typography.bodySmall)
+            }
         }
         Updates.current?.let {
             Text(
                 it,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.outline,
-                modifier = Modifier.padding(start = 16.dp, bottom = 8.dp),
+                modifier = Modifier.padding(start = 12.dp, top = 2.dp),
             )
         }
     }
 }
 
 @Composable
-internal fun MessageList(
-    emails: List<Summary>,
-    selected: Summary?,
-    loading: Boolean,
-    query: String = "",
-    onQueryChange: (String) -> Unit = {},
-    onSearch: () -> Unit = {},
-    onSelect: (Summary) -> Unit,
-) {
-    Column(Modifier.width(320.dp).fillMaxHeight()) {
+private fun FolderRow(name: String, unread: Int, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().height(32.dp)
+            .clip(MaterialTheme.shapes.small)
+            .background(if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            name,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (unread > 0) {
+            Text(
+                "$unread",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SearchBar(query: String, onQueryChange: (String) -> Unit, onSearch: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().height(52.dp)
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         OutlinedTextField(
             value = query,
             onValueChange = onQueryChange,
-            placeholder = { Text("Search") },
+            placeholder = { Text("Search all mail", style = MaterialTheme.typography.bodyMedium) },
             singleLine = true,
+            shape = MaterialTheme.shapes.small,
+            textStyle = MaterialTheme.typography.bodyMedium,
             trailingIcon = {
                 if (query.isNotEmpty()) {
-                    TextButton(onClick = { onQueryChange(""); onSearch() }) { Text("Clear") }
+                    TextButton(onClick = { onQueryChange(""); onSearch() }) {
+                        Text("Clear", style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             },
-            keyboardActions = KeyboardActions(onSearch = { onSearch() }),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            modifier = Modifier.fillMaxWidth().padding(8.dp).onPreviewKeyEvent {
-                // Enter searches and Escape abandons the search, which is what every mail
-                // client does and what fingers expect before they read any button.
+            modifier = Modifier.width(520.dp).height(38.dp).onPreviewKeyEvent {
+                // Enter searches and Escape abandons it, which is what fingers do before
+                // they read any button.
                 when {
                     it.type != KeyEventType.KeyDown -> false
                     it.key == Key.Enter -> { onSearch(); true }
@@ -667,61 +704,113 @@ internal fun MessageList(
                 }
             },
         )
-        HorizontalDivider()
-        Box(Modifier.fillMaxSize()) {
-            if (loading) {
-                CircularProgressIndicator(Modifier.align(Alignment.Center))
-                return@Box
-            }
-            if (emails.isEmpty()) {
+    }
+}
+
+@Composable
+internal fun MessageList(
+    emails: List<Summary>,
+    selected: Summary?,
+    loading: Boolean,
+    title: String = "",
+    onSelect: (Summary) -> Unit,
+) {
+    Column(
+        Modifier.width(368.dp).fillMaxHeight().background(MaterialTheme.colorScheme.surface),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().height(38.dp).padding(horizontal = 14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(title, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+            val unread = emails.count { !it.seen }
+            if (unread > 0) {
                 Text(
-                    if (query.isBlank()) "Nothing here." else "No messages match that.",
+                    "$unread unread",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Box(Modifier.fillMaxSize()) {
+            when {
+                loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                emails.isEmpty() -> Text(
+                    "Nothing here.",
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.outline,
                     modifier = Modifier.align(Alignment.Center),
                 )
-                return@Box
-            }
-            LazyColumn(Modifier.fillMaxSize()) {
-            items(emails, key = { it.id }) { message ->
-                Column(
-                    Modifier.fillMaxWidth()
-                        .background(if (message.id == selected?.id) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent)
-                        .clickable { onSelect(message) }
-                        .padding(12.dp),
-                ) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(
-                            message.from,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            fontWeight = if (message.seen) FontWeight.Normal else FontWeight.Bold,
-                            modifier = Modifier.weight(1f, false),
-                        )
-                        Text(
-                            message.receivedAt.asLocalTime(),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline,
-                        )
-                    }
-                    Text(
-                        message.subject,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        fontWeight = if (message.seen) FontWeight.Normal else FontWeight.Bold,
-                    )
-                    if (message.preview.isNotBlank()) {
-                        Text(
-                            message.preview,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline,
-                        )
+                else -> LazyColumn(Modifier.fillMaxSize()) {
+                    items(emails, key = { it.id }) { message ->
+                        MessageRow(message, message.id == selected?.id) { onSelect(message) }
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     }
                 }
-                HorizontalDivider()
             }
         }
+    }
+}
+
+@Composable
+private fun MessageRow(message: Summary, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .background(if (selected) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent)
+            .clickable(onClick = onClick)
+            .height(IntrinsicSize.Min),
+    ) {
+        // A 2px edge rather than a fully tinted row: it marks the selection without
+        // competing with the unread dot for the same piece of attention.
+        Box(
+            Modifier.width(2.dp).fillMaxHeight()
+                .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent),
+        )
+        Column(Modifier.padding(start = 12.dp, end = 14.dp, top = 11.dp, bottom = 12.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(7.dp)) {
+                    if (!message.seen) {
+                        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.primary, CircleShape))
+                    }
+                }
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    message.from,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (message.seen) FontWeight.Normal else FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    message.receivedAt.asLocalTime(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+            Spacer(Modifier.height(3.dp))
+            Text(
+                message.subject,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (message.seen) FontWeight.Normal else FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 13.dp),
+            )
+            if (message.preview.isNotBlank()) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    message.preview,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = 13.dp),
+                )
+            }
         }
     }
 }
@@ -754,41 +843,100 @@ internal fun Message(
         }
     }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
         if (summary == null) {
-            Text("Pick a message.", color = MaterialTheme.colorScheme.outline)
+            Box(Modifier.fillMaxSize()) {
+                Text(
+                    "Pick a message.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+            }
             return@Column
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
-            Text(summary.subject, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-            TextButton(onClick = onReply, enabled = body != null) { Text("Reply") }
-            TextButton(onClick = onForward, enabled = body != null) { Text("Forward") }
-            actions.archive?.let { TextButton(onClick = it) { Text("Archive") } }
-            actions.junk?.let { TextButton(onClick = it) { Text("Spam") } }
-            actions.trash?.let { TextButton(onClick = it) { Text("Delete") } }
+
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedButton(onClick = onReply, enabled = body != null) { Text("Reply") }
+            OutlinedButton(onClick = onForward, enabled = body != null) { Text("Forward") }
+            Spacer(Modifier.weight(1f))
+            actions.archive?.let { OutlinedButton(onClick = it) { Text("Archive") } }
+            actions.junk?.let { OutlinedButton(onClick = it) { Text("Spam") } }
+            actions.trash?.let { OutlinedButton(onClick = it) { Text("Delete") } }
         }
-        Text(
-            "${summary.from}    ${summary.receivedAt.asLocalTime()}",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.outline,
-            modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
-        )
-        if (rendered == null) {
-            if (body == null) CircularProgressIndicator() else Text("This message has no readable body.")
-            return@Column
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+        Column(
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp, vertical = 26.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            // Capped, because a paragraph set across a whole desktop window is a line
+            // length nobody can follow back to the start of.
+            Column(Modifier.widthIn(max = 660.dp).fillMaxWidth()) {
+                Text(summary.subject, style = MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.height(14.dp))
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Avatar(summary.from, summary.fromEmail.ifBlank { summary.from }, 34.dp)
+                    Spacer(Modifier.width(11.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            summary.from,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (summary.fromEmail.isNotBlank()) {
+                            Text(
+                                summary.fromEmail,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                    Text(
+                        summary.receivedAt.asLocalTime(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+                Spacer(Modifier.height(18.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                if (rendered == null) {
+                    Spacer(Modifier.height(20.dp))
+                    if (body == null) CircularProgressIndicator() else Text("This message has no readable body.")
+                    return@Column
+                }
+                if (rendered.blockedImages > 0) {
+                    Spacer(Modifier.height(16.dp))
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .clip(MaterialTheme.shapes.small)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .padding(horizontal = 12.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            if (rendered.blockedImages == 1) "1 image was not loaded."
+                            else "${rendered.blockedImages} images were not loaded.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(20.dp))
+                SelectionContainer { Text(rendered.text, style = MaterialTheme.typography.bodyLarge) }
+                Spacer(Modifier.height(40.dp))
+            }
         }
-        if (rendered.blockedImages > 0) {
-            Text(
-                if (rendered.blockedImages == 1) "1 image was not loaded."
-                else "${rendered.blockedImages} images were not loaded.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.outline,
-                modifier = Modifier.fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .padding(8.dp),
-            )
-        }
-        SelectionContainer { Text(rendered.text, modifier = Modifier.padding(top = 12.dp)) }
     }
 }
 
