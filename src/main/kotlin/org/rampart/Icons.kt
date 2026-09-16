@@ -50,6 +50,14 @@ internal object RampartIcons {
     val Trash = icon("Trash", "M2.8 4.8h12.4M7 4.8V3.2h4v1.6M4.4 4.8l.7 10a1.2 1.2 0 0 0 1.2 1.1h5.4a1.2 1.2 0 0 0 1.2-1.1l.7-10")
     val Folder = icon("Folder", "M2.2 5.2A1.2 1.2 0 0 1 3.4 4h3.2l1.6 2h6.4a1.2 1.2 0 0 1 1.2 1.2v6.6A1.2 1.2 0 0 1 14.6 15H3.4a1.2 1.2 0 0 1-1.2-1.2Z")
     val Write = icon("Write", "m11.6 3.2 3.2 3.2M3 15l.7-3.2 8.2-8.2 3.2 3.2-8.2 8.2Z")
+    val Settings = icon(
+        "Settings",
+        "M2.8 5.4h2.6M9.4 5.4h5.8M2.8 12.6h5.8M12.4 12.6h2.8" +
+            "M7.4 3.8a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2" +
+            "M10.4 11a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2",
+    )
+    val Check = icon("Check", "m3.6 9.4 3.6 3.6L14.4 5.6")
+    val Back = icon("Back", "M15 9H3.6M8 3.6 2.6 9l5.4 5.4")
     val Collapse = icon("Collapse", "m10.5 4-5 5 5 5")
     val Expand = icon("Expand", "m7 4 5 5-5 5")
 

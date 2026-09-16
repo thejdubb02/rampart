@@ -7,8 +7,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.Typography
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -19,9 +17,6 @@ import androidx.compose.ui.text.platform.Font
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
-
-/** Bulwark's red. See docs/architecture.md. */
-internal val RampartRed = Color(0xFFDB2D54)
 
 /**
  * Archivo, the face the wordmark is cut from, bundled as four static weights.
@@ -35,41 +30,6 @@ internal val Archivo = FontFamily(
     Font("font/Archivo-500.ttf", FontWeight.Medium),
     Font("font/Archivo-600.ttf", FontWeight.SemiBold),
     Font("font/Archivo-700.ttf", FontWeight.Bold),
-)
-
-/**
- * Material's baseline schemes are faintly purple, which under a red primary reads as a cast
- * over everything. Mail is text on paper, so the neutrals are neutral.
- *
- * The red is lifted on dark: #DB2D54 on a near-black background falls under the contrast a
- * link needs to be read at body size.
- */
-internal val RampartColors = lightColorScheme(
-    primary = RampartRed,
-    onPrimary = Color.White,
-    background = Color(0xFFFAFAFB),
-    onBackground = Color(0xFF17171B),
-    surface = Color.White,
-    onSurface = Color(0xFF17171B),
-    surfaceVariant = Color(0xFFF4F4F6),
-    onSurfaceVariant = Color(0xFF17171B),
-    outline = Color(0xFF63636E),
-    outlineVariant = Color(0xFFE6E6EB),
-    primaryContainer = Color(0xFFFDECF0),
-)
-
-internal val RampartDarkColors = darkColorScheme(
-    primary = Color(0xFFFF7A96),
-    onPrimary = Color(0xFF2A0A12),
-    background = Color(0xFF16161B),
-    onBackground = Color(0xFFECECF1),
-    surface = Color(0xFF121216),
-    onSurface = Color(0xFFECECF1),
-    surfaceVariant = Color(0xFF1C1C23),
-    onSurfaceVariant = Color(0xFFECECF1),
-    outline = Color(0xFF9B9BA8),
-    outlineVariant = Color(0xFF272730),
-    primaryContainer = Color(0xFF2A1A21),
 )
 
 /** Material's scale, in Archivo, tightened where mail is read rather than skimmed. */

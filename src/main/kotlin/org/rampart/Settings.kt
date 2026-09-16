@@ -6,6 +6,8 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlin.io.path.createDirectories
@@ -42,15 +44,22 @@ object Settings {
         }
     }
 
-    /** null means follow the operating system, which is the state before anyone chooses. */
-    fun dark(): Boolean? = read()["dark"]?.jsonPrimitive?.booleanOrNull
+    /** The chosen theme's key, or null before anyone has chosen one. */
+    fun theme(): String? = read()["theme"]?.jsonPrimitive?.contentOrNull
 
-    fun setDark(value: Boolean) = write { put("dark", kotlinx.serialization.json.JsonPrimitive(value)) }
+    fun setTheme(key: String) = write { put("theme", JsonPrimitive(key)) }
+
+    /**
+     * What the light/dark switch was set to before themes existed, and nothing writes it any
+     * more. It is still read so that an existing install that had been switched to dark opens
+     * dark rather than snapping back to whatever the operating system says.
+     */
+    fun dark(): Boolean? = read()["dark"]?.jsonPrimitive?.booleanOrNull
 
     fun sidebarCollapsed(): Boolean = read()["sidebarCollapsed"]?.jsonPrimitive?.booleanOrNull ?: false
 
     fun setSidebarCollapsed(value: Boolean) =
-        write { put("sidebarCollapsed", kotlinx.serialization.json.JsonPrimitive(value)) }
+        write { put("sidebarCollapsed", JsonPrimitive(value)) }
 
     /**
      * null when nothing is stored, or when what is stored would put the window somewhere

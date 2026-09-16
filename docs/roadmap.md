@@ -73,20 +73,22 @@ groups, mailing lists, DKIM, certificates, the queue, reports, tracing, the whol
 
 ### Deliberately not doing
 
-Carried from `docs/architecture.md`, plus what this comparison adds:
+Carried from `docs/architecture.md`, plus what this comparison adds. Two entries left
+this list on 2026-09-16: IMAP, which is now planned as a second backend once the JMAP
+client is finished (`docs/architecture.md`), and themes, which shipped.
 
-- IMAP or POP3. JMAP only.
+- POP3.
 - Calendars, contacts and files. Bulwark does all three well and they are separate
   products wearing a mail client's clothes.
 - OpenPGP or S/MIME in process. Bulwark moved S/MIME out to a plugin in 1.9 and has no
   PGP at all; there is no reason for us to carry it.
-- Plugins, themes, a marketplace, telemetry, an extension directory.
+- Plugins, a marketplace, telemetry, an extension directory.
 - Anything that is a Bulwark deployment concern rather than a mail concern: branding,
   org policy toggles, admin audit logs, PWA install.
 
 ## Where we actually are
 
 Reading mail: mailboxes, message list, one message at a time, HTML drawn without a
-browser engine, links confirmed, images blocked. Several accounts at once. Dark mode.
-Passwords in the OS credential store. That is most of a reader and none of Tier 1's
+browser engine, links confirmed, images blocked. Several accounts at once. Eighteen themes,
+ported from Clique, picked on a settings screen. Passwords in the OS credential store. That is most of a reader and none of Tier 1's
 writing half.

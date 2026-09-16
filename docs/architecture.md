@@ -143,9 +143,31 @@ which means a SmartScreen warning that the README has to be honest about. Then L
 
 Auto-update is ours to build. Compose does not provide one.
 
+## IMAP is back on, as a second backend
+
+This reverses what this file said until 2026-09-16. JMAP only was the right call while
+the only mailbox was ours; it stops being right the moment anyone else wants to use
+Rampart, because almost nobody runs a JMAP server. Justin's direction: a dedicated mail
+client for anyone, with the Stalwart management screens appearing only when the server
+turns out to be Stalwart.
+
+The plan is deliberately not "add IMAP now". It is:
+
+1. Finish the JMAP client to the point where it is the one he actually uses all day.
+2. While doing that, keep every mail operation behind one interface, with `Jmap` as its
+   first implementation, so the reader never learns which protocol it is talking to.
+3. Add IMAP as a second implementation of that interface.
+
+Doing it in that order costs nothing, because step 2 is a shape rather than a feature.
+Doing it in the other order means writing two half clients and finishing neither.
+
+What does not carry over: JMAP does server side search, threading and push in one round
+trip, and IMAP does not. Those become capabilities a backend declares rather than things
+the reader assumes, which is the real work in step 2.
+
 ## What we are deliberately not doing
 
-Android (Sterna). IMAP. Calendars, contacts and file storage. OpenPGP implemented in
+Android (Sterna). Calendars, contacts and file storage. OpenPGP implemented in
 process. Certificate pinning. Any app store. Admin on a phone.
 
 ## Brand

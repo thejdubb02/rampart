@@ -7,6 +7,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.renderComposeScene
 import java.io.File
@@ -20,13 +21,18 @@ import kotlin.test.Test
 class Screenshots {
     private val out = File("build/screenshots").apply { mkdirs() }
 
-    private fun shoot(name: String, width: Int, height: Int, dark: Boolean = false, content: @Composable () -> Unit) {
+    private fun shoot(
+        name: String,
+        width: Int,
+        height: Int,
+        theme: Theme = THEMES.first(),
+        content: @Composable () -> Unit,
+    ) {
         val image = renderComposeScene(width, height) {
-            MaterialTheme(
-                colorScheme = if (dark) RampartDarkColors else RampartColors,
-                typography = RampartTypography,
-            ) {
-                Surface(Modifier.fillMaxSize()) { content() }
+            CompositionLocalProvider(LocalRampartTheme provides theme) {
+                MaterialTheme(colorScheme = theme.scheme(), typography = RampartTypography) {
+                    Surface(Modifier.fillMaxSize()) { content() }
+                }
             }
         }
         File(out, "$name.png").writeBytes(image.encodeToData()!!.bytes)
@@ -34,10 +40,25 @@ class Screenshots {
 
     @Test
     fun screenshots() {
+        val dark = theme("rampart-dark")
+        val withArt = theme("aincrad")
         shoot("connect", 900, 760) { Connect(saved = SAVED, canRemember = true) { _, _ -> } }
-        shoot("reader", 1400, 900) { Panes(dark = false) }
-        shoot("reader-dark", 1400, 900, dark = true) { Panes(dark = true) }
-        shoot("sidebar-collapsed", 1400, 900, dark = true) { Panes(dark = true, collapsed = true) }
+        shoot("reader", 1400, 900) { Panes() }
+        shoot("reader-dark", 1400, 900, dark) { Panes() }
+        shoot("sidebar-collapsed", 1400, 900, dark) { Panes(collapsed = true) }
+        // A ported theme, and the one thing about it that cannot be checked by reading the
+        // palette: whether the character in the corner is faint enough to read mail over.
+        shoot("reader-themed", 1400, 900, withArt) { Panes() }
+        shoot("settings", 1400, 900, withArt) {
+            SettingsPane(
+                accounts = ACCOUNTS,
+                update = "0.1.25",
+                onTheme = {},
+                onAddAccount = {},
+                onRestart = {},
+                onClose = {},
+            )
+        }
         shoot("composer", 1000, 640) {
             Composer(
                 identities = listOf("you@example.org", "billing@example.org"),
@@ -50,8 +71,10 @@ class Screenshots {
         }
     }
 
+    private fun theme(key: String) = THEMES.first { it.key == key }
+
     @Composable
-    private fun Panes(dark: Boolean, collapsed: Boolean = false) {
+    private fun Panes(collapsed: Boolean = false) {
         Column(Modifier.fillMaxSize()) {
         SearchBar(
             query = "invoice",
@@ -64,8 +87,7 @@ class Screenshots {
             Sidebar(
                 accounts = ACCOUNTS,
                 here = ACCOUNTS[0].key to MAILBOXES[0],
-                dark = dark,
-                onToggleDark = {},
+                onSettings = {},
                 collapsed = collapsed,
                 onToggleCollapsed = {},
                 onAddAccount = {},

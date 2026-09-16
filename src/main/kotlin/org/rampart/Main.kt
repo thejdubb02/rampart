@@ -42,6 +42,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -158,25 +159,25 @@ fun main() = application {
         state = windowState,
     ) {
         val followSystem = isSystemInDarkTheme()
-        var dark by remember { mutableStateOf(Settings.dark() ?: followSystem) }
-        LaunchedEffect(dark) { WindowChrome.setDarkTitleBar(window, dark) }
-        MaterialTheme(
-            colorScheme = if (dark) RampartDarkColors else RampartColors,
-            typography = RampartTypography,
-        ) {
-            Surface(Modifier.fillMaxSize()) {
-                App(
-                    dark = dark,
-                    onToggleDark = { dark = it; Settings.setDark(it) },
-                    onQuit = ::quit,
-                )
+        // Settings.dark() is the pre-themes switch. Reading it here is what stops an
+        // existing install opening light again the first time it runs a build with themes.
+        var theme by remember { mutableStateOf(themeFor(Settings.theme(), Settings.dark() ?: followSystem)) }
+        LaunchedEffect(theme) { WindowChrome.setDarkTitleBar(window, theme.dark) }
+        CompositionLocalProvider(LocalRampartTheme provides theme) {
+            MaterialTheme(colorScheme = theme.scheme(), typography = RampartTypography) {
+                Surface(Modifier.fillMaxSize()) {
+                    App(
+                        onTheme = { theme = it; Settings.setTheme(it.key) },
+                        onQuit = ::quit,
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-private fun App(dark: Boolean, onToggleDark: (Boolean) -> Unit, onQuit: () -> Unit) {
+private fun App(onTheme: (Theme) -> Unit, onQuit: () -> Unit) {
     var sessions by remember { mutableStateOf<List<Session>>(emptyList()) }
     var adding by remember { mutableStateOf(false) }
     var restoring by remember { mutableStateOf(true) }
@@ -224,7 +225,7 @@ private fun App(dark: Boolean, onToggleDark: (Boolean) -> Unit, onQuit: () -> Un
             adding = false
         }
     } else {
-        Reader(sessions, dark, onToggleDark, onQuit, onAddAccount = { adding = true })
+        Reader(sessions, onTheme, onQuit, onAddAccount = { adding = true })
     }
 }
 
@@ -364,8 +365,7 @@ internal fun Connect(
 @Composable
 private fun Reader(
     sessions: List<Session>,
-    dark: Boolean,
-    onToggleDark: (Boolean) -> Unit,
+    onTheme: (Theme) -> Unit,
     onQuit: () -> Unit,
     onAddAccount: () -> Unit,
 ) {
@@ -379,6 +379,7 @@ private fun Reader(
     var showingResults by remember { mutableStateOf(false) }
     var searchFocused by remember { mutableStateOf(false) }
     var collapsed by remember { mutableStateOf(Settings.sidebarCollapsed()) }
+    var settingsOpen by remember { mutableStateOf(false) }
     val searchField = remember { FocusRequester() }
     val keyboard = remember { FocusRequester() }
     var mailboxes by remember { mutableStateOf<Map<String, List<Mailbox>>>(emptyMap()) }
@@ -586,6 +587,7 @@ private fun Reader(
             onFocusChanged = { searchFocused = it },
             onQueryChange = { query = it },
             onSearch = {
+                settingsOpen = false
                 showingResults = query.isNotBlank()
                 selected = null
                 body = null
@@ -598,8 +600,8 @@ private fun Reader(
                     AccountMailboxes(it.key, it.account.name, it.account.email, mailboxes[it.key].orEmpty())
                 },
                 here = here,
-                dark = dark,
-                onToggleDark = onToggleDark,
+                onSettings = { settingsOpen = !settingsOpen },
+                inSettings = settingsOpen,
                 onAddAccount = onAddAccount,
                 collapsed = collapsed,
                 onToggleCollapsed = { collapsed = !collapsed; Settings.setSidebarCollapsed(collapsed) },
@@ -612,6 +614,19 @@ private fun Reader(
                 },
             )
             VerticalDivider()
+            if (settingsOpen) {
+                SettingsPane(
+                    accounts = sessions.map {
+                        AccountMailboxes(it.key, it.account.name, it.account.email, mailboxes[it.key].orEmpty())
+                    },
+                    update = update,
+                    onTheme = onTheme,
+                    onAddAccount = onAddAccount,
+                    onRestart = { Updates.restartToUpdate(); onQuit() },
+                    onClose = { settingsOpen = false },
+                )
+                return@Row
+            }
             MessageList(
                 emails = emails,
                 selected = selected,
@@ -675,10 +690,10 @@ private fun Reader(
 internal fun Sidebar(
     accounts: List<AccountMailboxes>,
     here: Pair<String, Mailbox>?,
-    dark: Boolean,
     collapsed: Boolean = false,
+    inSettings: Boolean = false,
     onToggleCollapsed: () -> Unit = {},
-    onToggleDark: (Boolean) -> Unit,
+    onSettings: () -> Unit,
     onAddAccount: () -> Unit,
     onWrite: () -> Unit,
     onSelect: (String, Mailbox) -> Unit,
@@ -784,6 +799,15 @@ internal fun Sidebar(
         }
 
         if (collapsed) {
+            IconButton(onClick = onSettings, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    RampartIcons.Settings,
+                    contentDescription = "Settings",
+                    tint = if (inSettings) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
             IconButton(onClick = onToggleCollapsed, modifier = Modifier.size(32.dp)) {
                 Icon(
                     RampartIcons.Expand,
@@ -799,8 +823,14 @@ internal fun Sidebar(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 TextButton(onClick = onAddAccount) { Text("Add account", style = MaterialTheme.typography.bodySmall) }
-                TextButton(onClick = { onToggleDark(!dark) }) {
-                    Text(if (dark) "Light" else "Dark", style = MaterialTheme.typography.bodySmall)
+                IconButton(onClick = onSettings, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        RampartIcons.Settings,
+                        contentDescription = "Settings",
+                        tint = if (inSettings) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.size(16.dp),
+                    )
                 }
                 IconButton(onClick = onToggleCollapsed, modifier = Modifier.size(28.dp)) {
                     Icon(
@@ -1091,135 +1121,138 @@ internal fun Message(
         }
     }
 
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
-        if (summary == null) {
-            Box(Modifier.fillMaxSize()) {
-                Text(
-                    "Pick a message.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.align(Alignment.Center),
-                )
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
+        ThemeArt(Modifier.align(Alignment.BottomEnd))
+        Column(Modifier.fillMaxSize()) {
+            if (summary == null) {
+                Box(Modifier.fillMaxSize()) {
+                    Text(
+                        "Pick a message.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                }
+                return@Column
             }
-            return@Column
-        }
 
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(7.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedButton(onClick = onReply, enabled = body != null) { Text("Reply") }
-            OutlinedButton(onClick = onForward, enabled = body != null) { Text("Forward") }
-            Spacer(Modifier.weight(1f))
-            actions.archive?.let { OutlinedButton(onClick = it) { Text("Archive") } }
-            actions.junk?.let { OutlinedButton(onClick = it) { Text("Spam") } }
-            actions.trash?.let { OutlinedButton(onClick = it) { Text("Delete") } }
-        }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedButton(onClick = onReply, enabled = body != null) { Text("Reply") }
+                OutlinedButton(onClick = onForward, enabled = body != null) { Text("Forward") }
+                Spacer(Modifier.weight(1f))
+                actions.archive?.let { OutlinedButton(onClick = it) { Text("Archive") } }
+                actions.junk?.let { OutlinedButton(onClick = it) { Text("Spam") } }
+                actions.trash?.let { OutlinedButton(onClick = it) { Text("Delete") } }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-        Column(
-            Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 26.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            // Capped, because a paragraph set across a whole desktop window is a line
-            // length nobody can follow back to the start of.
-            Column(Modifier.widthIn(max = 660.dp).fillMaxWidth()) {
-                Text(summary.subject, style = MaterialTheme.typography.titleLarge)
-                Spacer(Modifier.height(14.dp))
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Avatar(summary.from, summary.fromEmail.ifBlank { summary.from }, 34.dp)
-                    Spacer(Modifier.width(11.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            summary.from,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        if (summary.fromEmail.isNotBlank()) {
+            Column(
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp, vertical = 26.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                // Capped, because a paragraph set across a whole desktop window is a line
+                // length nobody can follow back to the start of.
+                Column(Modifier.widthIn(max = 660.dp).fillMaxWidth()) {
+                    Text(summary.subject, style = MaterialTheme.typography.titleLarge)
+                    Spacer(Modifier.height(14.dp))
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Avatar(summary.from, summary.fromEmail.ifBlank { summary.from }, 34.dp)
+                        Spacer(Modifier.width(11.dp))
+                        Column(Modifier.weight(1f)) {
                             Text(
-                                summary.fromEmail,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.outline,
+                                summary.from,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
-                        }
-                    }
-                    Text(
-                        summary.receivedAt.asLocalTime(),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
-                }
-                Spacer(Modifier.height(18.dp))
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-                if (rendered == null) {
-                    Spacer(Modifier.height(20.dp))
-                    if (body == null) CircularProgressIndicator() else Text("This message has no readable body.")
-                    return@Column
-                }
-                if (rendered.blockedImages > 0) {
-                    Spacer(Modifier.height(16.dp))
-                    Row(
-                        Modifier.fillMaxWidth()
-                            .clip(MaterialTheme.shapes.small)
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .padding(horizontal = 12.dp, vertical = 9.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            if (rendered.blockedImages == 1) "1 image was not loaded."
-                            else "${rendered.blockedImages} images were not loaded.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline,
-                        )
-                    }
-                }
-                Spacer(Modifier.height(20.dp))
-                SelectionContainer { Text(rendered.text, style = MaterialTheme.typography.bodyLarge) }
-
-                if (attachments.isNotEmpty()) {
-                    Spacer(Modifier.height(24.dp))
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    Spacer(Modifier.height(14.dp))
-                    attachments.forEach { attachment ->
-                        Row(
-                            Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(Modifier.weight(1f)) {
+                            if (summary.fromEmail.isNotBlank()) {
                                 Text(
-                                    // The name a sender chose is shown as the name it will be
-                                    // saved under, so the two can never disagree.
-                                    safeFileName(attachment.name),
-                                    style = MaterialTheme.typography.bodyMedium,
+                                    summary.fromEmail,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.outline,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
-                                Text(
-                                    humanSize(attachment.size),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.outline,
-                                )
                             }
-                            TextButton(onClick = { onDownload(attachment) }) { Text("Save") }
                         }
-                    }
-                    if (savedTo != null) {
-                        Spacer(Modifier.height(6.dp))
                         Text(
-                            "Saved to $savedTo",
+                            summary.receivedAt.asLocalTime(),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.outline,
                         )
                     }
+                    Spacer(Modifier.height(18.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                    if (rendered == null) {
+                        Spacer(Modifier.height(20.dp))
+                        if (body == null) CircularProgressIndicator() else Text("This message has no readable body.")
+                        return@Column
+                    }
+                    if (rendered.blockedImages > 0) {
+                        Spacer(Modifier.height(16.dp))
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clip(MaterialTheme.shapes.small)
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .padding(horizontal = 12.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                if (rendered.blockedImages == 1) "1 image was not loaded."
+                                else "${rendered.blockedImages} images were not loaded.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(20.dp))
+                    SelectionContainer { Text(rendered.text, style = MaterialTheme.typography.bodyLarge) }
+
+                    if (attachments.isNotEmpty()) {
+                        Spacer(Modifier.height(24.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        Spacer(Modifier.height(14.dp))
+                        attachments.forEach { attachment ->
+                            Row(
+                                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        // The name a sender chose is shown as the name it will be
+                                        // saved under, so the two can never disagree.
+                                        safeFileName(attachment.name),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        humanSize(attachment.size),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.outline,
+                                    )
+                                }
+                                TextButton(onClick = { onDownload(attachment) }) { Text("Save") }
+                            }
+                        }
+                        if (savedTo != null) {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                "Saved to $savedTo",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(40.dp))
                 }
-                Spacer(Modifier.height(40.dp))
             }
         }
     }
