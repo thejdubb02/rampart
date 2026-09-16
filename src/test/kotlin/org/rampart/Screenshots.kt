@@ -30,7 +30,7 @@ class Screenshots {
 
     @Test
     fun screenshots() {
-        shoot("connect", 900, 680) { Connect {} }
+        shoot("connect", 900, 680) { Connect(saved = SAVED) {} }
         shoot("reader", 1400, 900) {
             Row(Modifier.fillMaxSize()) {
                 MailboxList(MAILBOXES, MAILBOXES[0]) {}
@@ -42,6 +42,11 @@ class Screenshots {
         }
     }
 }
+
+private val SAVED = listOf(
+    SavedAccount("Work", "mail.example.org", "you@example.org"),
+    SavedAccount("Personal", "jmap.example.net", "you@example.net"),
+)
 
 private val MAILBOXES = listOf(
     Mailbox("1", "Inbox", "inbox", 3),

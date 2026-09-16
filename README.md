@@ -25,6 +25,14 @@ Settings and admin screens are rendered from the server's own published schema
 rather than hand written, so they stay correct when the server adds a field. See
 [docs/architecture.md](docs/architecture.md).
 
+## Setting it up for someone else
+
+Rampart reads a short file listing which servers to offer, so signing in is a click and a
+password rather than a conversation about JMAP. The file holds a name, a server and an
+address, and cannot hold a password: Rampart reads those three fields and drops everything
+else. There is a template, and a block you can hand to an assistant to fill in for you, in
+[docs/connecting.md](docs/connecting.md).
+
 ## On your phone
 
 Use [Sterna Mail](https://sternamail.org/). It is a native Android JMAP client,

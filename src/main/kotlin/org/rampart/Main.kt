@@ -88,9 +88,12 @@ fun main() = application {
 }
 
 @Composable
-internal fun Connect(onConnected: (Jmap) -> Unit) {
-    var server by remember { mutableStateOf("") }
-    var user by remember { mutableStateOf("") }
+internal fun Connect(
+    saved: List<SavedAccount> = remember { Accounts.read() },
+    onConnected: (Jmap) -> Unit,
+) {
+    var server by remember { mutableStateOf(saved.firstOrNull()?.server ?: "") }
+    var user by remember { mutableStateOf(saved.firstOrNull()?.email ?: "") }
     var password by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
@@ -107,6 +110,38 @@ internal fun Connect(onConnected: (Jmap) -> Unit) {
             modifier = Modifier.size(72.dp),
         )
         Text("Rampart", style = MaterialTheme.typography.headlineMedium, color = RampartRed)
+
+        // Set up once, by hand or by handing someone the accounts file, and after that
+        // signing in is a click and a password. The file never holds the password.
+        if (saved.isNotEmpty()) {
+            Column(Modifier.width(380.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                saved.forEach { account ->
+                    val here = account.email == user && account.server == server
+                    Column(
+                        Modifier.fillMaxWidth()
+                            .background(
+                                if (here) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
+                                MaterialTheme.shapes.small,
+                            )
+                            .clickable {
+                                server = account.server
+                                user = account.email
+                                password = ""
+                                error = ""
+                            }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                    ) {
+                        Text(account.name, fontWeight = if (here) FontWeight.Bold else FontWeight.Normal)
+                        Text(
+                            account.email,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
+                    }
+                }
+            }
+        }
+
         OutlinedTextField(server, { server = it }, label = { Text("Server") }, singleLine = true, modifier = Modifier.width(380.dp))
         OutlinedTextField(user, { user = it }, label = { Text("Email address") }, singleLine = true, modifier = Modifier.width(380.dp))
         OutlinedTextField(
@@ -123,7 +158,10 @@ internal fun Connect(onConnected: (Jmap) -> Unit) {
                 error = ""
                 scope.launch {
                     try {
-                        onConnected(withContext(Dispatchers.IO) { Jmap.connect(server, user, password) })
+                        val session = withContext(Dispatchers.IO) { Jmap.connect(server, user, password) }
+                        // Only after a sign-in that actually worked, so a typo is not saved.
+                        runCatching { Accounts.remember(SavedAccount(user, server.trim(), user.trim())) }
+                        onConnected(session)
                     } catch (e: Exception) {
                         error = e.message ?: e.toString()
                     } finally {

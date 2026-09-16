@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "accounts": [
+    {
+      "name": "Work",
+      "server": "mail.example.org",
+      "email": "you@example.org"
+    },
+    {
+      "name": "Personal",
+      "server": "jmap.example.net",
+      "email": "you@example.net"
+    }
+  ]
+}
