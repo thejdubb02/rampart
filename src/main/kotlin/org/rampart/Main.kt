@@ -114,14 +114,18 @@ fun main() = application {
         var dark by remember { mutableStateOf(Settings.dark() ?: followSystem) }
         MaterialTheme(colorScheme = if (dark) RampartDarkColors else RampartColors) {
             Surface(Modifier.fillMaxSize()) {
-                App(dark = dark, onToggleDark = { dark = it; Settings.setDark(it) })
+                App(
+                    dark = dark,
+                    onToggleDark = { dark = it; Settings.setDark(it) },
+                    onQuit = ::exitApplication,
+                )
             }
         }
     }
 }
 
 @Composable
-private fun App(dark: Boolean, onToggleDark: (Boolean) -> Unit) {
+private fun App(dark: Boolean, onToggleDark: (Boolean) -> Unit, onQuit: () -> Unit) {
     var sessions by remember { mutableStateOf<List<Session>>(emptyList()) }
     var adding by remember { mutableStateOf(false) }
     var restoring by remember { mutableStateOf(true) }
@@ -169,7 +173,7 @@ private fun App(dark: Boolean, onToggleDark: (Boolean) -> Unit) {
             adding = false
         }
     } else {
-        Reader(sessions, dark, onToggleDark, onAddAccount = { adding = true })
+        Reader(sessions, dark, onToggleDark, onQuit, onAddAccount = { adding = true })
     }
 }
 
@@ -296,8 +300,15 @@ private fun Reader(
     sessions: List<Session>,
     dark: Boolean,
     onToggleDark: (Boolean) -> Unit,
+    onQuit: () -> Unit,
     onAddAccount: () -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
+    var identities by remember { mutableStateOf<Map<String, List<Identity>>>(emptyMap()) }
+    var composing by remember { mutableStateOf<Draft?>(null) }
+    var sending by remember { mutableStateOf(false) }
+    var sendError by remember { mutableStateOf<String?>(null) }
+    var update by remember { mutableStateOf<String?>(null) }
     var mailboxes by remember { mutableStateOf<Map<String, List<Mailbox>>>(emptyMap()) }
     var here by remember { mutableStateOf<Pair<String, Mailbox>?>(null) }
     var emails by remember { mutableStateOf<List<Summary>>(emptyList()) }
@@ -317,10 +328,15 @@ private fun Reader(
         null
     }
 
+    LaunchedEffect(Unit) { update = withContext(Dispatchers.IO) { Updates.newerVersion() } }
     LaunchedEffect(sessions.size) {
         sessions.filter { it.key !in mailboxes }.forEach { open ->
             val found = io { open.jmap.mailboxes() } ?: emptyList()
             mailboxes = mailboxes + (open.key to found)
+            // An account with no identity can still read; it just cannot send, and that is
+            // reported when someone tries rather than as an error on the way in.
+            withContext(Dispatchers.IO) { runCatching { open.jmap.identities() }.getOrNull() }
+                ?.let { identities = identities + (open.key to it) }
             if (here == null) {
                 val inbox = found.firstOrNull { it.role == "inbox" } ?: found.firstOrNull()
                 if (inbox != null) here = open.key to inbox
@@ -347,7 +363,59 @@ private fun Reader(
         }
     }
 
+    val composer = composing
+    if (composer != null) {
+        Composer(
+            identities = identities[here?.first]?.map { it.email }.orEmpty(),
+            initial = composer,
+            sending = sending,
+            error = sendError,
+            onDiscard = { composing = null; sendError = null },
+            onSend = { draft ->
+                val key = here?.first
+                val account = key?.let(::session)
+                val boxes = mailboxes[key].orEmpty()
+                val drafts = boxes.firstOrNull { it.role == "drafts" }
+                val identity = identities[key].orEmpty().firstOrNull { it.email.equals(draft.from, true) }
+                    ?: identities[key].orEmpty().firstOrNull()
+                when {
+                    account == null -> sendError = "Pick an account first."
+                    identity == null -> sendError = "This account has no identity to send from."
+                    drafts == null -> sendError = "This account has no Drafts folder, and the message is written there before it is sent."
+                    else -> scope.launch {
+                        sending = true
+                        sendError = null
+                        try {
+                            withContext(Dispatchers.IO) {
+                                account.jmap.send(draft, identity, drafts.id, boxes.firstOrNull { it.role == "sent" }?.id)
+                            }
+                            composing = null
+                        } catch (e: Exception) {
+                            sendError = e.message ?: e.toString()
+                        } finally {
+                            sending = false
+                        }
+                    }
+                }
+            },
+        )
+        return
+    }
+
     Column(Modifier.fillMaxSize()) {
+        update?.let { version ->
+            Row(
+                Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = 14.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Rampart $version is ready. It installs when you next open the app.", style = MaterialTheme.typography.bodyMedium)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = onQuit) { Text("Quit and update") }
+                    TextButton(onClick = { update = null }) { Text("Later") }
+                }
+            }
+        }
         if (error.isNotBlank()) {
             Text(
                 error,
@@ -363,11 +431,27 @@ private fun Reader(
                 onToggleDark = onToggleDark,
                 onAddAccount = onAddAccount,
                 onSelect = { key, mailbox -> here = key to mailbox },
+                onWrite = {
+                    val from = identities[here?.first].orEmpty().firstOrNull()?.email
+                        ?: sessions.firstOrNull { it.key == here?.first }?.account.let { it?.email }.orEmpty()
+                    sendError = null
+                    composing = Draft(from = from)
+                },
             )
             VerticalDivider()
             MessageList(emails, selected, loading) { selected = it }
             VerticalDivider()
-            Message(selected, body) { confirm = it }
+            Message(
+                summary = selected,
+                body = body,
+                onReply = {
+                    val message = selected ?: return@Message
+                    val from = identities[here?.first].orEmpty().firstOrNull()?.email.orEmpty()
+                    sendError = null
+                    composing = replyTo(message, body, from)
+                },
+                onLink = { confirm = it },
+            )
         }
     }
 
@@ -394,9 +478,14 @@ internal fun Sidebar(
     dark: Boolean,
     onToggleDark: (Boolean) -> Unit,
     onAddAccount: () -> Unit,
+    onWrite: () -> Unit,
     onSelect: (String, Mailbox) -> Unit,
 ) {
     Column(Modifier.width(220.dp).fillMaxHeight()) {
+        Button(
+            onClick = onWrite,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+        ) { Text("Write") }
         LazyColumn(Modifier.weight(1f)) {
             accounts.forEach { account ->
                 // With one account the heading is noise. With two it is the only way to
@@ -448,6 +537,14 @@ internal fun Sidebar(
         ) {
             TextButton(onClick = onAddAccount) { Text("Add account") }
             TextButton(onClick = { onToggleDark(!dark) }) { Text(if (dark) "Light" else "Dark") }
+        }
+        Updates.current?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.padding(start = 16.dp, bottom = 8.dp),
+            )
         }
     }
 }
@@ -504,7 +601,7 @@ internal fun MessageList(emails: List<Summary>, selected: Summary?, loading: Boo
 }
 
 @Composable
-internal fun Message(summary: Summary?, body: Body?, onLink: (String) -> Unit) {
+internal fun Message(summary: Summary?, body: Body?, onReply: () -> Unit = {}, onLink: (String) -> Unit) {
     val linkColor = MaterialTheme.colorScheme.primary
     val quoteColor = MaterialTheme.colorScheme.outline
     val rendered = remember(body, linkColor) {
@@ -522,7 +619,10 @@ internal fun Message(summary: Summary?, body: Body?, onLink: (String) -> Unit) {
             Text("Pick a message.", color = MaterialTheme.colorScheme.outline)
             return@Column
         }
-        Text(summary.subject, style = MaterialTheme.typography.titleLarge)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
+            Text(summary.subject, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            TextButton(onClick = onReply, enabled = body != null) { Text("Reply") }
+        }
         Text(
             "${summary.from}    ${summary.receivedAt.asLocalTime()}",
             style = MaterialTheme.typography.bodySmall,
@@ -548,5 +648,5 @@ internal fun Message(summary: Summary?, body: Body?, onLink: (String) -> Unit) {
     }
 }
 
-private fun String.asLocalTime(): String =
+internal fun String.asLocalTime(): String =
     runCatching { WHEN.format(Instant.parse(this)) }.getOrDefault(this)

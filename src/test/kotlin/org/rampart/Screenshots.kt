@@ -33,6 +33,16 @@ class Screenshots {
         shoot("connect", 900, 760) { Connect(saved = SAVED, canRemember = true) { _, _ -> } }
         shoot("reader", 1400, 900) { Panes(dark = false) }
         shoot("reader-dark", 1400, 900, dark = true) { Panes(dark = true) }
+        shoot("composer", 1000, 640) {
+            Composer(
+                identities = listOf("you@example.org", "billing@example.org"),
+                initial = replyTo(MESSAGES[1], Body(null, "Could you confirm the start time?"), "you@example.org"),
+                sending = false,
+                error = null,
+                onDiscard = {},
+                onSend = {},
+            )
+        }
     }
 
     @Composable
@@ -44,6 +54,7 @@ class Screenshots {
                 dark = dark,
                 onToggleDark = {},
                 onAddAccount = {},
+                onWrite = {},
                 onSelect = { _, _ -> },
             )
             VerticalDivider()
@@ -74,15 +85,15 @@ private val ACCOUNTS = listOf(
 )
 
 private val MESSAGES = listOf(
-    Summary("a", "Stalwart", "Your certificate renews in 7 days", "2026-09-16T09:12:00Z",
+    Summary("a", "Stalwart", "stalwart@example.org", "Your certificate renews in 7 days", "2026-09-16T09:12:00Z",
         "The certificate for mail.example.org will be renewed automatically on 23 September.", false),
-    Summary("b", "Dana Whitfield", "Re: the quote for the Tuesday job", "2026-09-15T17:40:00Z",
+    Summary("b", "Dana Whitfield", "dana@example.org", "Re: the quote for the Tuesday job", "2026-09-15T17:40:00Z",
         "That works for us. Tuesday morning is fine, and the crew will be there by eight.", true),
-    Summary("c", "Companies House", "Confirmation statement filed", "2026-09-15T11:02:00Z",
+    Summary("c", "Companies House", "companies@example.org", "Confirmation statement filed", "2026-09-15T11:02:00Z",
         "We have accepted your confirmation statement. No further action is needed.", true),
-    Summary("d", "Hetzner", "Invoice 2026-4471", "2026-09-14T06:00:00Z",
+    Summary("d", "Hetzner", "hetzner@example.org", "Invoice 2026-4471", "2026-09-14T06:00:00Z",
         "Your invoice for September is attached and has been paid by direct debit.", true),
-    Summary("e", "Alex Moreno", "Photos from the site visit", "2026-09-13T20:15:00Z",
+    Summary("e", "Alex Moreno", "alex@example.org", "Photos from the site visit", "2026-09-13T20:15:00Z",
         "Eight shots of the rear elevation, and one of the damp patch we talked about.", true),
 )
 

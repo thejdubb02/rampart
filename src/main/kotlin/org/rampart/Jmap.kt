@@ -29,6 +29,7 @@ class JmapError(message: String) : Exception(message)
 
 private const val CORE = "urn:ietf:params:jmap:core"
 private const val MAIL = "urn:ietf:params:jmap:mail"
+private const val SUBMISSION = "urn:ietf:params:jmap:submission"
 
 private val json = Json { ignoreUnknownKeys = true }
 
@@ -44,14 +45,27 @@ data class Mailbox(val id: String, val name: String, val role: String?, val unre
 data class Summary(
     val id: String,
     val from: String,
+    val fromEmail: String,
     val subject: String,
     val receivedAt: String,
     val preview: String,
     val seen: Boolean,
 )
 
-/** Only ever one of these is drawn, and html wins when both are present. */
-data class Body(val html: String?, val text: String?)
+/** An address this account is allowed to send as. */
+data class Identity(val id: String, val name: String, val email: String)
+
+/**
+ * Only ever one of these is drawn, and html wins when both are present. The two header
+ * lists come along because a reply needs them: without them the answer starts a new
+ * conversation in every client that threads.
+ */
+data class Body(
+    val html: String?,
+    val text: String?,
+    val messageId: List<String> = emptyList(),
+    val references: List<String> = emptyList(),
+)
 
 class Jmap private constructor(
     private val credential: String,
@@ -146,7 +160,9 @@ class Jmap private constructor(
         val email = call(
             invoke("Email/get", "b") {
                 putJsonArray("ids") { add(id) }
-                putJsonArray("properties") { add("htmlBody"); add("textBody"); add("bodyValues") }
+                putJsonArray("properties") {
+                    add("htmlBody"); add("textBody"); add("bodyValues"); add("messageId"); add("references")
+                }
                 put("fetchHTMLBodyValues", true)
                 put("fetchTextBodyValues", true)
                 put("maxBodyValueBytes", 1024 * 1024)
@@ -159,11 +175,95 @@ class Jmap private constructor(
             ?.mapNotNull { values[it.jsonObject["partId"]?.str() ?: return@mapNotNull null]?.jsonObject?.get("value")?.str() }
             ?.joinToString("\n")
             ?.ifBlank { null }
-        return Body(join("htmlBody"), join("textBody"))
+        fun ids(field: String) = email[field]?.jsonArray?.mapNotNull { it.str() }.orEmpty()
+        return Body(join("htmlBody"), join("textBody"), ids("messageId"), ids("references"))
+    }
+
+    fun identities(): List<Identity> =
+        call(invoke("Identity/get", "i") { put("ids", JsonNull) })[0].list().map {
+            val o = it.jsonObject
+            Identity(
+                id = o["id"].require("id"),
+                name = o["name"]?.str()?.ifBlank { null } ?: o["email"]?.str().orEmpty(),
+                email = o["email"].require("email"),
+            )
+        }
+
+    /**
+     * Writes the message to Drafts and hands it to the server to send, in one request.
+     *
+     * The submission refers to the email by its creation id, so the message is never
+     * round tripped through us between being written and being sent, and there is no
+     * window in which a draft exists that nothing will ever send. On success the server
+     * itself moves it out of Drafts and into Sent and drops the draft keyword, which is
+     * why that move cannot be left half done by us losing the connection.
+     */
+    fun send(draft: Draft, identity: Identity, draftsMailboxId: String, sentMailboxId: String?) {
+        val responses = call(
+            invoke("Email/set", "e") {
+                putJsonObject("create") {
+                    putJsonObject("m") {
+                        putJsonObject("mailboxIds") { put(draftsMailboxId, true) }
+                        putJsonObject("keywords") { put("\$draft", true) }
+                        putJsonArray("from") {
+                            add(buildJsonObject { put("name", identity.name); put("email", identity.email) })
+                        }
+                        addresses("to", draft.to)
+                        addresses("cc", draft.cc)
+                        put("subject", draft.subject)
+                        // Without both of these a reply arrives as a new conversation in
+                        // every client that threads, which is most of them.
+                        draft.inReplyTo?.let {
+                            putJsonArray("header:In-Reply-To:asMessageIds") { add(it) }
+                        }
+                        if (draft.references.isNotEmpty()) {
+                            putJsonArray("header:References:asMessageIds") { draft.references.forEach { add(it) } }
+                        }
+                        putJsonObject("bodyStructure") { put("partId", "b"); put("type", "text/plain") }
+                        putJsonObject("bodyValues") { putJsonObject("b") { put("value", draft.body) } }
+                    }
+                }
+            },
+            invoke("EmailSubmission/set", "s") {
+                putJsonObject("create") {
+                    putJsonObject("sub") {
+                        put("emailId", "#m")
+                        put("identityId", identity.id)
+                    }
+                }
+                putJsonObject("onSuccessUpdateEmail") {
+                    putJsonObject("#sub") {
+                        put("mailboxIds/$draftsMailboxId", JsonNull)
+                        if (sentMailboxId != null) put("mailboxIds/$sentMailboxId", JsonPrimitive(true))
+                        put("keywords/\$draft", JsonNull)
+                    }
+                }
+            },
+        )
+        val created = responses[0][1].jsonObject["created"]?.jsonObject?.get("m")
+            ?: throw JmapError(refusal(responses[0][1].jsonObject, "notCreated", "The server would not store the message"))
+        checkNotNull(created)
+        responses[1][1].jsonObject["created"]?.jsonObject?.get("sub")
+            ?: throw JmapError(refusal(responses[1][1].jsonObject, "notCreated", "The server would not send the message"))
+    }
+
+    /** JMAP reports a refused create per id, so the reason is inside the response, not the status code. */
+    private fun refusal(response: JsonObject, field: String, prefix: String): String {
+        val problem = response[field]?.jsonObject?.values?.firstOrNull()?.jsonObject
+        val type = problem?.get("type")?.str()
+        val description = problem?.get("description")?.str()
+        return listOfNotNull(prefix, description ?: type).joinToString(": ") + "."
     }
 
     fun markSeen(id: String) {
         setKeyword(listOf(id), "\$seen", true)
+    }
+
+    /** Splits what someone typed into a comma separated list, and omits the header entirely if empty. */
+    private fun JsonObjectBuilder.addresses(field: String, typed: String) {
+        val parsed = typed.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        if (parsed.isEmpty()) return
+        putJsonArray(field) { parsed.forEach { add(buildJsonObject { put("email", it) }) } }
     }
 
     private fun invoke(name: String, id: String, args: JsonObjectBuilder.() -> Unit): JsonArray =
@@ -175,7 +275,7 @@ class Jmap private constructor(
 
     private fun call(vararg invocations: JsonArray): List<JsonArray> {
         val body = buildJsonObject {
-            putJsonArray("using") { add(CORE); add(MAIL) }
+            putJsonArray("using") { add(CORE); add(MAIL); add(SUBMISSION) }
             put("methodCalls", JsonArray(invocations.toList()))
         }
         val response = http.send(
@@ -270,8 +370,9 @@ private val emailGetProperties = listOf("id", "from", "subject", "receivedAt", "
 private fun jsonToSummary(o: JsonObject): Summary = Summary(
     id = o["id"].require("id"),
     from = o["from"]?.jsonArray?.firstOrNull()?.jsonObject?.let { a ->
-        a["name"]?.str() ?: a["email"]?.str()
+        a["name"]?.str()?.ifBlank { null } ?: a["email"]?.str()
     } ?: "(no sender)",
+    fromEmail = o["from"]?.jsonArray?.firstOrNull()?.jsonObject?.get("email")?.str().orEmpty(),
     subject = o["subject"]?.str()?.ifBlank { null } ?: "(no subject)",
     receivedAt = o["receivedAt"]?.str() ?: "",
     preview = o["preview"]?.str()?.trim() ?: "",
