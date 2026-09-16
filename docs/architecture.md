@@ -3,76 +3,137 @@
 Decisions recorded as they were made, with the reason. Change them by all means,
 but read the reason first.
 
-## JMAP only to begin with, IMAP later
+## Rampart is a desktop application, not an Android one
 
-IMAP carries messages. It does not carry filter rules, aliases, vacation
-responders, app passwords, quotas, push registration or any server setting. Every
-feature that makes Rampart worth installing over K-9 or FairEmail exists only on
-the JMAP side.
+It started as an Android app. On 2026-09-16 we found [Sterna Mail](https://sternamail.org/),
+which had already built it: native Android, JMAP first, IMAP as well, on F-Droid,
+GPLv3, reproducible builds. Unified inbox, offline cache, threading, search, OAuth,
+autodiscovery from an address alone, OpenPGP, UnifiedPush without Google, biometric
+lock, vacation responder, Sieve rules, quota, shared and delegated mailboxes.
 
-So an IMAP account in Rampart can never be more than a plain inbox. IMAP support
-is therefore the most work for the least differentiation, and it goes second, as
-"it also handles your old Gmail", not as the foundation. Building both at once
-means shipping neither.
+It began on 21 June 2026 and reached 1,317 commits and 73 releases in under three
+months. The Stalwart team endorsed it on their own forum.
 
-JMAP first also covers Fastmail, Cyrus and Apache James users, not only Stalwart.
+That is the whole of our version 1 and most of version 2, shipped and moving faster
+than we could. Competing would cost years and win nothing.
 
-## The engine is jmap-mua, not ours
+Two things it does not do, and they are the two we actually wanted:
+
+1. **Desktop.** Sterna is Android only. There is no native client for this stack on
+   Windows, Linux or macOS. The alternative today is a browser tab.
+2. **Server administration.** It manages vacation and filters. It does not manage
+   domains, accounts, DKIM, the mail queue, certificates, TLS, listeners or logs.
+
+So Rampart is the desktop client: mail plus the whole admin surface. On a phone we
+recommend Sterna and do not duplicate it.
+
+## Compose for Desktop, Kotlin, no Android target
+
+With Android dropped, the multiplatform requirement goes with it. Compose for
+Desktop alone covers Windows, Linux and macOS from one Kotlin codebase, and an
+Android target can be added later as a module rather than a rewrite.
+
+Admin is forms, tables and text. That is exactly what Compose is good at, and it is
+the half of the product nobody else has built. Mail is the half where Compose on the
+desktop is weakest, which is the next section.
+
+## Rendering HTML mail has no free answer on the desktop
+
+Android hands every mail client a WebView. The JVM does not. The options:
+
+| Option | Cost |
+|---|---|
+| JCEF or KCEF (embedded Chromium) | Real browser, real isolation. Adds roughly 100 MB to the download and a Chromium update burden that is now ours. |
+| JavaFX WebView (WebKit) | Smaller, ships with some JDKs, an older engine, and still a browser to keep patched. |
+| Sanitise, then render in Compose | No script engine in the process at all, so the entire class of HTML mail exploits disappears. Newsletters look wrong. |
+
+Leaning towards the third for v1: sanitise to a restricted subset and draw it
+ourselves, no JavaScript anywhere, no remote content unless asked. A self-hoster's
+mail is mostly text and the failure mode is an ugly marketing email, not a breach.
+Revisit if it turns out to be unusable. **This decision is still open and it is the
+one that is hardest to change later**, so make it before writing the reader.
+
+Non-negotiable either way: no JavaScript, remote images blocked by default and
+allowed per sender, `cid:` images served from the local blob, every link click
+confirmed, and the renderer treated as hostile input at all times.
+
+## The engine is jmap-mua, on probation
 
 `rs.ltt:jmap-mua` (Apache 2.0, Java 8) is a headless mail client: protocol, sync,
-caching, threading, everything except storage and UI. Writing that ourselves would
-take years and produce something worse. Ltt.rs is the same library with an Android
-UI on top, and is the worked reference for driving it correctly.
+caching, threading, everything except storage and UI. It is the only serious Java
+JMAP client library, and Java 8 bytecode runs anywhere we want to ship.
 
-Java 8 and JVM means the same engine runs on Android and on the desktop.
+It is also a side project on a slow cadence: 0.9.0 in April 2025 after 0.8.18 in
+December 2023, and upstream still describes the protocol library as work in
+progress. Before any UI is written, check which RFC 8621 methods it actually
+implements against what we need: `EmailSubmission`, `Identity`, `VacationResponse`,
+`SieveScript`, push subscriptions and WebSocket. Budget a fork.
 
-## The UI is Compose Multiplatform, so we do not fork Ltt.rs
-
-The obvious move was to fork Ltt.rs and finish it. Desktop support kills that:
-its UI is Android XML layouts and Views, which cannot run on Windows.
-
-Compose Multiplatform is stable for Android, desktop (Windows, Linux, macOS) and
-iOS. One Kotlin UI codebase covers every target we want. So we keep the engine,
-write the UI once, and lift from Ltt.rs where it helps (the licence allows it).
-
-The cost: writing a UI is more work than forking one. The offset: we were
-replacing that UI anyway, and this buys three more platforms for roughly the
-effort of doing Android alone.
-
-Known asterisks: desktop packaging, tray icons, notifications and registering as
-the system mail handler are per-platform work. Compose desktop apps bundle a JVM,
-so downloads are around 80 to 100 MB.
-
-## Settings screens are generated, not written
+## Settings and admin screens are generated, not written
 
 Stalwart publishes its entire management interface as data at `/api/schema`:
 150 objects, 381 schemas, 316 field sets, 359 forms, 72 list views, 154 enums and
-three ready made navigation trees (Management, Settings, Account). Its own web
-console is not hand built, it draws itself from that document.
+three navigation trees (Management, Settings, Account). Its own web console is not
+hand built, it draws itself from that document.
 
-So Rampart writes one renderer that turns a schema form into a screen, and gets
-every settings page at once, including pages Stalwart has not shipped yet. This is
-the difference between "manage your server from your phone" being a year of work
-and a few weeks, and it means a Stalwart release does not break us.
+So Rampart writes one renderer and gets every page at once, including pages Stalwart
+has not shipped yet, and a Stalwart release does not break us. This is the difference
+between the admin half being a year of work and a few weeks.
 
-The three trees map cleanly onto the product:
+Four guardrails, each of which the naive version gets wrong:
 
-| Tree | Who sees it |
-|---|---|
-| Account | every user: password, app passwords, API keys, Sieve scripts, vacation response, masked addresses, mailboxes, spam samples |
-| Management | admins: accounts, domains, DKIM, queues, reports, logs, cluster |
-| Settings | admins: network, storage, TLS, MTA, spam filter, telemetry |
+- **Gate on permissions, not on the schema.** `GET /api/account` returns the token's
+  effective permissions. A menu built from the schema alone will show pages that
+  answer 401.
+- **Unknown widget types open in the browser.** Stalwart will add a field type the
+  renderer does not know. That must degrade to one page, not to a broken section.
+- **Destructive operations are not text fields.** Directory, TLS, listeners and queue
+  writes get a confirmation showing what changes, not a Save button.
+- **Some things are tasks, not field sets.** Certificate issue, DNS checks and
+  anything needing a reload are multi-step. Hand write those few.
 
-Non-Stalwart JMAP servers do not publish a schema. They get mail and the standard
-JMAP objects, and no settings tree. Check the capability, hide the section.
+Non-Stalwart JMAP servers publish no schema. Check the capability, hide the section,
+give them mail.
 
-## Push without Google
+## Two credentials, never one
 
-F-Droid does not accept Firebase. Stalwart advertises `urn:ietf:params:jmap:emailpush`,
-`urn:ietf:params:jmap:webpush-vapid` and `urn:ietf:params:jmap:websocket`, so push
-goes over UnifiedPush against the server's own VAPID support. Ltt.rs already pulls
-in Tink's webpush library, which is the encryption half of that.
+The mail session and the admin session use separate tokens with separate scopes. A
+hole in the mail reader must not reach `x:Directory/set`. Storing one all-powerful
+credential turns any renderer bug into a full server compromise.
+
+Tokens live in the OS credential store: DPAPI on Windows, libsecret on Linux,
+Keychain on macOS. Not in a file beside the database.
+
+## Storage
+
+Metadata for everything, bodies on demand. Store ids, threadId, keywords, size,
+preview and receivedAt; fetch a body when a message is opened and cache it under an
+LRU with a size cap. Never download a 100,000 message mailbox.
+
+Encrypt the message database from the first release. Migrating a plaintext cache
+after people have data in it is miserable.
+
+Decide the sync window before writing the sync code, not under pressure afterwards.
+
+## No certificate pinning
+
+Self-hosters use Let's Encrypt, Tailscale, private CAs and debug proxies. Pinning
+locks them out on renewal. System PKI, plus an explicit option to trust a custom CA.
+
+## Distribution
+
+F-Droid no longer applies. Windows first: a jpackage MSI, unsigned to begin with,
+which means a SmartScreen warning that the README has to be honest about. Then Linux
+(Flatpak, plus an AppImage for people who refuse Flatpak), then macOS, which needs a
+99 dollar a year Apple account for notarisation before it is worth shipping.
+
+Auto-update is ours to build. Compose does not provide one.
+
+## What we are deliberately not doing
+
+Android (Sterna). IMAP. Calendars, contacts and file storage. OpenPGP implemented in
+process. Certificate pinning. Any app store. Admin on a phone.
 
 ## Brand
 
-Red `#DB2D54`, taken from Bulwark's logo, so the three pieces match.
+Red `#DB2D54`, taken from Bulwark's logo, so the pieces match.

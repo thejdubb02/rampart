@@ -1,32 +1,40 @@
-# rampart - a JMAP mail client for Stalwart and Bulwark
+# rampart - a desktop client for Stalwart
 
-Android plus desktop, one codebase. Public repo eventually, so everything here is
-written to be read by strangers.
+Mail plus the whole server admin surface, on Windows, Linux and macOS. Public repo
+eventually, so everything here is written to be read by strangers.
 
 ## The rules that matter
 
-- **JMAP first, IMAP second.** Not a preference, a consequence: IMAP cannot carry
-  settings, filters, aliases or push, so an IMAP account can only ever be a plain
-  inbox here. Read `docs/architecture.md` before arguing with this.
-- **Do not fork Ltt.rs.** Its UI is Android-only Views and cannot reach the desktop.
-  We keep its engine (`jmap-mua`) and write the UI in Compose Multiplatform. Ltt.rs
-  is a reference to lift from, Apache 2.0, credit it.
+- **Desktop only. Do not add an Android target.** [Sterna Mail](https://sternamail.org/)
+  already built that app and builds it faster than we could. Rampart exists for the
+  two things Sterna does not do: desktop, and real server administration. Read
+  `docs/architecture.md` before arguing with this.
+- **JMAP only.** IMAP cannot carry settings, filters, aliases or admin, so an IMAP
+  account here could only ever be a plain inbox. Not on the roadmap.
 - **Do not hand write settings screens.** Stalwart publishes 359 forms at
   `/api/schema`. One renderer, every screen, and it survives Stalwart releases.
-- **No Firebase, ever.** F-Droid rejects it. Push is UnifiedPush against the
-  server's VAPID support.
+  Gate the menu on `GET /api/account` permissions, not on the schema.
+- **Two credentials, never one.** The mail token and the admin token are separate
+  and separately scoped. A renderer bug must not reach `x:Directory/set`.
+- **The HTML reader is hostile input.** No JavaScript, remote content blocked by
+  default, every link confirmed. The renderer choice is still open and is the
+  hardest decision to reverse.
+- **No certificate pinning.** Self-hosters use Let's Encrypt, Tailscale and private
+  CAs; pinning locks them out.
 - **Red is `#DB2D54`**, from Bulwark's logo.
 
 ## Layout
 
-Nothing built yet. When it is: `docs/` for decisions, the Gradle project at the
-root, shared UI in `composeApp/`.
+Nothing built yet. When it is: `docs/` for decisions, the Gradle project at the root.
 
-## Test server
+## Test servers
 
-Our own Stalwart on vps1. The JMAP session lives at
-`https://mail.example.org/jmap/`, admin surface on the tailnet at
-`http://10.0.0.1:8080/`. Helper: `a local helper script` on vps1.
+Two, both Stalwart, and use both because one server is not a compatibility test:
+
+- `https://mail.example.org/jmap/` (ours, vps1). Admin surface on the
+  tailnet at `http://10.0.0.1:8080/`. Helper: `a local helper script` on vps1.
+- `https://mail.example.net/jmap/` (Mark's).
+
 Credentials in the password manager, never in this repo.
 
 ## Going public

@@ -1,15 +1,13 @@
 # Rampart
 
-A mail client for people running their own server.
+A desktop application for [Stalwart](https://stalw.art). Your mail and your whole
+server, in one native window, on Windows, Linux and macOS.
 
 Rampart speaks [JMAP](https://jmap.io), not IMAP. That is the whole point. IMAP can
 move messages and nothing else: it has no way to carry your filter rules, your
 aliases, your vacation responder, your app passwords or your server's own settings.
 So every IMAP client, however good, leaves nine tenths of a modern mail server
-invisible and makes you open a web console for the rest.
-
-Rampart is built for [Stalwart](https://stalw.art) and [Bulwark](https://github.com/bulwarkmail),
-and works with any JMAP server (Fastmail, Cyrus, Apache James).
+invisible and sends you to a browser for the rest.
 
 ## Status
 
@@ -17,24 +15,28 @@ Early. Nothing to install yet.
 
 ## What it will do
 
-- **Mail**, from the JMAP engine, with push that does not need Google.
-- **Your account settings**, on the phone: password, app passwords, API keys,
-  Sieve filter rules, vacation responder, masked addresses, spam training.
-- **Your server**, if you administer one: accounts, domains, DKIM, queues, certificates.
-- **The same app on the desktop**, Windows first, then Linux and macOS.
+- **Mail.** Read, search, write, send, offline.
+- **Your account.** App passwords, API keys, Sieve filter rules, vacation
+  responder, aliases, quota.
+- **Your server.** Accounts, domains, DKIM, the mail queue, certificates, TLS,
+  listeners, logs. The things that currently mean opening the admin console.
 
-Settings screens are rendered from the server's own published schema rather than
-hand written, so they stay correct when the server adds a field. See
+Settings and admin screens are rendered from the server's own published schema
+rather than hand written, so they stay correct when the server adds a field. See
 [docs/architecture.md](docs/architecture.md).
+
+## On your phone
+
+Use [Sterna Mail](https://sternamail.org/). It is a native Android JMAP client,
+free software, on F-Droid, and it is good. Rampart does not duplicate it.
 
 ## Platforms
 
-Android (F-Droid), Windows, Linux, macOS. One codebase.
+Windows first, then Linux, then macOS. One Kotlin codebase.
 
 ## Licence
 
 Apache 2.0. See [LICENSE](LICENSE).
 
-Rampart builds on [jmap-mua](https://codeberg.org/iNPUTmice/jmap) and takes
-reference from [Ltt.rs](https://codeberg.org/iNPUTmice/lttrs-android), both by
-Daniel Gultsch, both Apache 2.0.
+Rampart builds on [jmap-mua](https://codeberg.org/iNPUTmice/jmap) by Daniel
+Gultsch, Apache 2.0, and takes reference from his [Ltt.rs](https://codeberg.org/iNPUTmice/lttrs-android).
