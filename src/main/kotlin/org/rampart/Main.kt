@@ -112,6 +112,7 @@ fun main() = application {
     ) {
         val followSystem = isSystemInDarkTheme()
         var dark by remember { mutableStateOf(Settings.dark() ?: followSystem) }
+        LaunchedEffect(dark) { WindowChrome.setDarkTitleBar(window, dark) }
         MaterialTheme(colorScheme = if (dark) RampartDarkColors else RampartColors) {
             Surface(Modifier.fillMaxSize()) {
                 App(
@@ -190,6 +191,7 @@ internal fun Connect(
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var rememberPassword by remember { mutableStateOf(canRemember) }
+    val storeProblem = remember { Secrets.unavailableReason() }
     val scope = rememberCoroutineScope()
 
     Column(
@@ -270,7 +272,13 @@ internal fun Connect(
                             val account = SavedAccount(user.trim(), server.trim(), user.trim())
                             // Only after a sign-in that worked, so a typo is never saved.
                             runCatching { Accounts.remember(account) }
-                            if (rememberPassword) Secrets.store(account, password) else Secrets.forget(account)
+                            if (rememberPassword) {
+                                // Signing in worked, so this is not a failure worth refusing
+                                // the session over. It is worth saying out loud.
+                                Secrets.store(account, password)?.let { error = "Signed in. $it" }
+                            } else {
+                                Secrets.forget(account)
+                            }
                             onConnected(account, jmap)
                         } catch (e: Exception) {
                             error = e.message ?: e.toString()
@@ -282,6 +290,14 @@ internal fun Connect(
             ) { Text(if (busy) "Connecting" else "Connect") }
         }
         if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.width(380.dp))
+        if (storeProblem != null) {
+            Text(
+                "Passwords cannot be remembered on this machine, so you will be asked each time. $storeProblem",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.width(380.dp),
+            )
+        }
         Text(
             if (rememberPassword && canRemember) {
                 "The password goes to the operating system's own credential store, tied to this " +

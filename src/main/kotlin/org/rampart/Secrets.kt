@@ -36,9 +36,30 @@ object Secrets {
             ?.toString()
     }
 
-    fun available(): Boolean = if (windows) dpapiWorks else secretTool != null
+    fun available(): Boolean = unavailableReason() == null
 
-    fun store(account: SavedAccount, password: String): Boolean = runCatching {
+    /**
+     * Why a password cannot be kept, in one sentence, or null when it can.
+     *
+     * This is shown to the person rather than logged. A credential store that quietly
+     * does nothing is worse than one that is plainly absent: it looks like it worked,
+     * and the failure only surfaces as "why am I typing this again" days later.
+     */
+    fun unavailableReason(): String? = when {
+        windows -> dpapiProblem
+        secretTool != null -> null
+        else -> "No credential store was found. On Linux that is secret-tool, from libsecret."
+    }
+
+    /** Null when the password was kept, otherwise the reason it was not. */
+    fun store(account: SavedAccount, password: String): String? {
+        unavailableReason()?.let { return it }
+        return runCatching {
+            if (attempt(account, password)) null else "The credential store rejected the password."
+        }.getOrElse { "The credential store failed: ${it.message ?: it::class.simpleName}" }
+    }
+
+    private fun attempt(account: SavedAccount, password: String): Boolean = runCatching {
         val id = id(account)
         if (windows) {
             val file = secretFile(id)
@@ -91,8 +112,28 @@ object Secrets {
 
     private fun secretFile(id: String): Path = Accounts.file().resolveSibling("secrets").resolve("$id.bin")
 
-    private val dpapiWorks: Boolean by lazy {
-        windows && runCatching { Dpapi.unprotect(Dpapi.protect(byteArrayOf(1), byteArrayOf(2)), byteArrayOf(2)) }.isSuccess
+    /**
+     * DPAPI reached through JNA, which unpacks a native library at runtime. Inside a
+     * packaged app that unpack is the part that fails, so it is tried once, for real, and
+     * the reason is kept rather than collapsed into a boolean.
+     */
+    private val dpapiProblem: String? by lazy {
+        if (!windows) return@lazy "Not running on Windows."
+        // JNA unpacks its native library to the temp directory. In a packaged app that
+        // directory may not be writable, so it is pointed at the app's own data directory,
+        // which by definition is.
+        runCatching {
+            val scratch = Accounts.file().resolveSibling("native")
+            scratch.createDirectories()
+            System.setProperty("jna.tmpdir", scratch.toString())
+        }
+        runCatching {
+            val probe = Dpapi.protect(byteArrayOf(1, 2, 3), byteArrayOf(4))
+            if (!Dpapi.unprotect(probe, byteArrayOf(4)).contentEquals(byteArrayOf(1, 2, 3))) {
+                return@lazy "Windows returned a different value than it was given."
+            }
+            null
+        }.getOrElse { "Windows' credential encryption could not be reached: ${it.cause?.message ?: it.message ?: it::class.simpleName}" }
     }
 }
 

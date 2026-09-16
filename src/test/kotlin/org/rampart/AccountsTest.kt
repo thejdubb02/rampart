@@ -7,6 +7,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.test.assertTrue
 
 /**
  * The accounts file is meant to be written by other people and other people's assistants,
@@ -82,7 +83,9 @@ class SecretsTest {
     fun `with no credential store, nothing is stored and nothing comes back`() {
         if (Secrets.available()) return
         val account = SavedAccount("Work", "mail.example.org", "you@example.org")
-        assertFalse(Secrets.store(account, "hunter2"))
+        // The refusal has to say why, because a silent one reads as success.
+        val reason = Secrets.store(account, "hunter2")
+        assertTrue(reason != null && reason.isNotBlank(), "storing failed without saying why")
         assertEquals(null, Secrets.load(account))
     }
 }
