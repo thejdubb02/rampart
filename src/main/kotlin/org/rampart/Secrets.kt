@@ -145,11 +145,20 @@ object Secrets {
 private object Dpapi {
     private val util: Class<*> by lazy { Class.forName("com.sun.jna.platform.win32.Crypt32Util") }
 
+    /**
+     * The last argument of both calls is a prompt struct, not an Object, and asking for the
+     * wrong signature fails at lookup rather than at call time. It is resolved by name for
+     * the same reason the rest of this is: the class must not be touched off Windows.
+     */
+    private val prompt: Class<*> by lazy {
+        Class.forName("com.sun.jna.platform.win32.WinCrypt\$CRYPTPROTECT_PROMPTSTRUCT")
+    }
+
     fun protect(data: ByteArray, entropy: ByteArray): ByteArray =
-        util.getMethod("cryptProtectData", ByteArray::class.java, ByteArray::class.java, Int::class.java, String::class.java, Any::class.java)
+        util.getMethod("cryptProtectData", ByteArray::class.java, ByteArray::class.java, Int::class.java, String::class.java, prompt)
             .invoke(null, data, entropy, 0, "Rampart", null) as ByteArray
 
     fun unprotect(data: ByteArray, entropy: ByteArray): ByteArray =
-        util.getMethod("cryptUnprotectData", ByteArray::class.java, ByteArray::class.java, Int::class.java, Any::class.java)
+        util.getMethod("cryptUnprotectData", ByteArray::class.java, ByteArray::class.java, Int::class.java, prompt)
             .invoke(null, data, entropy, 0, null) as ByteArray
 }
