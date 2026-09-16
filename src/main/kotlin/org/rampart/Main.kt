@@ -31,6 +31,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.foundation.layout.offset
+import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -70,6 +74,10 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.rememberWindowState
+import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.window.WindowPosition
+import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import kotlinx.coroutines.Dispatchers
@@ -99,13 +107,55 @@ internal data class AccountMailboxes(
 fun main() = application {
     val density = LocalDensity.current
     val icon = remember(density) { useResource("rampart-icon.svg") { loadSvgPainter(it, density) } }
-    // Conveyor's launcher sets this. Showing it makes "did the update actually land" a
-    // question you can answer by looking at the window instead of guessing.
-    val version = System.getProperty("app.version")
+    val saved = remember { Settings.window() }
+    val windowState = rememberWindowState(
+        placement = if (saved?.maximized == true) WindowPlacement.Maximized else WindowPlacement.Floating,
+        position = saved?.let { WindowPosition(it.x.dp, it.y.dp) } ?: WindowPosition(Alignment.Center),
+        size = DpSize((saved?.width ?: 1440).dp, (saved?.height ?: 900).dp),
+    )
+
+    /**
+     * Where the window was is written down on the way out. A maximized window reports the
+     * whole screen as its size, so the size from before it was maximized is kept instead:
+     * un-maximizing a restored window should give back the size someone chose, not the
+     * monitor.
+     */
+    fun remember() {
+        val maximized = windowState.placement == WindowPlacement.Maximized
+        val position = windowState.position
+        val previous = Settings.window()
+        Settings.setWindow(
+            if (maximized || !position.isSpecified) {
+                SavedWindow(
+                    x = previous?.x ?: 0,
+                    y = previous?.y ?: 0,
+                    width = previous?.width ?: 1440,
+                    height = previous?.height ?: 900,
+                    maximized = maximized,
+                )
+            } else {
+                SavedWindow(
+                    x = position.x.value.toInt(),
+                    y = position.y.value.toInt(),
+                    width = windowState.size.width.value.toInt(),
+                    height = windowState.size.height.value.toInt(),
+                    maximized = false,
+                )
+            },
+        )
+    }
+
+    fun quit() {
+        remember()
+        exitApplication()
+    }
+
     Window(
-        onCloseRequest = ::exitApplication,
-        title = if (version.isNullOrBlank()) "Rampart" else "Rampart $version",
+        onCloseRequest = ::quit,
+        // The version lives in the sidebar. A title bar is for saying which app this is.
+        title = "Rampart",
         icon = icon,
+        state = windowState,
     ) {
         val followSystem = isSystemInDarkTheme()
         var dark by remember { mutableStateOf(Settings.dark() ?: followSystem) }
@@ -118,7 +168,7 @@ fun main() = application {
                 App(
                     dark = dark,
                     onToggleDark = { dark = it; Settings.setDark(it) },
-                    onQuit = ::exitApplication,
+                    onQuit = ::quit,
                 )
             }
         }
@@ -328,6 +378,7 @@ private fun Reader(
     var query by remember { mutableStateOf("") }
     var showingResults by remember { mutableStateOf(false) }
     var searchFocused by remember { mutableStateOf(false) }
+    var collapsed by remember { mutableStateOf(Settings.sidebarCollapsed()) }
     val searchField = remember { FocusRequester() }
     val keyboard = remember { FocusRequester() }
     var mailboxes by remember { mutableStateOf<Map<String, List<Mailbox>>>(emptyMap()) }
@@ -507,9 +558,17 @@ private fun Reader(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Rampart $version is ready. It installs when you next open the app.", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "Rampart $version is ready.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = onQuit) { Text("Quit and update") }
+                    TextButton(onClick = {
+                        // If the updater is not where it should be, closing is still the
+                        // right move: Windows installs it on its own, just later.
+                        Updates.restartToUpdate()
+                        onQuit()
+                    }) { Text("Restart now") }
                     TextButton(onClick = { update = null }) { Text("Later") }
                 }
             }
@@ -542,6 +601,8 @@ private fun Reader(
                 dark = dark,
                 onToggleDark = onToggleDark,
                 onAddAccount = onAddAccount,
+                collapsed = collapsed,
+                onToggleCollapsed = { collapsed = !collapsed; Settings.setSidebarCollapsed(collapsed) },
                 onSelect = { key, mailbox -> here = key to mailbox },
                 onWrite = {
                     val from = identities[here?.first].orEmpty().firstOrNull()?.email
@@ -615,45 +676,72 @@ internal fun Sidebar(
     accounts: List<AccountMailboxes>,
     here: Pair<String, Mailbox>?,
     dark: Boolean,
+    collapsed: Boolean = false,
+    onToggleCollapsed: () -> Unit = {},
     onToggleDark: (Boolean) -> Unit,
     onAddAccount: () -> Unit,
     onWrite: () -> Unit,
     onSelect: (String, Mailbox) -> Unit,
 ) {
     Column(
-        Modifier.width(232.dp).fillMaxHeight()
+        Modifier.width(if (collapsed) 60.dp else 232.dp).fillMaxHeight()
             .background(MaterialTheme.colorScheme.background)
-            .padding(horizontal = 12.dp, vertical = 14.dp),
+            .padding(horizontal = if (collapsed) 8.dp else 12.dp, vertical = 14.dp),
+        horizontalAlignment = if (collapsed) Alignment.CenterHorizontally else Alignment.Start,
     ) {
-        Button(
-            onClick = onWrite,
-            shape = MaterialTheme.shapes.medium,
-            modifier = Modifier.fillMaxWidth().height(40.dp),
-        ) { Text("Write", style = MaterialTheme.typography.labelLarge) }
+        if (collapsed) {
+            FilledIconButton(onClick = onWrite, modifier = Modifier.size(40.dp)) {
+                Icon(RampartIcons.Write, contentDescription = "Write", modifier = Modifier.size(17.dp))
+            }
+        } else {
+            Button(
+                onClick = onWrite,
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.fillMaxWidth().height(40.dp),
+            ) {
+                Icon(RampartIcons.Write, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Write", style = MaterialTheme.typography.labelLarge)
+            }
+        }
 
         Spacer(Modifier.height(14.dp))
 
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             accounts.forEachIndexed { index, account ->
                 // With one account the heading is noise. With two it is the only way to tell
-                // one Inbox from the other.
+                // one Inbox from the other. Collapsed, there is no room for it at all, so
+                // the accounts are separated by a rule instead.
                 if (accounts.size > 1) {
                     item(key = "head-${account.key}") {
-                        Text(
-                            account.name.uppercase(),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.outline,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.fillMaxWidth()
-                                .padding(start = 10.dp, end = 10.dp, top = if (index == 0) 4.dp else 16.dp, bottom = 4.dp),
-                        )
+                        if (collapsed) {
+                            if (index > 0) {
+                                HorizontalDivider(
+                                    color = MaterialTheme.colorScheme.outlineVariant,
+                                    modifier = Modifier.padding(vertical = 8.dp),
+                                )
+                            }
+                        } else {
+                            Text(
+                                shortAccountName(account.name, account.email).uppercase(),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.outline,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.fillMaxWidth().padding(
+                                    start = 10.dp,
+                                    end = 10.dp,
+                                    top = if (index == 0) 4.dp else 16.dp,
+                                    bottom = 4.dp,
+                                ),
+                            )
+                        }
                     }
                 }
                 items(account.mailboxes, key = { "${account.key}/${it.id}" }) { box ->
                     FolderRow(
-                        name = box.name,
-                        unread = box.unread,
+                        mailbox = box,
+                        collapsed = collapsed,
                         selected = here?.first == account.key && here.second.id == box.id,
                         onClick = { onSelect(account.key, box) },
                     )
@@ -666,78 +754,134 @@ internal fun Sidebar(
         Spacer(Modifier.height(8.dp))
 
         accounts.forEach { account ->
-            Row(
-                Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Avatar(account.name, account.email, 26.dp)
-                Spacer(Modifier.width(9.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        account.name,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        account.email,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+            if (collapsed) {
+                Box(Modifier.padding(vertical = 4.dp)) { Avatar(account.name, account.email, 26.dp) }
+            } else {
+                Row(
+                    Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Avatar(account.name, account.email, 26.dp)
+                    Spacer(Modifier.width(9.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            shortAccountName(account.name, account.email),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            account.email,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
         }
 
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TextButton(onClick = onAddAccount) { Text("Add account", style = MaterialTheme.typography.bodySmall) }
-            TextButton(onClick = { onToggleDark(!dark) }) {
-                Text(if (dark) "Light" else "Dark", style = MaterialTheme.typography.bodySmall)
+        if (collapsed) {
+            IconButton(onClick = onToggleCollapsed, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    RampartIcons.Expand,
+                    contentDescription = "Widen the sidebar",
+                    tint = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.size(16.dp),
+                )
             }
-        }
-        Updates.current?.let {
-            Text(
-                it,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.outline,
-                modifier = Modifier.padding(start = 12.dp, top = 2.dp),
-            )
+        } else {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = onAddAccount) { Text("Add account", style = MaterialTheme.typography.bodySmall) }
+                TextButton(onClick = { onToggleDark(!dark) }) {
+                    Text(if (dark) "Light" else "Dark", style = MaterialTheme.typography.bodySmall)
+                }
+                IconButton(onClick = onToggleCollapsed, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        RampartIcons.Collapse,
+                        contentDescription = "Narrow the sidebar",
+                        tint = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.size(15.dp),
+                    )
+                }
+            }
+            Updates.current?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.padding(start = 12.dp, top = 2.dp),
+                )
+            }
         }
     }
 }
 
+/**
+ * Accounts are remembered under the address they were signed in with, so the heading was
+ * showing a truncated email over a list of folders. The part before the @ is what a person
+ * would call it.
+ */
+internal fun shortAccountName(name: String, email: String): String {
+    if (name.isNotBlank() && !name.contains('@')) return name
+    val local = email.substringBefore('@')
+    val host = email.substringAfter('@', "").substringBefore('.')
+    return if (local.equals("admin", ignoreCase = true) && host.isNotBlank()) host else local.ifBlank { email }
+}
+
 @Composable
-private fun FolderRow(name: String, unread: Int, selected: Boolean, onClick: () -> Unit) {
+private fun FolderRow(mailbox: Mailbox, collapsed: Boolean, selected: Boolean, onClick: () -> Unit) {
+    val tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
     Row(
         modifier = Modifier.fillMaxWidth().height(32.dp)
             .clip(MaterialTheme.shapes.small)
             .background(if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp),
+            .padding(horizontal = if (collapsed) 0.dp else 10.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = if (collapsed) Arrangement.Center else Arrangement.Start,
     ) {
-        Text(
-            name,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        if (unread > 0) {
-            Text(
-                "$unread",
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.SemiBold,
-                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                RampartIcons.forRole(mailbox.role),
+                contentDescription = if (collapsed) mailbox.name else null,
+                tint = tint,
+                modifier = Modifier.size(16.dp),
             )
+            // Collapsed there is no room for a count, so an unread folder carries a dot on
+            // the corner of its icon instead of losing the signal altogether.
+            if (collapsed && mailbox.unread > 0) {
+                Box(
+                    Modifier.size(7.dp).offset(x = 9.dp, y = (-8).dp)
+                        .background(MaterialTheme.colorScheme.primary, CircleShape),
+                )
+            }
+        }
+        if (!collapsed) {
+            Spacer(Modifier.width(10.dp))
+            Text(
+                mailbox.name,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (mailbox.unread > 0) {
+                Text(
+                    "${mailbox.unread}",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = tint,
+                )
+            }
         }
     }
 }

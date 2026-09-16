@@ -32,3 +32,17 @@ class AvatarTest {
         assertTrue(avatarColor("a@example.org") != avatarColor("zzzz@example.org"))
     }
 }
+
+class AccountNameTest {
+    @Test
+    fun `an account remembered under its address shows a name, not a truncated email`() {
+        assertEquals("justin", shortAccountName("justin@willhitestrategy.com", "justin@willhitestrategy.com"))
+        // admin@ says nothing about which server it is, so the host is the useful half.
+        assertEquals("skybox7", shortAccountName("admin@skybox7.com", "admin@skybox7.com"))
+    }
+
+    @Test
+    fun `a name someone actually set is left alone`() {
+        assertEquals("Willhite Strategy", shortAccountName("Willhite Strategy", "justin@willhitestrategy.com"))
+    }
+}

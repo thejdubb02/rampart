@@ -37,6 +37,7 @@ class Screenshots {
         shoot("connect", 900, 760) { Connect(saved = SAVED, canRemember = true) { _, _ -> } }
         shoot("reader", 1400, 900) { Panes(dark = false) }
         shoot("reader-dark", 1400, 900, dark = true) { Panes(dark = true) }
+        shoot("sidebar-collapsed", 1400, 900, dark = true) { Panes(dark = true, collapsed = true) }
         shoot("composer", 1000, 640) {
             Composer(
                 identities = listOf("you@example.org", "billing@example.org"),
@@ -50,7 +51,7 @@ class Screenshots {
     }
 
     @Composable
-    private fun Panes(dark: Boolean) {
+    private fun Panes(dark: Boolean, collapsed: Boolean = false) {
         Column(Modifier.fillMaxSize()) {
         SearchBar(
             query = "invoice",
@@ -65,6 +66,8 @@ class Screenshots {
                 here = ACCOUNTS[0].key to MAILBOXES[0],
                 dark = dark,
                 onToggleDark = {},
+                collapsed = collapsed,
+                onToggleCollapsed = {},
                 onAddAccount = {},
                 onWrite = {},
                 onSelect = { _, _ -> },

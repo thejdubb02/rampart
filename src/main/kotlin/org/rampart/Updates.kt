@@ -1,6 +1,8 @@
 package org.rampart
 
 import java.net.URI
+import java.nio.file.Files
+import java.nio.file.Path
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
@@ -11,12 +13,13 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * Whether a newer Rampart has been published.
+ * Whether a newer Rampart has been published, and pulling it in when asked.
  *
- * Windows already updates the app on its own: the installed package's entry point is the
- * update checker, so every launch collects whatever is newest. This exists only so the
- * person running it can see that, rather than wondering. Nothing here downloads or
- * installs anything.
+ * The packaged launcher is deliberately not set to check before the window opens: that
+ * makes every start wait on a network round trip. The check happens here instead, after
+ * the app is already on screen, and the update is applied only when someone presses the
+ * button. Windows also installs it in the background on its own schedule, so doing nothing
+ * is a valid answer.
  */
 object Updates {
     private const val LATEST = "https://api.github.com/repos/thejdubb02/rampart/releases/latest"
@@ -48,6 +51,43 @@ object Updates {
             ?.jsonPrimitive?.contentOrNull?.removePrefix("v") ?: return null
         latest.takeIf { isNewer(it, running) }
     }.getOrNull()
+
+    /**
+     * The package's own updater, which Windows installs beside the app. Running it applies
+     * whatever is published and starts Rampart again.
+     *
+     * Its location is searched for rather than assumed, because it belongs to the packaging
+     * tool rather than to us, and a wrong guess here would be a button that silently does
+     * nothing.
+     */
+    private fun updater(): Path? {
+        val candidates = buildList {
+            System.getProperty("app.dir")?.let { add(Path.of(it)) }
+            runCatching {
+                val here = Path.of(
+                    Updates::class.java.protectionDomain.codeSource.location.toURI(),
+                )
+                add(here.parent)
+                add(here.parent?.parent)
+            }
+        }
+        return candidates.filterNotNull()
+            .flatMap { listOf(it.resolve("updatecheck.exe"), it.resolve("bin").resolve("updatecheck.exe")) }
+            .firstOrNull { Files.isRegularFile(it) }
+    }
+
+    /**
+     * Applies the update and restarts. Returns false when the updater is not where it
+     * should be, and the caller then just closes: Windows will pick the new version up on
+     * its own, only later.
+     */
+    fun restartToUpdate(): Boolean = runCatching {
+        val updater = updater() ?: return false
+        ProcessBuilder(updater.toString())
+            .directory(updater.parent.toFile())
+            .start()
+        true
+    }.getOrDefault(false)
 
     /**
      * Compares dotted versions a segment at a time. A segment that is not a number sorts
