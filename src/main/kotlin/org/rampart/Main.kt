@@ -46,6 +46,14 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.loadSvgPainter
 import androidx.compose.ui.res.useResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -325,6 +333,8 @@ private fun Reader(
     var sending by remember { mutableStateOf(false) }
     var sendError by remember { mutableStateOf<String?>(null) }
     var update by remember { mutableStateOf<String?>(null) }
+    var query by remember { mutableStateOf("") }
+    var showingResults by remember { mutableStateOf(false) }
     var mailboxes by remember { mutableStateOf<Map<String, List<Mailbox>>>(emptyMap()) }
     var here by remember { mutableStateOf<Pair<String, Mailbox>?>(null) }
     var emails by remember { mutableStateOf<List<Summary>>(emptyList()) }
@@ -360,13 +370,23 @@ private fun Reader(
         }
         loading = false
     }
+    suspend fun reload() {
+        val (key, mailbox) = here ?: return
+        loading = true
+        emails = io {
+            if (showingResults && query.isNotBlank()) session(key).jmap.search(query, mailbox.id)
+            else session(key).jmap.emails(mailbox.id)
+        } ?: emptyList()
+        loading = false
+    }
+
     LaunchedEffect(here) {
-        val (key, mailbox) = here ?: return@LaunchedEffect
+        here ?: return@LaunchedEffect
         selected = null
         body = null
-        loading = true
-        emails = io { session(key).jmap.emails(mailbox.id) } ?: emptyList()
-        loading = false
+        query = ""
+        showingResults = false
+        reload()
     }
     LaunchedEffect(selected) {
         val message = selected ?: return@LaunchedEffect
@@ -377,6 +397,29 @@ private fun Reader(
             io { session(key).jmap.markSeen(message.id) }
             emails = emails.map { if (it.id == message.id) it.copy(seen = true) else it }
         }
+    }
+
+    // What can be done to the open message depends on which folders this account has:
+    // a server with no Archive folder should not offer an Archive button that fails.
+    val actions = run {
+        val key = here?.first
+        val message = selected
+        if (key == null || message == null) return@run MessageActions()
+        val boxes = mailboxes[key].orEmpty()
+        fun moveTo(role: String): (() -> Unit)? {
+            val target = boxes.firstOrNull { it.role == role } ?: return null
+            return {
+                scope.launch {
+                    if (io { session(key).jmap.move(listOf(message.id), target.id) } != null) {
+                        emails = emails.filterNot { it.id == message.id }
+                        selected = null
+                        body = null
+                    }
+                }
+                Unit
+            }
+        }
+        MessageActions(archive = moveTo("archive"), trash = moveTo("trash"), junk = moveTo("junk"))
     }
 
     val composer = composing
@@ -455,7 +498,25 @@ private fun Reader(
                 },
             )
             VerticalDivider()
-            MessageList(emails, selected, loading) { selected = it }
+            MessageList(
+                emails = emails,
+                selected = selected,
+                loading = loading,
+                query = query,
+                onQueryChange = { query = it },
+                onSearch = {
+                    if (query.isBlank()) {
+                        showingResults = false
+                        scope.launch { reload() }
+                    } else {
+                        showingResults = true
+                        selected = null
+                        body = null
+                        scope.launch { reload() }
+                    }
+                },
+                onSelect = { selected = it },
+            )
             VerticalDivider()
             Message(
                 summary = selected,
@@ -467,6 +528,7 @@ private fun Reader(
                     composing = replyTo(message, body, from)
                 },
                 onLink = { confirm = it },
+                actions = actions,
             )
         }
     }
@@ -566,13 +628,54 @@ internal fun Sidebar(
 }
 
 @Composable
-internal fun MessageList(emails: List<Summary>, selected: Summary?, loading: Boolean, onSelect: (Summary) -> Unit) {
-    Box(Modifier.width(320.dp).fillMaxHeight()) {
-        if (loading) {
-            CircularProgressIndicator(Modifier.align(Alignment.Center))
-            return@Box
-        }
-        LazyColumn(Modifier.fillMaxSize()) {
+internal fun MessageList(
+    emails: List<Summary>,
+    selected: Summary?,
+    loading: Boolean,
+    query: String = "",
+    onQueryChange: (String) -> Unit = {},
+    onSearch: () -> Unit = {},
+    onSelect: (Summary) -> Unit,
+) {
+    Column(Modifier.width(320.dp).fillMaxHeight()) {
+        OutlinedTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            placeholder = { Text("Search") },
+            singleLine = true,
+            trailingIcon = {
+                if (query.isNotEmpty()) {
+                    TextButton(onClick = { onQueryChange(""); onSearch() }) { Text("Clear") }
+                }
+            },
+            keyboardActions = KeyboardActions(onSearch = { onSearch() }),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            modifier = Modifier.fillMaxWidth().padding(8.dp).onPreviewKeyEvent {
+                // Enter searches and Escape abandons the search, which is what every mail
+                // client does and what fingers expect before they read any button.
+                when {
+                    it.type != KeyEventType.KeyDown -> false
+                    it.key == Key.Enter -> { onSearch(); true }
+                    it.key == Key.Escape -> { onQueryChange(""); onSearch(); true }
+                    else -> false
+                }
+            },
+        )
+        HorizontalDivider()
+        Box(Modifier.fillMaxSize()) {
+            if (loading) {
+                CircularProgressIndicator(Modifier.align(Alignment.Center))
+                return@Box
+            }
+            if (emails.isEmpty()) {
+                Text(
+                    if (query.isBlank()) "Nothing here." else "No messages match that.",
+                    color = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+                return@Box
+            }
+            LazyColumn(Modifier.fillMaxSize()) {
             items(emails, key = { it.id }) { message ->
                 Column(
                     Modifier.fillMaxWidth()
@@ -613,11 +716,25 @@ internal fun MessageList(emails: List<Summary>, selected: Summary?, loading: Boo
                 HorizontalDivider()
             }
         }
+        }
     }
 }
 
+/** The buttons the open message offers. A null one is not offered at all. */
+internal data class MessageActions(
+    val archive: (() -> Unit)? = null,
+    val trash: (() -> Unit)? = null,
+    val junk: (() -> Unit)? = null,
+)
+
 @Composable
-internal fun Message(summary: Summary?, body: Body?, onReply: () -> Unit = {}, onLink: (String) -> Unit) {
+internal fun Message(
+    summary: Summary?,
+    body: Body?,
+    onReply: () -> Unit = {},
+    actions: MessageActions = MessageActions(),
+    onLink: (String) -> Unit,
+) {
     val linkColor = MaterialTheme.colorScheme.primary
     val quoteColor = MaterialTheme.colorScheme.outline
     val rendered = remember(body, linkColor) {
@@ -638,6 +755,9 @@ internal fun Message(summary: Summary?, body: Body?, onReply: () -> Unit = {}, o
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
             Text(summary.subject, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
             TextButton(onClick = onReply, enabled = body != null) { Text("Reply") }
+            actions.archive?.let { TextButton(onClick = it) { Text("Archive") } }
+            actions.junk?.let { TextButton(onClick = it) { Text("Spam") } }
+            actions.trash?.let { TextButton(onClick = it) { Text("Delete") } }
         }
         Text(
             "${summary.from}    ${summary.receivedAt.asLocalTime()}",
