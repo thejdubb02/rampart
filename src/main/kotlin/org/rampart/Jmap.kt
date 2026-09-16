@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -134,23 +135,11 @@ class Jmap private constructor(
                 // A back reference, so the ids never make the round trip through us.
                 putJsonObject("#ids") { put("resultOf", "q"); put("name", "Email/query"); put("path", "/ids") }
                 putJsonArray("properties") {
-                    listOf("id", "from", "subject", "receivedAt", "preview", "keywords").forEach { add(it) }
+                    emailGetProperties.forEach { add(it) }
                 }
             },
         )
-        return responses[1].list().map {
-            val o = it.jsonObject
-            Summary(
-                id = o["id"].require("id"),
-                from = o["from"]?.jsonArray?.firstOrNull()?.jsonObject?.let { a ->
-                    a["name"]?.str() ?: a["email"]?.str()
-                } ?: "(no sender)",
-                subject = o["subject"]?.str()?.ifBlank { null } ?: "(no subject)",
-                receivedAt = o["receivedAt"]?.str() ?: "",
-                preview = o["preview"]?.str()?.trim() ?: "",
-                seen = o["keywords"]?.jsonObject?.containsKey("\$seen") == true,
-            )
-        }
+        return responses[1].list().map { jsonToSummary(it.jsonObject) }
     }
 
     fun body(id: String): Body {
@@ -174,7 +163,7 @@ class Jmap private constructor(
     }
 
     fun markSeen(id: String) {
-        call(invoke("Email/set", "s") { putJsonObject("update") { putJsonObject(id) { put("keywords/\$seen", true) } } })
+        setKeyword(listOf(id), "\$seen", true)
     }
 
     private fun invoke(name: String, id: String, args: JsonObjectBuilder.() -> Unit): JsonArray =
@@ -211,7 +200,83 @@ class Jmap private constructor(
         }
         return responses.map { it.jsonArray }
     }
+
+    fun move(ids: List<String>, toMailboxId: String) {
+        if (ids.isEmpty()) return
+        call(invoke("Email/set", "m") {
+            putJsonObject("update") {
+                ids.forEach { id ->
+                    putJsonObject(id) {
+                        putJsonObject("mailboxIds") { put(toMailboxId, true) }
+                    }
+                }
+            }
+        })
+    }
+
+    fun setKeyword(ids: List<String>, keyword: String, on: Boolean) {
+        if (ids.isEmpty()) return
+        call(invoke("Email/set", "k") {
+            putJsonObject("update") {
+                ids.forEach { id ->
+                    putJsonObject(id) {
+                        put("keywords/$keyword", if (on) JsonPrimitive(true) else JsonNull)
+                    }
+                }
+            }
+        })
+    }
+
+    fun destroy(ids: List<String>) {
+        if (ids.isEmpty()) return
+        call(invoke("Email/set", "d") {
+            putJsonArray("destroy") { ids.forEach { add(it) } }
+        })
+    }
+
+    fun search(text: String, mailboxId: String? = null, limit: Int = 100): List<Summary> {
+        val responses = call(
+            invoke("Email/query", "q") {
+                val filter = buildJsonObject {
+                    if (mailboxId == null) {
+                        put("text", text)
+                    } else {
+                        put("operator", "AND")
+                        putJsonArray("conditions") {
+                            add(buildJsonObject { put("inMailbox", mailboxId) })
+                            add(buildJsonObject { put("text", text) })
+                        }
+                    }
+                }
+                put("filter", filter)
+                putJsonArray("sort") {
+                    add(buildJsonObject { put("property", "receivedAt"); put("isAscending", false) })
+                }
+                put("limit", limit)
+            },
+            invoke("Email/get", "g") {
+                putJsonObject("#ids") { put("resultOf", "q"); put("name", "Email/query"); put("path", "/ids") }
+                putJsonArray("properties") {
+                    emailGetProperties.forEach { add(it) }
+                }
+            },
+        )
+        return responses[1].list().map { jsonToSummary(it.jsonObject) }
+    }
 }
+
+private val emailGetProperties = listOf("id", "from", "subject", "receivedAt", "preview", "keywords")
+
+private fun jsonToSummary(o: JsonObject): Summary = Summary(
+    id = o["id"].require("id"),
+    from = o["from"]?.jsonArray?.firstOrNull()?.jsonObject?.let { a ->
+        a["name"]?.str() ?: a["email"]?.str()
+    } ?: "(no sender)",
+    subject = o["subject"]?.str()?.ifBlank { null } ?: "(no subject)",
+    receivedAt = o["receivedAt"]?.str() ?: "",
+    preview = o["preview"]?.str()?.trim() ?: "",
+    seen = o["keywords"]?.jsonObject?.containsKey("\$seen") == true,
+)
 
 private fun kotlinx.serialization.json.JsonElement.str(): String? = jsonPrimitive.contentOrNull
 
