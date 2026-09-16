@@ -1,5 +1,6 @@
 package org.rampart
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
@@ -50,6 +51,14 @@ class Screenshots {
 
     @Composable
     private fun Panes(dark: Boolean) {
+        Column(Modifier.fillMaxSize()) {
+        SearchBar(
+            query = "invoice",
+            focusRequester = androidx.compose.ui.focus.FocusRequester(),
+            onFocusChanged = {},
+            onQueryChange = {},
+            onSearch = {},
+        )
         Row(Modifier.fillMaxSize()) {
             Sidebar(
                 accounts = ACCOUNTS,
@@ -69,6 +78,7 @@ class Screenshots {
                 actions = MessageActions(archive = {}, junk = {}, trash = {}),
                 onLink = {},
             )
+        }
         }
     }
 }

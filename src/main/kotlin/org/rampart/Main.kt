@@ -50,6 +50,10 @@ import androidx.compose.foundation.focusable
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.foundation.border
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.loadSvgPainter
@@ -605,7 +609,7 @@ internal fun Sidebar(
         Button(
             onClick = onWrite,
             shape = MaterialTheme.shapes.medium,
-            modifier = Modifier.fillMaxWidth().height(38.dp),
+            modifier = Modifier.fillMaxWidth().height(40.dp),
         ) { Text("Write", style = MaterialTheme.typography.labelLarge) }
 
         Spacer(Modifier.height(14.dp))
@@ -720,7 +724,7 @@ private fun FolderRow(name: String, unread: Int, selected: Boolean, onClick: () 
 }
 
 @Composable
-private fun SearchBar(
+internal fun SearchBar(
     query: String,
     focusRequester: FocusRequester,
     onFocusChanged: (Boolean) -> Unit,
@@ -733,34 +737,55 @@ private fun SearchBar(
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = onQueryChange,
-            placeholder = { Text("Search all mail", style = MaterialTheme.typography.bodyMedium) },
-            singleLine = true,
-            shape = MaterialTheme.shapes.small,
-            textStyle = MaterialTheme.typography.bodyMedium,
-            trailingIcon = {
-                if (query.isNotEmpty()) {
-                    TextButton(onClick = { onQueryChange(""); onSearch() }) {
-                        Text("Clear", style = MaterialTheme.typography.bodySmall)
-                    }
+        // Built rather than borrowed: Material's text field has a minimum height of its
+        // own and forcing it shorter clips the text inside it, which is what a 38dp
+        // OutlinedTextField did here.
+        Row(
+            Modifier.width(520.dp).height(34.dp)
+                .clip(MaterialTheme.shapes.small)
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
+                .padding(start = 11.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.weight(1f)) {
+                if (query.isEmpty()) {
+                    Text(
+                        "Search all mail",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
                 }
-            },
-            modifier = Modifier.width(520.dp).height(38.dp)
-                .focusRequester(focusRequester)
-                .onFocusChanged { onFocusChanged(it.isFocused) }
-                .onPreviewKeyEvent {
-                // Enter searches and Escape abandons it, which is what fingers do before
-                // they read any button.
-                when {
-                    it.type != KeyEventType.KeyDown -> false
-                    it.key == Key.Enter -> { onSearch(); true }
-                    it.key == Key.Escape -> { onQueryChange(""); onSearch(); true }
-                    else -> false
-                }
-            },
-        )
+                BasicTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyMedium
+                        .copy(color = MaterialTheme.colorScheme.onSurface),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    modifier = Modifier.fillMaxWidth()
+                        .focusRequester(focusRequester)
+                        .onFocusChanged { onFocusChanged(it.isFocused) }
+                        .onPreviewKeyEvent {
+                            // Enter searches and Escape abandons it, which is what fingers
+                            // do before they read any button.
+                            when {
+                                it.type != KeyEventType.KeyDown -> false
+                                it.key == Key.Enter -> { onSearch(); true }
+                                it.key == Key.Escape -> { onQueryChange(""); onSearch(); true }
+                                else -> false
+                            }
+                        },
+                )
+            }
+            if (query.isNotEmpty()) {
+                TextButton(
+                    onClick = { onQueryChange(""); onSearch() },
+                    contentPadding = PaddingValues(horizontal = 8.dp),
+                    modifier = Modifier.height(26.dp),
+                ) { Text("Clear", style = MaterialTheme.typography.bodySmall) }
+            }
+        }
     }
 }
 

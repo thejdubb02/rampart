@@ -14,6 +14,7 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -21,6 +22,8 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.nio.file.Files
+import java.nio.file.Path
 import java.time.Duration
 import java.util.Base64
 
@@ -55,6 +58,8 @@ data class Summary(
 /** An address this account is allowed to send as. */
 data class Identity(val id: String, val name: String, val email: String)
 
+data class Attachment(val blobId: String, val name: String, val type: String, val size: Long)
+
 /**
  * Only ever one of these is drawn, and html wins when both are present. The two header
  * lists come along because a reply needs them: without them the answer starts a new
@@ -71,6 +76,7 @@ class Jmap private constructor(
     private val credential: String,
     private val apiUrl: String,
     val accountId: String,
+    private val downloadUrl: String,
 ) {
     companion object {
         fun connect(server: String, user: String, password: String): Jmap {
@@ -90,7 +96,10 @@ class Jmap private constructor(
             val session = json.parseToJsonElement(response.body()).jsonObject
             val account = session["primaryAccounts"]?.jsonObject?.get(MAIL)?.str()
                 ?: throw JmapError("This login has no mail account on that server.")
-            return Jmap(credential, session["apiUrl"].require("apiUrl"), account)
+            // Blobs are fetched from this template later. It has to be kept from the
+            // session; nothing else in the protocol names the download endpoint.
+            val downloadUrl = (session["downloadUrl"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+            return Jmap(credential, session["apiUrl"].require("apiUrl"), account, downloadUrl)
         }
 
         /** Accepts a bare host, a base URL, a /jmap/ URL, or the well-known URL itself. */
@@ -177,6 +186,66 @@ class Jmap private constructor(
             ?.ifBlank { null }
         fun ids(field: String) = email[field]?.jsonArray?.mapNotNull { it.str() }.orEmpty()
         return Body(join("htmlBody"), join("textBody"), ids("messageId"), ids("references"))
+    }
+
+    fun attachments(emailId: String): List<Attachment> {
+        val email = call(
+            invoke("Email/get", "a") {
+                putJsonArray("ids") { add(emailId) }
+                putJsonArray("properties") { add("attachments") }
+            },
+        )[0].list().firstOrNull()?.jsonObject
+            ?: throw JmapError("That message is not on the server any more.")
+
+        val parts = email["attachments"] as? JsonArray ?: return emptyList()
+        return parts.mapNotNull { el ->
+            val o = el.jsonObject
+            // A part with no blob cannot be fetched; listing it would offer a save that
+            // always fails.
+            val blobId = (o["blobId"] as? JsonPrimitive)?.contentOrNull?.ifBlank { null }
+                ?: return@mapNotNull null
+            val type = (o["type"] as? JsonPrimitive)?.contentOrNull?.ifBlank { null }
+                ?: "application/octet-stream"
+            val given = (o["name"] as? JsonPrimitive)?.contentOrNull?.ifBlank { null }
+            val name = given ?: nameFromType(type)
+            val size = (o["size"] as? JsonPrimitive)?.longOrNull ?: 0L
+            Attachment(blobId = blobId, name = name, type = type, size = size)
+        }
+    }
+
+    /**
+     * Streams the blob into [into]. The body is never held in memory: a mail
+     * attachment can be hundreds of megabytes.
+     */
+    fun download(attachment: Attachment, into: Path): Path {
+        if (downloadUrl.isBlank()) {
+            throw JmapError("This server did not say how to download attachments.")
+        }
+        val url = downloadUrl
+            .replace("{accountId}", pct(accountId))
+            .replace("{blobId}", pct(attachment.blobId))
+            .replace("{type}", pct(attachment.type.ifBlank { "application/octet-stream" }))
+            .replace("{name}", pct(attachment.name.ifBlank { "attachment" }))
+        val dest = uniqueIn(into, attachment.name)
+        val uri = try {
+            URI.create(url)
+        } catch (_: IllegalArgumentException) {
+            throw JmapError("The server gave a download address Rampart could not use.")
+        }
+        val response = http.send(
+            HttpRequest.newBuilder(uri)
+                .header("Authorization", credential)
+                // A large file on a slow link will not finish in the JSON round-trip timeout.
+                .timeout(Duration.ofMinutes(10))
+                .GET()
+                .build(),
+            HttpResponse.BodyHandlers.ofFile(dest),
+        )
+        if (response.statusCode() != 200) {
+            Files.deleteIfExists(dest)
+            throw JmapError("The server answered HTTP ${response.statusCode()} instead of the file.")
+        }
+        return dest
     }
 
     fun identities(): List<Identity> =
@@ -386,3 +455,28 @@ private fun kotlinx.serialization.json.JsonElement?.require(name: String): Strin
 
 private fun JsonArray.list(): List<kotlinx.serialization.json.JsonElement> =
     this[1].jsonObject["list"]?.jsonArray ?: emptyList()
+
+/** The subtype is only a hint, and the sender chose it, so it is reduced to letters and digits. */
+private fun nameFromType(type: String): String {
+    val subtype = type.substringAfterLast('/')
+        .substringBefore(';')
+        .filter { it.isLetterOrDigit() }
+    return if (subtype.isEmpty()) "attachment" else "attachment.$subtype"
+}
+
+/** RFC 3986 unreserved characters stay as themselves; everything else is a path/query value. */
+private fun pct(value: String): String = buildString(value.length * 3) {
+    for (byte in value.encodeToByteArray()) {
+        val u = byte.toInt() and 0xFF
+        val unreserved = u in 'A'.code..'Z'.code ||
+            u in 'a'.code..'z'.code ||
+            u in '0'.code..'9'.code ||
+            u == '-'.code || u == '.'.code || u == '_'.code || u == '~'.code
+        if (unreserved) append(u.toChar())
+        else {
+            append('%')
+            append("0123456789ABCDEF"[u shr 4])
+            append("0123456789ABCDEF"[u and 0xF])
+        }
+    }
+}
