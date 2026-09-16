@@ -46,6 +46,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.loadSvgPainter
@@ -319,6 +323,9 @@ private fun Reader(
     var update by remember { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf("") }
     var showingResults by remember { mutableStateOf(false) }
+    var searchFocused by remember { mutableStateOf(false) }
+    val searchField = remember { FocusRequester() }
+    val keyboard = remember { FocusRequester() }
     var mailboxes by remember { mutableStateOf<Map<String, List<Mailbox>>>(emptyMap()) }
     var here by remember { mutableStateOf<Pair<String, Mailbox>?>(null) }
     var emails by remember { mutableStateOf<List<Summary>>(emptyList()) }
@@ -406,6 +413,39 @@ private fun Reader(
         MessageActions(archive = moveTo("archive"), trash = moveTo("trash"), junk = moveTo("junk"))
     }
 
+    /**
+     * The shortcuts, and the one rule that makes them safe: a bare letter does nothing
+     * while the search box has focus, or a reply would become a search for "r".
+     */
+    fun shortcut(event: androidx.compose.ui.input.key.KeyEvent): Boolean {
+        if (event.type != KeyEventType.KeyDown) return false
+        if (event.key == Key.Slash && !searchFocused) {
+            searchField.requestFocus()
+            return true
+        }
+        if (searchFocused) return false
+        val at = emails.indexOfFirst { it.id == selected?.id }
+        fun step(delta: Int): Boolean {
+            if (emails.isEmpty()) return true
+            selected = emails[nextIndex(at, emails.size, delta)]
+            return true
+        }
+        return when (event.key) {
+            Key.J, Key.DirectionDown -> step(1)
+            Key.K, Key.DirectionUp -> step(-1)
+            Key.C -> { sendError = null; composing = Draft(from = identities[here?.first].orEmpty().firstOrNull()?.email.orEmpty()); true }
+            Key.R -> { selected?.let { m -> composing = replyTo(m, body, identities[here?.first].orEmpty().firstOrNull()?.email.orEmpty()) }; true }
+            Key.F -> { selected?.let { m -> composing = forwardOf(m, body, identities[here?.first].orEmpty().firstOrNull()?.email.orEmpty()) }; true }
+            Key.E -> { actions.archive?.invoke(); true }
+            Key.Delete, Key.Backspace -> { actions.trash?.invoke(); true }
+            Key.Escape -> {
+                if (query.isNotEmpty()) { query = ""; showingResults = false; scope.launch { reload() } }
+                true
+            }
+            else -> false
+        }
+    }
+
     val composer = composing
     if (composer != null) {
         Composer(
@@ -445,7 +485,13 @@ private fun Reader(
         return
     }
 
-    Column(Modifier.fillMaxSize()) {
+    LaunchedEffect(Unit) { runCatching { keyboard.requestFocus() } }
+    Column(
+        Modifier.fillMaxSize()
+            .focusRequester(keyboard)
+            .focusable()
+            .onPreviewKeyEvent(::shortcut),
+    ) {
         update?.let { version ->
             Row(
                 Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = 14.dp, vertical = 8.dp),
@@ -468,6 +514,8 @@ private fun Reader(
         }
         SearchBar(
             query = query,
+            focusRequester = searchField,
+            onFocusChanged = { searchFocused = it },
             onQueryChange = { query = it },
             onSearch = {
                 showingResults = query.isNotBlank()
@@ -672,7 +720,13 @@ private fun FolderRow(name: String, unread: Int, selected: Boolean, onClick: () 
 }
 
 @Composable
-private fun SearchBar(query: String, onQueryChange: (String) -> Unit, onSearch: () -> Unit) {
+private fun SearchBar(
+    query: String,
+    focusRequester: FocusRequester,
+    onFocusChanged: (Boolean) -> Unit,
+    onQueryChange: (String) -> Unit,
+    onSearch: () -> Unit,
+) {
     Row(
         Modifier.fillMaxWidth().height(52.dp)
             .background(MaterialTheme.colorScheme.surface)
@@ -693,7 +747,10 @@ private fun SearchBar(query: String, onQueryChange: (String) -> Unit, onSearch: 
                     }
                 }
             },
-            modifier = Modifier.width(520.dp).height(38.dp).onPreviewKeyEvent {
+            modifier = Modifier.width(520.dp).height(38.dp)
+                .focusRequester(focusRequester)
+                .onFocusChanged { onFocusChanged(it.isFocused) }
+                .onPreviewKeyEvent {
                 // Enter searches and Escape abandons it, which is what fingers do before
                 // they read any button.
                 when {
@@ -938,6 +995,17 @@ internal fun Message(
             }
         }
     }
+}
+
+/**
+ * Where j and k land. Stepping off either end stays put rather than wrapping: a keystroke
+ * that silently jumps from the newest message to the oldest is a keystroke people stop
+ * trusting.
+ */
+internal fun nextIndex(current: Int, size: Int, delta: Int): Int {
+    if (size == 0) return 0
+    if (current < 0) return if (delta > 0) 0 else size - 1
+    return (current + delta).coerceIn(0, size - 1)
 }
 
 internal fun String.asLocalTime(): String =
