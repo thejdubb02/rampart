@@ -335,6 +335,8 @@ private fun Reader(
     var emails by remember { mutableStateOf<List<Summary>>(emptyList()) }
     var selected by remember { mutableStateOf<Summary?>(null) }
     var body by remember { mutableStateOf<Body?>(null) }
+    var attachments by remember { mutableStateOf<List<Attachment>>(emptyList()) }
+    var saved by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf<String?>(null) }
@@ -387,7 +389,10 @@ private fun Reader(
         val message = selected ?: return@LaunchedEffect
         val key = here?.first ?: return@LaunchedEffect
         body = null
+        attachments = emptyList()
+        saved = null
         body = io { session(key).jmap.body(message.id) }
+        attachments = io { session(key).jmap.attachments(message.id) } ?: emptyList()
         if (!message.seen) {
             io { session(key).jmap.markSeen(message.id) }
             emails = emails.map { if (it.id == message.id) it.copy(seen = true) else it }
@@ -571,6 +576,20 @@ private fun Reader(
                 },
                 onLink = { confirm = it },
                 actions = actions,
+                attachments = attachments,
+                savedTo = saved,
+                onDownload = { attachment ->
+                    val key = here?.first
+                    if (key != null) {
+                        scope.launch {
+                            val landed = io {
+                                val folder = downloadsFolder()
+                                session(key).jmap.download(attachment, folder)
+                            }
+                            saved = landed?.toString()
+                        }
+                    }
+                },
             )
         }
     }
@@ -911,6 +930,9 @@ internal fun Message(
     onReply: () -> Unit = {},
     onForward: () -> Unit = {},
     actions: MessageActions = MessageActions(),
+    attachments: List<Attachment> = emptyList(),
+    savedTo: String? = null,
+    onDownload: (Attachment) -> Unit = {},
     onLink: (String) -> Unit,
 ) {
     val linkColor = MaterialTheme.colorScheme.primary
@@ -1016,6 +1038,43 @@ internal fun Message(
                 }
                 Spacer(Modifier.height(20.dp))
                 SelectionContainer { Text(rendered.text, style = MaterialTheme.typography.bodyLarge) }
+
+                if (attachments.isNotEmpty()) {
+                    Spacer(Modifier.height(24.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Spacer(Modifier.height(14.dp))
+                    attachments.forEach { attachment ->
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    // The name a sender chose is shown as the name it will be
+                                    // saved under, so the two can never disagree.
+                                    safeFileName(attachment.name),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    humanSize(attachment.size),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.outline,
+                                )
+                            }
+                            TextButton(onClick = { onDownload(attachment) }) { Text("Save") }
+                        }
+                    }
+                    if (savedTo != null) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Saved to $savedTo",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
+                    }
+                }
                 Spacer(Modifier.height(40.dp))
             }
         }
@@ -1031,6 +1090,19 @@ internal fun nextIndex(current: Int, size: Int, delta: Int): Int {
     if (size == 0) return 0
     if (current < 0) return if (delta > 0) 0 else size - 1
     return (current + delta).coerceIn(0, size - 1)
+}
+
+/**
+ * Where a saved attachment goes. The platform Downloads folder when there is one, the home
+ * directory otherwise, and it is created rather than assumed: a save that fails because a
+ * folder is missing is a bad way to learn the folder was missing.
+ */
+internal fun downloadsFolder(): java.nio.file.Path {
+    val home = java.nio.file.Path.of(System.getProperty("user.home"))
+    val downloads = home.resolve("Downloads")
+    val target = if (java.nio.file.Files.isDirectory(downloads)) downloads else home
+    java.nio.file.Files.createDirectories(target)
+    return target
 }
 
 internal fun String.asLocalTime(): String =

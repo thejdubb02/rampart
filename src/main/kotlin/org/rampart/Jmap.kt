@@ -464,7 +464,7 @@ private fun nameFromType(type: String): String {
     return if (subtype.isEmpty()) "attachment" else "attachment.$subtype"
 }
 
-/** RFC 3986 unreserved characters stay as themselves; everything else is a path/query value. */
+// Substituting a raw name would let a slash or question mark rewrite the URL we hit.
 private fun pct(value: String): String = buildString(value.length * 3) {
     for (byte in value.encodeToByteArray()) {
         val u = byte.toInt() and 0xFF

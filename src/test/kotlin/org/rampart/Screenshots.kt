@@ -76,6 +76,10 @@ class Screenshots {
                 summary = MESSAGES[1],
                 body = Body(SAMPLE_HTML, null),
                 actions = MessageActions(archive = {}, junk = {}, trash = {}),
+                attachments = listOf(
+                    Attachment("b1", "Revised quote September.pdf", "application/pdf", 214_512),
+                    Attachment("b2", "rear-elevation.jpg", "image/jpeg", 1_882_100),
+                ),
                 onLink = {},
             )
         }
