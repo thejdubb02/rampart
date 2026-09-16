@@ -47,27 +47,41 @@ Android hands every mail client a WebView. The JVM does not. The options:
 | JavaFX WebView (WebKit) | Smaller, ships with some JDKs, an older engine, and still a browser to keep patched. |
 | Sanitise, then render in Compose | No script engine in the process at all, so the entire class of HTML mail exploits disappears. Newsletters look wrong. |
 
-Leaning towards the third for v1: sanitise to a restricted subset and draw it
-ourselves, no JavaScript anywhere, no remote content unless asked. A self-hoster's
-mail is mostly text and the failure mode is an ugly marketing email, not a breach.
-Revisit if it turns out to be unusable. **This decision is still open and it is the
-one that is hardest to change later**, so make it before writing the reader.
+**Decided: the third.** Sanitise to a restricted subset and draw it ourselves. There
+is no script engine in the process, so the whole class of HTML mail exploit does not
+apply to us. The cost is that a marketing email loses its layout, which for a
+self-hoster's mail is a fair trade: the failure mode is an ugly newsletter, not a
+breach. Revisit only if it turns out to be unusable.
 
-Non-negotiable either way: no JavaScript, remote images blocked by default and
-allowed per sender, `cid:` images served from the local blob, every link click
-confirmed, and the renderer treated as hostile input at all times.
+The parser is jsoup, cleaned through a `Safelist` that drops every tag and attribute
+we did not name, restricts `a[href]` to ftp/http/https/mailto (which is what kills
+`javascript:`), and removes `script`, `style` and `noscript` outright. Parsing hostile
+HTML is not something to hand roll. The cleaned tree is then walked once into a
+Compose `AnnotatedString`. `src/test/kotlin/org/rampart/HtmlTest.kt` is the check that
+has to bite: script stripped, `javascript:` not clickable, images counted and never
+drawn.
 
-## The engine is jmap-mua, on probation
+Non-negotiable: no JavaScript, remote images blocked by default and allowed per
+sender, `cid:` images served from the local blob, every link click confirmed, and the
+renderer treated as hostile input at all times.
 
-`rs.ltt:jmap-mua` (Apache 2.0, Java 8) is a headless mail client: protocol, sync,
-caching, threading, everything except storage and UI. It is the only serious Java
-JMAP client library, and Java 8 bytecode runs anywhere we want to ship.
+**Not built yet, named here so it is not mistaken for done:** the per-sender allow
+list, and `cid:` images. The first reader blocks every image without exception and
+says how many it blocked. That is the safe side of the rule, not the whole rule.
 
-It is also a side project on a slow cadence: 0.9.0 in April 2025 after 0.8.18 in
-December 2023, and upstream still describes the protocol library as work in
-progress. Before any UI is written, check which RFC 8621 methods it actually
-implements against what we need: `EmailSubmission`, `Identity`, `VacationResponse`,
-`SieveScript`, push subscriptions and WebSocket. Budget a fork.
+## The reader speaks JMAP directly, and jmap-mua is off the path
+
+`rs.ltt:jmap-mua` (Apache 2.0, Java 8) was the planned engine: protocol, sync,
+caching and threading in one library. The reader needed none of it. Listing mailboxes,
+listing a mailbox's messages and fetching one body is three JMAP method calls, and
+`Email/query` feeds `Email/get` through a back reference so the ids never make the
+round trip through us. `Jmap.kt` is that and nothing else, on the JDK's own HTTP
+client.
+
+That leaves no dependency to audit, no fork to budget and no library version to track.
+Revisit when we want the part jmap-mua actually provides: an offline cache and
+change-driven sync. Writing that ourselves is the point at which the library would
+earn its keep.
 
 ## Settings and admin screens are generated, not written
 

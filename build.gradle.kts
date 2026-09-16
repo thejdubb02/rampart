@@ -13,6 +13,18 @@ kotlin {
 dependencies {
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
+
+    // The JMAP wire format, read as a tree rather than as generated classes: Stalwart's
+    // replies vary by version and an unknown field should never stop a message rendering.
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
+    // Parses and sanitises message HTML. Hostile input, so this is not hand rolled.
+    implementation("org.jsoup:jsoup:1.21.1")
+
+    testImplementation(kotlin("test"))
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
 
 compose.desktop {

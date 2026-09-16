@@ -17,8 +17,9 @@ eventually, so everything here is written to be read by strangers.
 - **Two credentials, never one.** The mail token and the admin token are separate
   and separately scoped. A renderer bug must not reach `x:Directory/set`.
 - **The HTML reader is hostile input.** No JavaScript, remote content blocked by
-  default, every link confirmed. The renderer choice is still open and is the
-  hardest decision to reverse.
+  default, every link confirmed. There is no browser engine in the process and there
+  is not going to be one: jsoup cleans the HTML, Compose draws it. Do not widen the
+  `Safelist` without a test in `HtmlTest.kt` showing what the new tag cannot do.
 - **No certificate pinning.** Self-hosters use Let's Encrypt, Tailscale and private
   CAs; pinning locks them out.
 - **Red is `#DB2D54`**, from Bulwark's logo.
