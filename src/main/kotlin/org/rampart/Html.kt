@@ -57,12 +57,12 @@ private val STYLES = mapOf(
 
 private val LINKS = Regex("""(https?://|mailto:)[^\s<>"'`)\]}]+""")
 
-fun renderHtml(html: String, linkColor: Color, onLink: (String) -> Unit): Rendered {
+fun renderHtml(html: String, linkColor: Color, quoteColor: Color, onLink: (String) -> Unit): Rendered {
     val doc = Jsoup.parse(html)
     doc.select("script, style, noscript, head, title").remove()
     val blocked = doc.select("img").size
     val clean = Cleaner(SAFELIST).clean(doc)
-    val walker = Walker(linkColor, onLink)
+    val walker = Walker(linkColor, quoteColor, onLink)
     clean.body().childNodes().forEach { walker.node(it) }
     return Rendered(walker.build(), blocked)
 }
@@ -92,7 +92,11 @@ private fun link(url: String, color: Color, onLink: (String) -> Unit) = LinkAnno
  * Walks the cleaned tree once, appending as it goes. Blank lines are owed rather than written,
  * so a stack of empty `div`s collapses instead of leaving a page of whitespace.
  */
-private class Walker(private val linkColor: Color, private val onLink: (String) -> Unit) {
+private class Walker(
+    private val linkColor: Color,
+    private val quoteColor: Color,
+    private val onLink: (String) -> Unit,
+) {
     private val out = AnnotatedString.Builder()
     private var started = false
     private var owedBreaks = 0
@@ -120,6 +124,7 @@ private class Walker(private val linkColor: Color, private val onLink: (String) 
         if (tag == "li") write("- ")
 
         var pops = 0
+        if (tag == "blockquote") { out.pushStyle(SpanStyle(color = quoteColor)); pops++ }
         STYLES[tag]?.let { out.pushStyle(it); pops++ }
         if (tag == "a") {
             val href = e.attr("abs:href").ifBlank { e.attr("href") }.trim()

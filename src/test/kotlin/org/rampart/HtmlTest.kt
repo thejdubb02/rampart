@@ -12,7 +12,7 @@ import kotlin.test.assertTrue
 class HtmlTest {
     private fun render(html: String): Rendered {
         val clicked = mutableListOf<String>()
-        return renderHtml(html, Color.Blue) { clicked += it }
+        return renderHtml(html, Color.Blue, Color.Gray) { clicked += it }
     }
 
     private fun links(r: Rendered) = r.text.getLinkAnnotations(0, r.text.length)

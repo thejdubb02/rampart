@@ -1,6 +1,7 @@
 package org.rampart
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -37,8 +39,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.loadSvgPainter
+import androidx.compose.ui.res.useResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
@@ -54,11 +60,24 @@ import java.time.format.DateTimeFormatter
 /** Bulwark's red. See docs/architecture.md. */
 private val RampartRed = Color(0xFFDB2D54)
 
+/**
+ * Material's baseline light scheme is faintly purple, which on a red-primary app reads as a
+ * pink cast over everything. Mail is text on paper, so the neutrals are neutral.
+ */
+internal val RampartColors = lightColorScheme(
+    primary = RampartRed,
+    background = Color.White,
+    surface = Color.White,
+    surfaceVariant = Color(0xFFF1F1F4),
+    onSurfaceVariant = Color(0xFF1C1B1F),
+    outline = Color(0xFF6E6E78),
+)
+
 private val WHEN = DateTimeFormatter.ofPattern("d MMM  HH:mm").withZone(ZoneId.systemDefault())
 
 fun main() = application {
     Window(onCloseRequest = ::exitApplication, title = "Rampart") {
-        MaterialTheme(colorScheme = lightColorScheme(primary = RampartRed)) {
+        MaterialTheme(colorScheme = RampartColors) {
             Surface(Modifier.fillMaxSize()) {
                 var jmap by remember { mutableStateOf<Jmap?>(null) }
                 val session = jmap
@@ -69,7 +88,7 @@ fun main() = application {
 }
 
 @Composable
-private fun Connect(onConnected: (Jmap) -> Unit) {
+internal fun Connect(onConnected: (Jmap) -> Unit) {
     var server by remember { mutableStateOf("") }
     var user by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -82,6 +101,11 @@ private fun Connect(onConnected: (Jmap) -> Unit) {
         verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        Image(
+            painter = useResource("rampart-logo.svg") { loadSvgPainter(it, LocalDensity.current) },
+            contentDescription = null,
+            modifier = Modifier.size(72.dp),
+        )
         Text("Rampart", style = MaterialTheme.typography.headlineMedium, color = RampartRed)
         OutlinedTextField(server, { server = it }, label = { Text("Server") }, singleLine = true, modifier = Modifier.width(380.dp))
         OutlinedTextField(user, { user = it }, label = { Text("Email address") }, singleLine = true, modifier = Modifier.width(380.dp))
@@ -195,7 +219,7 @@ private fun Reader(jmap: Jmap) {
 }
 
 @Composable
-private fun MailboxList(mailboxes: List<Mailbox>, selected: Mailbox?, onSelect: (Mailbox) -> Unit) {
+internal fun MailboxList(mailboxes: List<Mailbox>, selected: Mailbox?, onSelect: (Mailbox) -> Unit) {
     LazyColumn(Modifier.width(200.dp).fillMaxHeight()) {
         items(mailboxes, key = { it.id }) { box ->
             val here = box.id == selected?.id
@@ -214,7 +238,7 @@ private fun MailboxList(mailboxes: List<Mailbox>, selected: Mailbox?, onSelect: 
 }
 
 @Composable
-private fun MessageList(emails: List<Summary>, selected: Summary?, loading: Boolean, onSelect: (Summary) -> Unit) {
+internal fun MessageList(emails: List<Summary>, selected: Summary?, loading: Boolean, onSelect: (Summary) -> Unit) {
     Box(Modifier.width(320.dp).fillMaxHeight()) {
         if (loading) {
             CircularProgressIndicator(Modifier.align(Alignment.Center))
@@ -232,6 +256,7 @@ private fun MessageList(emails: List<Summary>, selected: Summary?, loading: Bool
                         Text(
                             message.from,
                             maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                             fontWeight = if (message.seen) FontWeight.Normal else FontWeight.Bold,
                             modifier = Modifier.weight(1f, false),
                         )
@@ -244,12 +269,14 @@ private fun MessageList(emails: List<Summary>, selected: Summary?, loading: Bool
                     Text(
                         message.subject,
                         maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         fontWeight = if (message.seen) FontWeight.Normal else FontWeight.Bold,
                     )
                     if (message.preview.isNotBlank()) {
                         Text(
                             message.preview,
                             maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.outline,
                         )
@@ -262,12 +289,13 @@ private fun MessageList(emails: List<Summary>, selected: Summary?, loading: Bool
 }
 
 @Composable
-private fun Message(summary: Summary?, body: Body?, onLink: (String) -> Unit) {
+internal fun Message(summary: Summary?, body: Body?, onLink: (String) -> Unit) {
     val linkColor = MaterialTheme.colorScheme.primary
+    val quoteColor = MaterialTheme.colorScheme.outline
     val rendered = remember(body, linkColor) {
         body?.let {
             when {
-                it.html != null -> renderHtml(it.html, linkColor, onLink)
+                it.html != null -> renderHtml(it.html, linkColor, quoteColor, onLink)
                 it.text != null -> renderText(it.text, linkColor, onLink)
                 else -> null
             }
@@ -292,7 +320,8 @@ private fun Message(summary: Summary?, body: Body?, onLink: (String) -> Unit) {
         }
         if (rendered.blockedImages > 0) {
             Text(
-                "${rendered.blockedImages} image${if (rendered.blockedImages == 1) "" else "s"} were not loaded.",
+                if (rendered.blockedImages == 1) "1 image was not loaded."
+                else "${rendered.blockedImages} images were not loaded.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.outline,
                 modifier = Modifier.fillMaxWidth()
