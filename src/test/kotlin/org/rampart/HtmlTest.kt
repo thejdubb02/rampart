@@ -40,6 +40,14 @@ class HtmlTest {
     }
 
     @Test
+    fun `the space before a link is not part of the link`() {
+        val r = render("""<p>on our site at <a href="https://example.com/rates">example.com/rates</a>, yes</p>""")
+        assertEquals("on our site at example.com/rates, yes", r.text.text)
+        val link = links(r).single()
+        assertEquals("example.com/rates", r.text.text.substring(link.start, link.end))
+    }
+
+    @Test
     fun `remote images are counted and never drawn`() {
         val r = render("""<p>Hi</p><img src="https://tracker.example/pixel.gif"><img src="cid:logo">""")
         assertEquals(2, r.blockedImages)

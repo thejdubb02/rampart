@@ -19,9 +19,9 @@ import kotlin.test.Test
 class Screenshots {
     private val out = File("build/screenshots").apply { mkdirs() }
 
-    private fun shoot(name: String, width: Int, height: Int, content: @Composable () -> Unit) {
+    private fun shoot(name: String, width: Int, height: Int, dark: Boolean = false, content: @Composable () -> Unit) {
         val image = renderComposeScene(width, height) {
-            MaterialTheme(colorScheme = RampartColors) {
+            MaterialTheme(colorScheme = if (dark) RampartDarkColors else RampartColors) {
                 Surface(Modifier.fillMaxSize()) { content() }
             }
         }
@@ -30,15 +30,26 @@ class Screenshots {
 
     @Test
     fun screenshots() {
-        shoot("connect", 900, 680) { Connect(saved = SAVED) {} }
-        shoot("reader", 1400, 900) {
-            Row(Modifier.fillMaxSize()) {
-                MailboxList(MAILBOXES, MAILBOXES[0]) {}
-                VerticalDivider()
-                MessageList(MESSAGES, MESSAGES[1], loading = false) {}
-                VerticalDivider()
-                Message(MESSAGES[1], Body(SAMPLE_HTML, null)) {}
-            }
+        shoot("connect", 900, 700) { Connect(saved = SAVED) { _, _ -> } }
+        shoot("reader", 1400, 900) { Panes(dark = false) }
+        shoot("reader-dark", 1400, 900, dark = true) { Panes(dark = true) }
+    }
+
+    @Composable
+    private fun Panes(dark: Boolean) {
+        Row(Modifier.fillMaxSize()) {
+            Sidebar(
+                accounts = ACCOUNTS,
+                here = ACCOUNTS[0].key to MAILBOXES[0],
+                dark = dark,
+                onToggleDark = {},
+                onAddAccount = {},
+                onSelect = { _, _ -> },
+            )
+            VerticalDivider()
+            MessageList(MESSAGES, MESSAGES[1], loading = false) {}
+            VerticalDivider()
+            Message(MESSAGES[1], Body(SAMPLE_HTML, null)) {}
         }
     }
 }
@@ -55,6 +66,11 @@ private val MAILBOXES = listOf(
     Mailbox("4", "Junk", "junk", 12),
     Mailbox("5", "Sent", "sent", 0),
     Mailbox("6", "Trash", "trash", 0),
+)
+
+private val ACCOUNTS = listOf(
+    AccountMailboxes("work", "Work", MAILBOXES),
+    AccountMailboxes("personal", "Personal", MAILBOXES.take(3)),
 )
 
 private val MESSAGES = listOf(

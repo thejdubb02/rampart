@@ -123,6 +123,10 @@ private class Walker(
         if (gap > 0) breaks(gap)
         if (tag == "li") write("- ")
 
+        // A space owed from the previous text belongs outside whatever span opens here,
+        // or the underline on a link starts one character early.
+        flushSpace()
+
         var pops = 0
         if (tag == "blockquote") { out.pushStyle(SpanStyle(color = quoteColor)); pops++ }
         STYLES[tag]?.let { out.pushStyle(it); pops++ }
@@ -146,6 +150,13 @@ private class Walker(
         if (collapsed.startsWith(" ")) owedSpace = true
         write(collapsed.trim())
         if (collapsed.endsWith(" ")) owedSpace = true
+    }
+
+    private fun flushSpace() {
+        if (owedSpace && owedBreaks == 0 && started) {
+            out.append(' ')
+            owedSpace = false
+        }
     }
 
     private fun breaks(n: Int) {
