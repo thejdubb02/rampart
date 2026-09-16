@@ -21,6 +21,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -99,7 +100,16 @@ internal class Session(val account: SavedAccount, val jmap: Jmap) {
 internal data class AccountMailboxes(val key: String, val name: String, val mailboxes: List<Mailbox>)
 
 fun main() = application {
-    Window(onCloseRequest = ::exitApplication, title = "Rampart") {
+    val density = LocalDensity.current
+    val icon = remember(density) { useResource("rampart-icon.svg") { loadSvgPainter(it, density) } }
+    // Conveyor's launcher sets this. Showing it makes "did the update actually land" a
+    // question you can answer by looking at the window instead of guessing.
+    val version = System.getProperty("app.version")
+    Window(
+        onCloseRequest = ::exitApplication,
+        title = if (version.isNullOrBlank()) "Rampart" else "Rampart $version",
+        icon = icon,
+    ) {
         val followSystem = isSystemInDarkTheme()
         var dark by remember { mutableStateOf(Settings.dark() ?: followSystem) }
         MaterialTheme(colorScheme = if (dark) RampartDarkColors else RampartColors) {
@@ -114,6 +124,36 @@ fun main() = application {
 private fun App(dark: Boolean, onToggleDark: (Boolean) -> Unit) {
     var sessions by remember { mutableStateOf<List<Session>>(emptyList()) }
     var adding by remember { mutableStateOf(false) }
+    var restoring by remember { mutableStateOf(true) }
+
+    // Sign in again to whatever the operating system remembered. A password that no longer
+    // works is not an error worth a dialog: that account simply is not signed in, and the
+    // sign-in screen is already the answer.
+    LaunchedEffect(Unit) {
+        sessions = withContext(Dispatchers.IO) {
+            Accounts.read().mapNotNull { account ->
+                val password = Secrets.load(account) ?: return@mapNotNull null
+                runCatching { Session(account, Jmap.connect(account.server, account.email, password)) }.getOrNull()
+            }
+        }
+        restoring = false
+    }
+
+    if (restoring) {
+        Column(
+            Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Image(
+                painter = useResource("rampart-logo.svg") { loadSvgPainter(it, LocalDensity.current) },
+                contentDescription = null,
+                modifier = Modifier.size(64.dp),
+            )
+            CircularProgressIndicator()
+        }
+        return
+    }
 
     if (sessions.isEmpty() || adding) {
         Connect(
@@ -136,6 +176,7 @@ private fun App(dark: Boolean, onToggleDark: (Boolean) -> Unit) {
 @Composable
 internal fun Connect(
     saved: List<SavedAccount> = remember { Accounts.read() },
+    canRemember: Boolean = remember { Secrets.available() },
     onCancel: (() -> Unit)? = null,
     onConnected: (SavedAccount, Jmap) -> Unit,
 ) {
@@ -144,6 +185,7 @@ internal fun Connect(
     var password by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
+    var rememberPassword by remember { mutableStateOf(canRemember) }
     val scope = rememberCoroutineScope()
 
     Column(
@@ -202,6 +244,15 @@ internal fun Connect(
             visualTransformation = PasswordVisualTransformation(),
             modifier = Modifier.width(380.dp),
         )
+        if (canRemember) {
+            Row(
+                Modifier.width(380.dp).clickable { rememberPassword = !rememberPassword },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(rememberPassword, { rememberPassword = it })
+                Text("Remember this password", style = MaterialTheme.typography.bodyMedium)
+            }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (onCancel != null) TextButton(onClick = onCancel, enabled = !busy) { Text("Cancel") }
             Button(
@@ -215,6 +266,7 @@ internal fun Connect(
                             val account = SavedAccount(user.trim(), server.trim(), user.trim())
                             // Only after a sign-in that worked, so a typo is never saved.
                             runCatching { Accounts.remember(account) }
+                            if (rememberPassword) Secrets.store(account, password) else Secrets.forget(account)
                             onConnected(account, jmap)
                         } catch (e: Exception) {
                             error = e.message ?: e.toString()
@@ -227,7 +279,12 @@ internal fun Connect(
         }
         if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.width(380.dp))
         Text(
-            "The password is held in memory for this session only, and never written to disk.",
+            if (rememberPassword && canRemember) {
+                "The password goes to the operating system's own credential store, tied to this " +
+                    "Windows account. Rampart never writes it anywhere itself."
+            } else {
+                "The password is held in memory for this session only, and never written to disk."
+            },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.outline,
         )

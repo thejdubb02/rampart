@@ -30,7 +30,7 @@ class Screenshots {
 
     @Test
     fun screenshots() {
-        shoot("connect", 900, 700) { Connect(saved = SAVED) { _, _ -> } }
+        shoot("connect", 900, 760) { Connect(saved = SAVED, canRemember = true) { _, _ -> } }
         shoot("reader", 1400, 900) { Panes(dark = false) }
         shoot("reader-dark", 1400, 900, dark = true) { Panes(dark = true) }
     }

@@ -30,6 +30,9 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     // Parses and sanitises message HTML. Hostile input, so this is not hand rolled.
     implementation("org.jsoup:jsoup:1.21.1")
+    // Reaches Windows DPAPI, so a remembered password is encrypted by the operating
+    // system against the logged in user rather than by anything we wrote.
+    implementation("net.java.dev.jna:jna-platform:5.17.0")
 
     // Skiko ships a different native library per platform, so packaging for Windows from
     // Linux means naming all of them rather than relying on compose.desktop.currentOs.

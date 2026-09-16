@@ -62,3 +62,27 @@ class AccountsTest {
         assertEquals(2, Accounts.read(path).size)
     }
 }
+
+class JmapTest {
+    @Test
+    fun `a plain http server is refused rather than leaking the password`() {
+        val thrown = kotlin.runCatching { Jmap.connect("http://mail.example.org", "you@example.org", "hunter2") }
+        val error = thrown.exceptionOrNull()
+        assertTrue(error is JmapError, "expected a refusal, got: $error")
+        assertTrue(error.message!!.contains("https"), "the refusal should say what to do instead")
+    }
+}
+
+/**
+ * The property that matters is fail-closed: where the operating system offers nowhere safe
+ * to keep a password, Rampart keeps it nowhere at all rather than inventing a place.
+ */
+class SecretsTest {
+    @Test
+    fun `with no credential store, nothing is stored and nothing comes back`() {
+        if (Secrets.available()) return
+        val account = SavedAccount("Work", "mail.example.org", "you@example.org")
+        assertFalse(Secrets.store(account, "hunter2"))
+        assertEquals(null, Secrets.load(account))
+    }
+}

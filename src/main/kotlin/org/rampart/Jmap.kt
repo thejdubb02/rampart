@@ -81,7 +81,13 @@ class Jmap private constructor(
         /** Accepts a bare host, a base URL, a /jmap/ URL, or the well-known URL itself. */
         private fun sessionUrl(server: String): URI {
             var s = server.trim().removeSuffix("/")
-            if (!s.startsWith("http://") && !s.startsWith("https://")) s = "https://$s"
+            // Basic auth sends the password on every request. Over plain http that is the
+            // password in the clear to anyone on the path, so it is refused outright rather
+            // than warned about: there is no version of this that is worth allowing.
+            if (s.startsWith("http://")) {
+                throw JmapError("Rampart will not send a password over an unencrypted connection. Use https.")
+            }
+            if (!s.startsWith("https://")) s = "https://$s"
             return URI.create(
                 when {
                     s.endsWith("/jmap/session") || s.endsWith("/.well-known/jmap") -> s
