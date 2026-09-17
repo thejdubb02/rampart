@@ -38,9 +38,15 @@ data class Rendered(
  */
 internal val SAFELIST: Safelist = Safelist.basic()
     .addTags("h1", "h2", "h3", "h4", "h5", "h6", "div", "table", "thead", "tbody", "tr", "td", "th", "hr", "center")
-    // Kept so a picture can be drawn at something like its intended size. They are numbers
-    // that end up as a width, never anything that is executed.
-    .addAttributes("img", "width", "height")
+    // The picture itself, so it can be drawn where the body puts it rather than in a heap
+    // underneath. src is restricted to the three schemes that mean something here: http and
+    // https are a fetch the reader has to agree to, cid is a part the message already
+    // carries. Anything else, javascript: included, is dropped by the cleaner.
+    // width and height are numbers that end up as a size, never anything that is executed.
+    .addAttributes("img", "src", "alt", "width", "height")
+    // data: is here because our own signatures use it. An embedded picture is the safest
+    // kind there is: no request leaves the machine, so it cannot report that mail was read.
+    .addProtocols("img", "src", "http", "https", "cid", "data")
 
 /** A block ends the line it is on. The tight ones get one newline, the rest get a blank line. */
 private val TIGHT = setOf("div", "li", "tr", "td", "th", "dd", "dt", "center")

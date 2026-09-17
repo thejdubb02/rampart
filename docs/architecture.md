@@ -65,9 +65,33 @@ Non-negotiable: no JavaScript, remote images blocked by default and allowed per
 sender, `cid:` images served from the local blob, every link click confirmed, and the
 renderer treated as hostile input at all times.
 
-**Not built yet, named here so it is not mistaken for done:** the per-sender allow
-list, and `cid:` images. The first reader blocks every image without exception and
-says how many it blocked. That is the safe side of the rule, not the whole rule.
+The per-sender allow list and `cid:` images are built. So is the block renderer
+below, which is what made a picture drawable at all.
+
+### The renderer returns blocks, not one string (2026-09-17)
+
+The first version walked the cleaned tree into a single `AnnotatedString`. One string
+can only be laid out one way, so every picture had to be drawn in a heap underneath
+the message rather than where the sender put it, a quote could only be a colour, and
+a table came out as its cells run together. `Blocks.kt` keeps the tree as a short
+list of things to draw: text, heading, quote, list, picture, table, rule. `HtmlBody.kt`
+draws them.
+
+The cleaner is unchanged and is still the whole security boundary. What changed is
+that `img` is now allowed through it, with `src` restricted to `http`, `https`, `cid`
+and `data`, which is what lets a picture be drawn in place. `data:` is included
+because it is the safest kind there is, no request leaves the machine, and because
+our own signatures use it.
+
+A table is a grid only when it is at least two rows by two columns. Mail uses tables
+for layout far more often than for data, and a one cell table is usually the wrapper
+round the entire message: drawing that as a grid puts a border round the whole email,
+and reading it as text loses the pictures inside it. Anything that does not look like
+data is unwrapped and read as ordinary blocks.
+
+Still not a browser, and still not becoming one. No CSS, no positioning, no floats,
+no script engine. What this buys is the structure a person reads by, which is the
+part that was actually missing.
 
 ## The reader speaks JMAP directly, and jmap-mua is off the path
 

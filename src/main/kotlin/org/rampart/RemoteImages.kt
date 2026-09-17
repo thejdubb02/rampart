@@ -79,15 +79,21 @@ internal fun imageSenderKey(fromEmail: String): String {
 /**
  * Every picture the body wants from the web, fetched.
  *
+ * Keyed by the address each came from, so the body can draw each one where it names it.
+ *
  * One at a time rather than in parallel: this is a handful of images on one message, and
  * opening six connections to a sender's server to read their newsletter is not a thing to
  * do to them or to a slow link. The ones that fail are simply missing.
  */
-internal suspend fun fetchRemote(body: Body?): List<ImageBitmap> {
-    val html = body?.html ?: return emptyList()
-    val urls = renderHtml(html, Color.Unspecified, Color.Unspecified) {}.remoteImages
-    if (urls.isEmpty()) return emptyList()
+internal suspend fun fetchRemote(body: Body?): Map<String, ImageBitmap> {
+    val html = body?.html ?: return emptyMap()
+    // Deduplicated: a newsletter that uses the same spacer forty times is forty requests to
+    // the same address for the same bytes, and it is drawn from this map by address anyway.
+    val urls = htmlBlocks(html, Color.Unspecified, Color.Unspecified) {}.remoteImages.distinct()
+    if (urls.isEmpty()) return emptyMap()
     // Capped, because a message is allowed to name a thousand pictures and asking for all
     // of them is a thing somebody could be made to do to a server they do not own.
-    return withContext(Dispatchers.IO) { urls.take(20).mapNotNull { RemoteImages.fetch(it) } }
+    return withContext(Dispatchers.IO) {
+        urls.take(20).mapNotNull { url -> RemoteImages.fetch(url)?.let { url to it } }.toMap()
+    }
 }

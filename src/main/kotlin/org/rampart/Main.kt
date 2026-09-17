@@ -523,7 +523,7 @@ private fun Reader(
     var thread by remember { mutableStateOf<List<Summary>>(emptyList()) }
     var bodyError by remember { mutableStateOf<String?>(null) }
     var inlineImages by remember { mutableStateOf<Map<String, ImageBitmap>>(emptyMap()) }
-    var remoteImages by remember { mutableStateOf<List<ImageBitmap>>(emptyList()) }
+    var remoteImages by remember { mutableStateOf<Map<String, ImageBitmap>>(emptyMap()) }
     var unsubscribed by remember { mutableStateOf<String?>(null) }
     var source by remember { mutableStateOf<String?>(null) }
     var picked by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -768,7 +768,7 @@ private fun Reader(
         body = null
         bodyError = null
         inlineImages = emptyMap()
-        remoteImages = emptyList()
+        remoteImages = emptyMap()
         unsubscribed = null
         source = null
         attachments = emptyList()
@@ -1930,8 +1930,8 @@ internal fun Message(
     bodyError: String? = null,
     /** Decoded images the message carries, by blob id. */
     images: Map<String, ImageBitmap> = emptyMap(),
-    /** Pictures fetched from the web, once the reader said to. */
-    remoteImages: List<ImageBitmap> = emptyList(),
+    /** Pictures fetched from the web once the reader said to, by the address they came from. */
+    remoteImages: Map<String, ImageBitmap> = emptyMap(),
     onShowImages: (always: Boolean) -> Unit = {},
     /** What happened to an unsubscribe that was pressed, when one was. */
     unsubscribed: String? = null,
@@ -1958,11 +1958,24 @@ internal fun Message(
     val rendered = remember(body, linkColor) {
         body?.let {
             when {
-                it.html != null -> renderHtml(it.html, linkColor, quoteColor, onLink)
-                it.text != null -> renderText(it.text, linkColor, onLink)
+                it.html != null -> htmlBlocks(it.html, linkColor, quoteColor, onLink)
+                // Plain text has no structure to keep, so it is one block and the same
+                // drawing code handles both rather than there being two ways down.
+                it.text != null -> HtmlDoc(
+                    listOf(Block.Words(renderText(it.text, linkColor, onLink).text)),
+                    emptyList(),
+                )
                 else -> null
             }
         }
+    }
+    // The body refers to a picture it carries by its Content-ID, not by its blob, so the
+    // two have to be joined up before anything can be drawn in place.
+    val carried = remember(attachments, images) {
+        attachments.mapNotNull { part ->
+            val cid = part.cid?.trim()?.trim('<', '>')?.ifBlank { null } ?: return@mapNotNull null
+            images[part.blobId]?.let { cid to it }
+        }.toMap()
     }
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
@@ -2261,33 +2274,12 @@ internal fun Message(
                         }
                     }
                     Spacer(Modifier.height(20.dp))
-                    SelectionContainer { Text(rendered.text, style = MaterialTheme.typography.bodyLarge) }
+                    HtmlBody(rendered, carried, remoteImages)
                     }
 
-                    val drawn = attachments.filter { it.blobId in images }
-                    if (drawn.isNotEmpty() || remoteImages.isNotEmpty()) {
-                        Spacer(Modifier.height(16.dp))
-                        (drawn.mapNotNull { images[it.blobId] } + remoteImages).forEach { bitmap ->
-                            Image(
-                                bitmap = bitmap,
-                                contentDescription = null,
-                                // Inside rather than Fit, so a small logo stays a small
-                                // logo. Fit blew a signature image up to the width of the
-                                // reading pane.
-                                contentScale = ContentScale.Inside,
-                                // ponytail: drawn under the text rather than where the body
-                                // puts them. Placing them in the flow means the renderer
-                                // returning blocks instead of one string, which is a bigger
-                                // change than seeing the picture is worth.
-                                modifier = Modifier
-                                    .sizeIn(maxWidth = 620.dp, maxHeight = 520.dp)
-                                    .padding(vertical = 6.dp),
-                            )
-                        }
-                    }
-
-                    // Only the ones that are not already on screen above.
-                    val files = attachments.filter { it.blobId !in images }
+                    // Only the ones the body did not already put on screen. A picture with
+                    // no Content-ID is not referred to by the body, so it is a file.
+                    val files = attachments.filter { it.cid?.trim()?.trim('<', '>') !in carried.keys }
                     if (files.isNotEmpty()) {
                         Spacer(Modifier.height(24.dp))
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)

@@ -111,10 +111,11 @@ internal fun SignatureEditor(
             Text("Nothing yet.", style = MaterialTheme.typography.bodySmall, color = quoteColor)
         } else {
             // A preview is not for clicking, so the links do nothing. Drawn by the same
-            // renderer as received mail, which is the point: this is how it will look.
-            val rendered = remember(html, linkColor) { renderHtml(html, linkColor, quoteColor) {} }
+            // renderer as received mail, which is the point: this is how it will look,
+            // embedded picture included.
+            val rendered = remember(html, linkColor) { htmlBlocks(html, linkColor, quoteColor) {} }
             Column {
-                Text(rendered.text, style = MaterialTheme.typography.bodyMedium)
+                HtmlBody(rendered, emptyMap(), emptyMap())
                 if (rendered.blockedImages > 0) {
                     Text(
                         "A picture from the web will not show for most people, and marks them as " +
@@ -193,4 +194,4 @@ internal fun imageDataUri(file: Path, limit: Long = 96L * 1024): String {
  * that does not render HTML.
  */
 internal fun plainOf(html: String): String =
-    renderHtml(html, Color.Unspecified, Color.Unspecified) {}.text.text.trim()
+    flatten(htmlBlocks(html, Color.Unspecified, Color.Unspecified) {}.blocks).text.trim()

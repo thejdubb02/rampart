@@ -3,10 +3,12 @@ package org.rampart
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -17,9 +19,11 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -67,9 +71,11 @@ private fun ColumnScope.Draw(
             modifier = Modifier.padding(bottom = 10.dp),
         )
 
-        is Block.Quote -> Row(Modifier.padding(bottom = 10.dp)) {
+        // IntrinsicSize.Min on the row is what lets the edge be as tall as the quote: a
+        // Spacer has no height of its own, so without it the line does not appear at all.
+        is Block.Quote -> Row(Modifier.padding(bottom = 10.dp).height(IntrinsicSize.Min)) {
             Spacer(
-                Modifier.width(3.dp).height(IntrinsicMin)
+                Modifier.width(3.dp).fillMaxHeight()
                     .background(MaterialTheme.colorScheme.outlineVariant),
             )
             Column(Modifier.padding(start = 12.dp)) {
@@ -92,10 +98,15 @@ private fun ColumnScope.Draw(
         }
 
         is Block.Picture -> {
-            val bitmap = if (block.src.startsWith("cid:", ignoreCase = true)) {
-                carried[block.src.substring(4).trim().trim('<', '>')]
-            } else {
-                fetched[block.src]
+            val bitmap = remember(block.src, carried, fetched) {
+                when {
+                    block.src.startsWith("cid:", true) ->
+                        carried[block.src.substring(4).trim().trim('<', '>')]
+                    // Carried inside the body itself, so there is nothing to fetch and
+                    // nothing to agree to. This is how our own signatures hold a logo.
+                    block.src.startsWith("data:image/", true) -> embeddedImage(block.src)
+                    else -> fetched[block.src]
+                }
             }
             if (bitmap != null) {
                 Image(
@@ -150,10 +161,6 @@ private fun ColumnScope.Draw(
     }
 }
 
-/** The quote's edge runs the height of what it encloses, which is not known until layout. */
-private val IntrinsicMin
-    @Composable get() = androidx.compose.foundation.layout.IntrinsicSize.Min.let { 0.dp }
-
 /** Everything the blocks say, as one string, for a preview or a plain text copy. */
 internal fun flatten(blocks: List<Block>): AnnotatedString = AnnotatedString.Builder().apply {
     fun walk(list: List<Block>) {
@@ -173,3 +180,20 @@ internal fun flatten(blocks: List<Block>): AnnotatedString = AnnotatedString.Bui
     }
     walk(blocks)
 }.toAnnotatedString()
+
+/**
+ * A `data:` picture, decoded, or null when it is not one we can draw.
+ *
+ * Capped well below what a message is allowed to be. A body can claim to hold a hundred
+ * megabyte picture, and finding out by decoding it is the expensive way to learn that.
+ */
+internal fun embeddedImage(src: String, limit: Int = 8 * 1024 * 1024): ImageBitmap? = runCatching {
+    val comma = src.indexOf(',')
+    if (comma < 0 || !src.substring(0, comma).endsWith(";base64", ignoreCase = true)) return null
+    val encoded = src.substring(comma + 1)
+    // Four base64 characters are three bytes, so the length says how big it is without
+    // decoding it first.
+    if (encoded.length / 4 * 3 > limit) return null
+    val bytes = java.util.Base64.getMimeDecoder().decode(encoded)
+    org.jetbrains.skia.Image.makeFromEncoded(bytes).toComposeImageBitmap()
+}.getOrNull()

@@ -48,6 +48,20 @@ class Screenshots {
         shoot("reader", 1400, 900) { Panes() }
         shoot("reader-dark", 1400, 900, dark) { Panes() }
         shoot("sidebar-collapsed", 1400, 900, dark) { Panes(collapsed = true) }
+        // Taller than any window, because the point of this one is the whole body: a
+        // heading, a list, a table, a quote, a rule and a picture the message carries.
+        shoot("body", 820, 1500) {
+            Message(
+                summary = MESSAGES[1],
+                body = Body(SAMPLE_HTML, null),
+                attachments = listOf(
+                    Attachment("b3", "signature.png", "image/png", 9_284, cid = "logo", inline = true),
+                ),
+                images = mapOf("b3" to sampleImage()),
+                actions = MessageActions(archive = {}, junk = {}, trash = {}, star = {}),
+                onLink = {},
+            )
+        }
         shoot("unified", 1400, 900) {
             Row(Modifier.fillMaxSize()) {
                 Sidebar(
@@ -258,11 +272,23 @@ private val SAMPLE_HTML = """
 schedule is on our site at <a href="https://example.com/rates">example.com/rates</a>,
 and the difference is about four percent.</p>
 <img src="https://tracker.example.net/open.gif" width="1" height="1">
+<h2>What is included</h2>
+<ul>
+<li>Excavation and spoil removal</li>
+<li>Base preparation to 150mm</li>
+<li>Reinstatement of the verge</li>
+</ul>
+<table>
+<tr><th>Item</th><th>Old rate</th><th>Current</th></tr>
+<tr><td>Excavation, per day</td><td>640.00</td><td>665.00</td></tr>
+<tr><td>Spoil removal, per load</td><td>210.00</td><td>218.00</td></tr>
+</table>
 <blockquote>
 <p>Could you confirm the start time and whether we need to leave the gate open?</p>
 </blockquote>
+<hr>
 <p>Best,<br>Dana</p>
-<table><tr><td>Dana Whitfield</td></tr><tr><td>Whitfield Groundworks</td></tr></table>
+<table><tr><td><img src="cid:logo" width="120"><br>Dana Whitfield<br>Whitfield Groundworks</td></tr></table>
 </body></html>
 """.trimIndent()
 
