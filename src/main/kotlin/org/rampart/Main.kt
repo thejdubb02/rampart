@@ -84,6 +84,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
@@ -825,11 +827,16 @@ private fun Reader(
             showShortcuts = true
             return true
         }
-        if (event.key == Key.Slash && !typing) {
+        if (event.key == Key.Slash && !typing && !event.isCtrlPressed && !event.isAltPressed) {
             searchField.requestFocus()
             return true
         }
         if (typing) return false
+        // Everything below is a bare key. The same key held with a modifier belongs to
+        // whatever the modifier means, and taking Ctrl+C to open a composer, or Ctrl+A and
+        // Ctrl+F from select-all and find, is how a keyboard stops being trustworthy. One
+        // guard rather than a check on each: every letter down there had the same fault.
+        if (event.isCtrlPressed || event.isAltPressed || event.isMetaPressed) return false
         val at = emails.indexOfFirst { it.id == selected?.id }
         fun step(delta: Int): Boolean {
             if (emails.isEmpty()) return true
