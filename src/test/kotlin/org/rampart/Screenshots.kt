@@ -34,10 +34,14 @@ class Screenshots {
         width: Int,
         height: Int,
         theme: Theme = THEMES.first(),
+        pack: IconPack = LineIcons,
         content: @Composable () -> Unit,
     ) {
         val image = renderComposeScene(width, height) {
-            CompositionLocalProvider(LocalRampartTheme provides theme) {
+            CompositionLocalProvider(
+                LocalRampartTheme provides theme,
+                LocalIconPack provides pack,
+            ) {
                 MaterialTheme(colorScheme = theme.scheme(), typography = RampartTypography) {
                     Surface(Modifier.fillMaxSize()) { content() }
                 }
@@ -194,6 +198,8 @@ class Screenshots {
         shoot("settings", 1200, 900, withArt) { SettingsScreen("accounts") }
         shoot("settings-reading", 1200, 900) { SettingsScreen("reading") }
         shoot("settings-filters", 1200, 900) { SettingsScreen("filters") }
+        // The other icon pack, so a change to either set is visible in a diff.
+        shoot("icons-heavy", 1400, 900, dark, HeavyIcons) { Panes() }
         shoot("composer", 1000, 640) {
             Composer(
                 identities = listOf("you@example.org", "billing@example.org"),

@@ -289,6 +289,7 @@ private fun ApplicationScope.Rampart() {
         // Settings.dark() is the pre-themes switch. Reading it here is what stops an
         // existing install opening light again the first time it runs a build with themes.
         var theme by remember { mutableStateOf(themeFor(Settings.theme(), Settings.dark() ?: followSystem)) }
+        var pack by remember { mutableStateOf(iconPack(Settings.iconPack())) }
         LaunchedEffect(theme) { WindowChrome.setDarkTitleBar(window, theme.dark) }
         LaunchedEffect(Unit) {
             SingleInstance.bringToFront {
@@ -299,11 +300,18 @@ private fun ApplicationScope.Rampart() {
                 }
             }
         }
-        CompositionLocalProvider(LocalRampartTheme provides theme) {
+        // Two axes, on purpose. Somebody who likes the dark palette and wants heavier
+        // glyphs should not have to choose between them.
+        CompositionLocalProvider(
+            LocalRampartTheme provides theme,
+            LocalIconPack provides pack,
+        ) {
             MaterialTheme(colorScheme = theme.scheme(), typography = RampartTypography) {
                 Surface(Modifier.fillMaxSize()) {
                     App(
                         onTheme = { theme = it; Settings.setTheme(it.key) },
+                        icons = pack,
+                        onIcons = { pack = it; Settings.setIconPack(it.key) },
                         onQuit = ::quit,
                         notify = { title, message ->
                             tray.sendNotification(Notification(title, message, Notification.Type.Info))
@@ -316,7 +324,13 @@ private fun ApplicationScope.Rampart() {
 }
 
 @Composable
-private fun App(onTheme: (Theme) -> Unit, onQuit: () -> Unit, notify: (String, String) -> Unit) {
+private fun App(
+    onTheme: (Theme) -> Unit,
+    onQuit: () -> Unit,
+    notify: (String, String) -> Unit,
+    icons: IconPack = LineIcons,
+    onIcons: (IconPack) -> Unit = {},
+) {
     var sessions by remember { mutableStateOf<List<Session>>(emptyList()) }
     var adding by remember { mutableStateOf(false) }
     var restoring by remember { mutableStateOf(true) }
@@ -364,7 +378,7 @@ private fun App(onTheme: (Theme) -> Unit, onQuit: () -> Unit, notify: (String, S
             adding = false
         }
     } else {
-        Reader(sessions, onTheme, onQuit, notify, onAddAccount = { adding = true })
+        Reader(sessions, onTheme, onQuit, notify, onAddAccount = { adding = true }, icons = icons, onIcons = onIcons)
     }
 }
 
@@ -508,6 +522,8 @@ private fun Reader(
     onQuit: () -> Unit,
     notify: (String, String) -> Unit,
     onAddAccount: () -> Unit,
+    icons: IconPack = LineIcons,
+    onIcons: (IconPack) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     var identities by remember { mutableStateOf<Map<String, List<Identity>>>(emptyMap()) }
@@ -1606,6 +1622,8 @@ private fun Reader(
                     notifyOnArrival = notifyOnArrival,
                     onNotifyOnArrival = { notifyOnArrival = it; Settings.setNotifyOnArrival(it) },
                     onTheme = onTheme,
+                    iconPack = icons,
+                    onIconPack = onIcons,
                     onAddAccount = onAddAccount,
                     onRestart = { Updates.restartToUpdate(); onQuit() },
                     filters = filters,

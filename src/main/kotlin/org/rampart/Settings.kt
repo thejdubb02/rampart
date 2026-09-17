@@ -97,6 +97,11 @@ object Settings {
 
     fun setArchiveBy(value: String) = write { put("archiveBy", JsonPrimitive(value)) }
 
+    /** Which icon pack, kept apart from the theme so the two can be chosen separately. */
+    fun iconPack(): String = read()["iconPack"]?.jsonPrimitive?.contentOrNull.orEmpty()
+
+    fun setIconPack(value: String) = write { put("iconPack", JsonPrimitive(value)) }
+
     /**
      * Senders whose pictures may be fetched from the web. Domains, not addresses: see
      * [imageSenderKey].

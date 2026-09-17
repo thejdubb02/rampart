@@ -74,6 +74,8 @@ internal fun SettingsPane(
     notifyOnArrival: Boolean,
     onNotifyOnArrival: (Boolean) -> Unit,
     onTheme: (Theme) -> Unit,
+    iconPack: IconPack = LineIcons,
+    onIconPack: (IconPack) -> Unit = {},
     onAddAccount: () -> Unit,
     onRestart: () -> Unit,
     /** Null while the server's filter script is still being read. */
@@ -120,7 +122,7 @@ internal fun SettingsPane(
                             supported = filtersSupported,
                             onSave = onFilters,
                         )
-                        "themes" -> ThemesPage(onTheme)
+                        "themes" -> ThemesPage(onTheme, iconPack, onIconPack)
                         "identities" -> IdentitiesPage(
                             identities, signatureError, onSignature, onPickSignatureImage,
                         )
@@ -189,7 +191,7 @@ private fun SettingsNav(current: String, onPick: (String) -> Unit) {
 }
 
 @Composable
-private fun ThemesPage(onTheme: (Theme) -> Unit) {
+private fun ThemesPage(onTheme: (Theme) -> Unit, iconPack: IconPack, onIconPack: (IconPack) -> Unit) {
     val current = LocalRampartTheme.current
     Section("Theme", "Ported from Clique, so the ones you already picked there are here.")
     // Not lazy in any useful sense: there are eighteen of these and the column above
@@ -207,6 +209,35 @@ private fun ThemesPage(onTheme: (Theme) -> Unit) {
             ThemeCard(theme, selected = theme.key == current.key) { onTheme(theme) }
         }
     }
+
+    Spacer(Modifier.height(22.dp))
+    Section(
+        "Icons",
+        "Kept apart from the palette, so one can be changed without the other.",
+    )
+    ICON_PACKS.forEach { option ->
+        Row(
+            Modifier.fillMaxWidth().clickable { onIconPack(option) }.padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(selected = option.key == iconPack.key, onClick = { onIconPack(option) })
+            Spacer(Modifier.width(8.dp))
+            Text(option.label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(80.dp))
+            // The pack drawn in its own glyphs, which is the only description that is
+            // actually about what changes.
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                listOf(option.Inbox, option.Archive, option.Sent, option.Trash, option.Star).forEach {
+                    Icon(
+                        it,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.size(17.dp),
+                    )
+                }
+            }
+        }
+    }
+
 }
 
 /**
