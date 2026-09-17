@@ -34,6 +34,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -219,7 +226,33 @@ internal fun Composer(
         }
     }
 
-    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
+    /*
+     * Ctrl+Enter sends and Esc closes, on the same conditions as the two buttons: a shortcut
+     * that can do what the button cannot is how a message goes out with no recipient, or
+     * goes out twice while the first one is still being sent.
+     *
+     * A preview handler rather than a plain one, because the focus is inside a text field
+     * and a field that takes Enter would swallow it first.
+     */
+    fun typed(event: KeyEvent): Boolean {
+        if (event.type != KeyEventType.KeyDown) return false
+        return when {
+            event.isCtrlPressed && (event.key == Key.Enter || event.key == Key.NumPadEnter) -> {
+                if (!sending && draft.recipients.isNotEmpty()) onSend(draft)
+                true
+            }
+            event.key == Key.Escape -> {
+                if (!sending) onDiscard()
+                true
+            }
+            else -> false
+        }
+    }
+
+    Surface(
+        Modifier.fillMaxSize().onPreviewKeyEvent(::typed),
+        color = MaterialTheme.colorScheme.surface,
+    ) {
         Column(Modifier.fillMaxSize()) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp),

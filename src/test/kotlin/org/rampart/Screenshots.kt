@@ -2,6 +2,7 @@ package org.rampart
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -47,6 +48,12 @@ class Screenshots {
         shoot("reader", 1400, 900) { Panes() }
         shoot("reader-dark", 1400, 900, dark) { Panes() }
         shoot("sidebar-collapsed", 1400, 900, dark) { Panes(collapsed = true) }
+        shoot("shortcuts", 1000, 800, dark) {
+            Box(Modifier.fillMaxSize()) {
+                Panes()
+                ShortcutsOverlay {}
+            }
+        }
         shoot("source", 900, 700, dark) {
             Message(
                 summary = MESSAGES[1],
@@ -61,7 +68,7 @@ class Screenshots {
         shoot("reader-themed", 1400, 900, withArt) { Panes() }
         // Taller than any real window on purpose: the pane scrolls, and a screenshot that
         // stops at the fold is how a section nobody has looked at ships.
-        shoot("settings", 1400, 1900, withArt) {
+        shoot("settings", 1400, 2500, withArt) {
             SettingsPane(
                 accounts = ACCOUNTS,
                 identities = listOf(
@@ -73,6 +80,15 @@ class Screenshots {
                     ),
                     Identity("i2", "Skybox7", "admin@skybox7.com"),
                 ),
+                vacation = Vacation(
+                    enabled = true,
+                    from = "2026-12-24T00:00:00Z",
+                    subject = "Out of office until the 2nd",
+                    text = "I am away until 2 January and will not be picking up email. " +
+                        "For anything urgent, please call the office.",
+                ),
+                vacationError = null,
+                onVacation = {},
                 signatureError = null,
                 onSignature = { _, _ -> },
                 onPickSignatureImage = { null },

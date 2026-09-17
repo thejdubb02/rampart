@@ -59,6 +59,10 @@ import androidx.compose.foundation.Image
 internal fun SettingsPane(
     accounts: List<AccountMailboxes>,
     identities: List<Identity>,
+    /** Null while it has not been read yet, or on a server with no responder. */
+    vacation: Vacation?,
+    vacationError: String?,
+    onVacation: (Vacation) -> Unit,
     signatureError: String?,
     onSignature: (Identity, String) -> Unit,
     onPickSignatureImage: () -> String?,
@@ -182,6 +186,16 @@ internal fun SettingsPane(
                     Spacer(Modifier.height(18.dp))
                 }
 
+                if (vacation != null) {
+                    Spacer(Modifier.height(30.dp))
+                    Section(
+                        "When you are away",
+                        "The server sends this on your behalf, so it keeps working when Rampart " +
+                            "is closed. One reply per person, not one per message.",
+                    )
+                    AwayReply(vacation, vacationError, onVacation)
+                }
+
                 Spacer(Modifier.height(30.dp))
                 Section("Version", "Rampart updates itself in the background and asks before restarting.")
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -275,5 +289,110 @@ private fun ThemeCard(theme: Theme, selected: Boolean, onPick: () -> Unit) {
                 )
             }
         }
+    }
+}
+
+/**
+ * The out of office reply.
+ *
+ * Saved on a button rather than as it is typed, which is the opposite of the signature
+ * above it on purpose: half a sign-off is a cosmetic problem and half an auto-reply is one
+ * that goes to everybody who writes in while it is wrong.
+ */
+@Composable
+private fun AwayReply(current: Vacation, error: String?, onSave: (Vacation) -> Unit) {
+    var draft by remember(current) { mutableStateOf(current) }
+    Row(
+        Modifier.fillMaxWidth().clickable { draft = draft.copy(enabled = !draft.enabled) }
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Send an automatic reply", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        Switch(checked = draft.enabled, onCheckedChange = { draft = draft.copy(enabled = it) })
+    }
+    if (draft.enabled) {
+        Spacer(Modifier.height(10.dp))
+        Labelled("Subject") {
+            Entry(draft.subject.orEmpty(), "Out of office") { draft = draft.copy(subject = it.ifBlank { null }) }
+        }
+        Spacer(Modifier.height(8.dp))
+        Labelled("Message") {
+            Entry(draft.text, "Back on Monday.", lines = 4) { draft = draft.copy(text = it) }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.weight(1f)) {
+                Labelled("Starts") {
+                    Entry(dayOf(draft.from), "today") { draft = draft.copy(from = utcDay(it)) }
+                }
+            }
+            Column(Modifier.weight(1f)) {
+                Labelled("Ends") {
+                    Entry(dayOf(draft.to), "when I turn it off") { draft = draft.copy(to = utcDay(it)) }
+                }
+            }
+        }
+        Text(
+            "Dates are optional, and are written the year first: 2026-12-24.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+    }
+    error?.let {
+        Text(
+            it,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+    }
+    Spacer(Modifier.height(10.dp))
+    OutlinedButton(onClick = { onSave(draft) }, enabled = draft != current) { Text("Save") }
+}
+
+/** The date part only. The server keeps a whole timestamp; nobody wants to type one. */
+private fun dayOf(utc: String?): String = utc.orEmpty().substringBefore('T')
+
+/**
+ * Midnight UTC on that day, or null for a blank box. A half typed date is passed through
+ * as it stands so that [vacationProblem] is the one place that says it cannot be read,
+ * rather than the box silently refusing the third keystroke.
+ */
+private fun utcDay(day: String): String? {
+    val trimmed = day.trim()
+    return if (trimmed.isEmpty()) null else "${trimmed}T00:00:00Z"
+}
+
+@Composable
+private fun Labelled(label: String, content: @Composable () -> Unit) {
+    Text(
+        label,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.outline,
+        modifier = Modifier.padding(bottom = 3.dp),
+    )
+    content()
+}
+
+@Composable
+private fun Entry(value: String, hint: String, lines: Int = 1, onChange: (String) -> Unit) {
+    Box(
+        Modifier.fillMaxWidth().height((22 * lines + 16).dp)
+            .background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
+            .padding(horizontal = 11.dp, vertical = 8.dp),
+    ) {
+        if (value.isEmpty()) {
+            Text(hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+        }
+        BasicTextField(
+            value = value,
+            onValueChange = onChange,
+            singleLine = lines == 1,
+            textStyle = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            modifier = Modifier.fillMaxSize(),
+        )
     }
 }

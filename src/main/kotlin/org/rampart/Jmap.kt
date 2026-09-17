@@ -23,6 +23,9 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.net.http.WebSocket
+import java.util.concurrent.CompletionStage
+import java.util.concurrent.TimeUnit
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
@@ -34,8 +37,11 @@ class JmapError(message: String) : Exception(message)
 private const val CORE = "urn:ietf:params:jmap:core"
 private const val MAIL = "urn:ietf:params:jmap:mail"
 private const val SUBMISSION = "urn:ietf:params:jmap:submission"
+private const val VACATION = "urn:ietf:params:jmap:vacationresponse"
 
 private val json = Json { ignoreUnknownKeys = true }
+
+private const val WEBSOCKET = "urn:ietf:params:jmap:websocket"
 
 private val http: HttpClient = HttpClient.newBuilder()
     // Redirects are followed by hand: HttpClient drops the Authorization header across one,
@@ -117,6 +123,8 @@ class Jmap private constructor(
     val accountId: String,
     private val downloadUrl: String,
     private val uploadUrl: String,
+    /** Where the server takes a WebSocket for push. Blank when it does not offer one. */
+    private val pushUrl: String,
     /** What the server will accept in one upload, in bytes. Zero when it did not say. */
     private val maxUpload: Long,
 ) {
@@ -154,12 +162,15 @@ class Jmap private constructor(
             val uploadUrl = (session["uploadUrl"] as? JsonPrimitive)?.contentOrNull.orEmpty()
             val maxUpload = session["capabilities"]?.jsonObject?.get(CORE)?.jsonObject
                 ?.get("maxSizeUpload")?.jsonPrimitive?.longOrNull ?: 0L
+            val pushUrl = (session["capabilities"]?.jsonObject?.get(WEBSOCKET)?.jsonObject
+                ?.get("url") as? JsonPrimitive)?.contentOrNull.orEmpty()
             return Jmap(
                 credential = credential,
                 apiUrl = session["apiUrl"].require("apiUrl"),
                 accountId = account,
                 downloadUrl = downloadUrl,
                 uploadUrl = uploadUrl,
+                pushUrl = pushUrl,
                 maxUpload = maxUpload,
             )
         }
@@ -375,6 +386,57 @@ class Jmap private constructor(
             limit,
         ) ?: return null
         return String(bytes, Charsets.UTF_8)
+    }
+
+    /**
+     * Calls [onChange] when the server says something in this account moved.
+     *
+     * The poll below this is what actually re-reads the mailbox, and it stays: a poll works
+     * against every server and will work against IMAP later, while push is an extra the
+     * server may not offer. This only shortens the wait from the next round to a second or
+     * two. What arrives is a StateChange saying which types moved, deliberately ignored:
+     * knowing that something changed is the whole signal, and the poll already works out
+     * what it was in one small request.
+     *
+     * [onGone] says the socket is finished, whether it closed cleanly or broke. Whoever
+     * asked for the watch is the one that can open another, so reconnecting is left to them.
+     *
+     * Returns null when the server named no WebSocket, or when the connection did not open.
+     * Closing the returned handle closes the socket.
+     */
+    val hasPush: Boolean get() = pushUrl.isNotBlank()
+
+    fun watch(onChange: () -> Unit, onGone: () -> Unit): AutoCloseable? {
+        if (pushUrl.isBlank()) return null
+        val socket = runCatching {
+            http.newWebSocketBuilder()
+                .header("Authorization", credential)
+                .subprotocols("jmap")
+                .buildAsync(URI.create(pushUrl), PushListener(onChange, onGone))
+                .get(20, TimeUnit.SECONDS)
+        }.getOrNull() ?: return null
+        // Without this the socket is open and silent: a server sends nothing until a client
+        // has said which types it wants to hear about.
+        runCatching { socket.sendText(PUSH_ENABLE, true) }
+        return AutoCloseable { runCatching { socket.abort() } }
+    }
+
+    /** The out of office reply as the server has it, or null when it does not do them. */
+    internal fun vacation(): Vacation? = runCatching {
+        val list = call(
+            invoke("VacationResponse/get", "v") { put("ids", JsonNull) },
+            also = VACATION,
+        )[0].list()
+        list.firstOrNull()?.jsonObject?.let(::vacationOf)
+    }.getOrNull()
+
+    internal fun setVacation(value: Vacation) {
+        call(
+            invoke("VacationResponse/set", "v") {
+                putJsonObject("update") { put("singleton", vacationPatch(value)) }
+            },
+            also = VACATION,
+        )
     }
 
     fun attachments(emailId: String): List<Attachment> {
@@ -660,9 +722,18 @@ class Jmap private constructor(
             add(id)
         }
 
-    private fun call(vararg invocations: JsonArray): List<JsonArray> {
+    /**
+     * [also] names a capability beyond the three every call needs. It is not simply added to
+     * the list for good measure: a server that does not have a capability refuses the whole
+     * request when it is named, so asking for one everywhere would break every call on a
+     * server that happens not to offer it.
+     */
+    private fun call(vararg invocations: JsonArray, also: String? = null): List<JsonArray> {
         val body = buildJsonObject {
-            putJsonArray("using") { add(CORE); add(MAIL); add(SUBMISSION) }
+            putJsonArray("using") {
+                add(CORE); add(MAIL); add(SUBMISSION)
+                also?.let { add(it) }
+            }
             put("methodCalls", JsonArray(invocations.toList()))
         }
         val response = http.send(
@@ -749,6 +820,42 @@ class Jmap private constructor(
             },
         )
         return responses[1].list().map { jsonToSummary(it.jsonObject) }
+    }
+}
+
+private const val PUSH_ENABLE =
+    """{"@type":"WebSocketPushEnable","dataTypes":["Email","Mailbox"]}"""
+
+/**
+ * A text frame can arrive in pieces, so it is collected until the last one before being
+ * read. Anything that is not a StateChange is dropped, error frames included: a push that
+ * goes wrong is a push that does not arrive, and the poll covers that already.
+ */
+private class PushListener(
+    private val onChange: () -> Unit,
+    private val onGone: () -> Unit,
+) : WebSocket.Listener {
+    private val frame = StringBuilder()
+
+    override fun onError(socket: WebSocket, error: Throwable) = onGone()
+
+    override fun onClose(socket: WebSocket, status: Int, reason: String): CompletionStage<*>? {
+        onGone()
+        return null
+    }
+
+    override fun onText(socket: WebSocket, data: CharSequence, last: Boolean): CompletionStage<*>? {
+        frame.append(data)
+        if (last) {
+            val text = frame.toString()
+            frame.setLength(0)
+            val type = runCatching {
+                (json.parseToJsonElement(text).jsonObject["@type"] as? JsonPrimitive)?.contentOrNull
+            }.getOrNull()
+            if (type == "StateChange") onChange()
+        }
+        socket.request(1)
+        return null
     }
 }
 

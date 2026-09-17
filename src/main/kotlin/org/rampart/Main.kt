@@ -83,6 +83,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
@@ -103,6 +105,8 @@ import androidx.compose.ui.window.rememberTrayState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import java.awt.Desktop
 import java.net.URI
@@ -407,6 +411,8 @@ private fun Reader(
 ) {
     val scope = rememberCoroutineScope()
     var identities by remember { mutableStateOf<Map<String, List<Identity>>>(emptyMap()) }
+    var vacation by remember { mutableStateOf<Vacation?>(null) }
+    var vacationError by remember { mutableStateOf<String?>(null) }
     var composing by remember { mutableStateOf<Draft?>(null) }
     // Where the autosaved copy of what is being written currently lives, so the next save
     // replaces it rather than adding another, and sending or discarding can clear it away.
@@ -447,6 +453,7 @@ private fun Reader(
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf<String?>(null) }
+    var showShortcuts by remember { mutableStateOf(false) }
 
     fun session(key: String) = sessions.first { it.key == key }
 
@@ -515,13 +522,16 @@ private fun Reader(
     /**
      * Mail that arrives while Rampart is open turns up on its own.
      *
-     * Polling rather than JMAP push, because a poll is the same shape against every server
-     * and against IMAP later, and because the check itself is one small request: the inbox
-     * is only re-read on the rounds where the account's mail state has actually moved.
+     * Still a poll, because a poll is the same shape against every server and against IMAP
+     * later, and because the check itself is one small request: the inbox is only re-read on
+     * the rounds where the account's mail state has actually moved. Push, below, does not
+     * replace any of that. It only cuts the round short when the server says something
+     * moved, so mail lands in a second or two instead of up to half a minute.
      *
      * A round that fails is skipped, not reported. The network dropping for a minute is not
      * something to put a red bar on screen for, and the next round fixes it.
      */
+    val pushes = remember { Channel<Unit>(Channel.CONFLATED) }
     LaunchedEffect(sessions) {
         val states = mutableMapOf<String, String>()
         val seen = mutableMapOf<String, Set<String>>()
@@ -549,8 +559,39 @@ private fun Reader(
                 if (notifyOnArrival) arrivalText(found.fresh)?.let { (title, body) -> notify(title, body) }
             }
             // Until every account has been looked at once there is nothing to compare
-            // against, so those first rounds come quickly rather than a minute apart.
-            delay(if (states.size == sessions.size) 30_000 else 5_000)
+            // against, so those first rounds come quickly rather than half a minute apart.
+            val quiet = if (states.size == sessions.size) 30_000L else 5_000L
+            withTimeoutOrNull(quiet) { pushes.receive() }
+        }
+    }
+
+    /**
+     * The server's own word that something moved, which saves waiting for the next round.
+     *
+     * Conflated on purpose: ten changes in a second are one round of work, and the round
+     * reads the current state rather than a list of what happened, so nothing is lost by
+     * dropping the extras. A socket that closes is reopened after a pause; while it is
+     * down the poll above carries on by itself, which is why none of this reports an error.
+     */
+    LaunchedEffect(sessions) {
+        if (sessions.none { it.jmap.hasPush }) return@LaunchedEffect
+        val gone = Channel<Unit>(Channel.CONFLATED)
+        while (true) {
+            val open = mutableListOf<AutoCloseable>()
+            try {
+                for (account in sessions) {
+                    withContext(Dispatchers.IO) {
+                        account.jmap.watch({ pushes.trySend(Unit) }, { gone.trySend(Unit) })
+                    }?.let { open += it }
+                }
+                gone.receive()
+            } finally {
+                open.forEach { runCatching { it.close() } }
+            }
+            // A laptop that has just woken up, or a server being restarted, would otherwise
+            // be reconnected to in a tight loop. Nothing is missed by waiting: the poll is
+            // still running underneath, and the next round reads the state from scratch.
+            delay(30_000)
         }
     }
 
@@ -560,6 +601,13 @@ private fun Reader(
         withContext(Dispatchers.IO) { runCatching { session(key).jmap.mailboxes() }.getOrNull() }
             ?.let { mailboxes = mailboxes + (key to it) }
         reload()
+    }
+
+    LaunchedEffect(settingsOpen, here) {
+        val key = here?.first
+        if (!settingsOpen || key == null) return@LaunchedEffect
+        vacationError = null
+        vacation = withContext(Dispatchers.IO) { runCatching { session(key).jmap.vacation() }.getOrNull() }
     }
 
     LaunchedEffect(here) {
@@ -681,6 +729,21 @@ private fun Reader(
      */
     fun shortcut(event: androidx.compose.ui.input.key.KeyEvent): Boolean {
         if (event.type != KeyEventType.KeyDown) return false
+        // Before the typing guard: whatever has focus, this is the way out of the overlay.
+        if (showShortcuts) {
+            showShortcuts = false
+            return true
+        }
+        if (event.isCtrlPressed && event.key == Key.Comma) {
+            settingsOpen = true
+            return true
+        }
+        // Shift is what makes it a question mark on most layouts, so the search key has to
+        // say it does not want one or Shift+/ lands in the search box instead of the list.
+        if (event.key == Key.Slash && event.isShiftPressed) {
+            showShortcuts = true
+            return true
+        }
         if (event.key == Key.Slash && !typing) {
             searchField.requestFocus()
             return true
@@ -699,6 +762,16 @@ private fun Reader(
             Key.C -> { sendError = null; composing = Draft(from = identities[here?.first].orEmpty().firstOrNull()?.email.orEmpty()); true }
             Key.R -> { selected?.let { m -> composing = replyTo(m, body, identities[here?.first].orEmpty().firstOrNull()?.email.orEmpty()) }; true }
             Key.F -> { selected?.let { m -> composing = forwardOf(m, body, identities[here?.first].orEmpty().firstOrNull()?.email.orEmpty()) }; true }
+            Key.A -> {
+                selected?.let { m ->
+                    val ours = identities[here?.first].orEmpty().map { it.email }.toSet()
+                    if (hasOtherRecipients(m, body, ours)) {
+                        composing = replyTo(m, body, ours.firstOrNull().orEmpty(), true, ours)
+                    }
+                }
+                true
+            }
+            Key.S -> { actions.star?.invoke(); true }
             Key.E -> { actions.archive?.invoke(); true }
             Key.Delete, Key.Backspace -> { actions.trash?.invoke(); true }
             Key.Escape -> {
@@ -897,6 +970,23 @@ private fun Reader(
                         AccountMailboxes(it.key, it.account.name, it.account.email, mailboxes[it.key].orEmpty())
                     },
                     identities = identities[here?.first].orEmpty(),
+                    vacation = vacation,
+                    vacationError = vacationError,
+                    onVacation = { wanted ->
+                        val key = here?.first
+                        vacationError = vacationProblem(wanted)
+                        if (key != null && vacationError == null) {
+                            scope.launch {
+                                vacationError = try {
+                                    withContext(Dispatchers.IO) { session(key).jmap.setVacation(wanted) }
+                                    vacation = wanted
+                                    null
+                                } catch (e: Exception) {
+                                    e.message ?: "The server would not save it."
+                                }
+                            }
+                        }
+                    },
                     signatureError = signatureError,
                     onSignature = { identity, html ->
                         val key = here?.first
@@ -1129,6 +1219,8 @@ private fun Reader(
             )
         }
     }
+
+    if (showShortcuts) ShortcutsOverlay { showShortcuts = false }
 
     confirm?.let { url ->
         AlertDialog(
