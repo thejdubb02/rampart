@@ -49,9 +49,20 @@ class HtmlTest {
 
     @Test
     fun `remote images are counted and never drawn`() {
-        val r = render("""<p>Hi</p><img src="https://tracker.example/pixel.gif"><img src="cid:logo">""")
+        val r = render("""<p>Hi</p><img src="https://tracker.example/pixel.gif"><img src="//x/p.gif">""")
         assertEquals(2, r.blockedImages)
         assertFalse(r.text.text.contains("tracker"))
+    }
+
+    /**
+     * An image the message carries with it is drawn from the message's own parts and tells
+     * the sender nothing, so it is not something that was blocked. Counting it here put
+     * "1 image was not loaded" above an image that was right there on screen.
+     */
+    @Test
+    fun `an image the message carries is not a blocked one`() {
+        val r = render("""<p>Hi</p><img src="cid:logo"><img src="CID:UPPER">""")
+        assertEquals(0, r.blockedImages)
     }
 
     @Test

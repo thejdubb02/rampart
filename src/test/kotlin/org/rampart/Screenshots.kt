@@ -9,6 +9,7 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.renderComposeScene
 import java.io.File
 import kotlin.test.Test
@@ -77,6 +78,12 @@ class Screenshots {
 
     private fun theme(key: String) = THEMES.first { it.key == key }
 
+    /** A real bundled PNG, so the drawing is exercised rather than a blank placeholder. */
+    private fun sampleImage() = Screenshots::class.java.classLoader
+        .getResourceAsStream("art/chompy.png")!!.use {
+            org.jetbrains.skia.Image.makeFromEncoded(it.readBytes()).toComposeImageBitmap()
+        }
+
     @Composable
     private fun Panes(collapsed: Boolean = false) {
         Column(Modifier.fillMaxSize()) {
@@ -114,7 +121,11 @@ class Screenshots {
                 attachments = listOf(
                     Attachment("b1", "Revised quote September.pdf", "application/pdf", 214_512),
                     Attachment("b2", "rear-elevation.jpg", "image/jpeg", 1_882_100),
+                    Attachment("b3", "signature.png", "image/png", 9_284, cid = "logo", inline = true),
                 ),
+                // The one the message carries is drawn; the other two stay in the list to
+                // save. Getting that backwards would offer a picture twice and show none.
+                images = mapOf("b3" to sampleImage()),
                 onLink = {},
             )
         }

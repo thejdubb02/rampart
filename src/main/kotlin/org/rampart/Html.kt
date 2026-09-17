@@ -60,7 +60,10 @@ private val LINKS = Regex("""(https?://|mailto:)[^\s<>"'`)\]}]+""")
 fun renderHtml(html: String, linkColor: Color, quoteColor: Color, onLink: (String) -> Unit): Rendered {
     val doc = Jsoup.parse(html)
     doc.select("script, style, noscript, head, title").remove()
-    val blocked = doc.select("img").size
+    // Only remote images count as blocked. An image the message carries with it is drawn
+    // from the message's own parts and tells the sender nothing, so counting it here would
+    // put "1 image was not loaded" above an image that is right there.
+    val blocked = doc.select("img").count { !it.attr("src").startsWith("cid:", ignoreCase = true) }
     val clean = Cleaner(SAFELIST).clean(doc)
     val walker = Walker(linkColor, quoteColor, onLink)
     clean.body().childNodes().forEach { walker.node(it) }

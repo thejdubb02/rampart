@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -60,6 +61,10 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import org.jetbrains.skia.Image
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.loadSvgPainter
 import androidx.compose.ui.res.useResource
@@ -417,6 +422,7 @@ private fun Reader(
     var attachments by remember { mutableStateOf<List<Attachment>>(emptyList()) }
     var thread by remember { mutableStateOf<List<Summary>>(emptyList()) }
     var bodyError by remember { mutableStateOf<String?>(null) }
+    var inlineImages by remember { mutableStateOf<Map<String, ImageBitmap>>(emptyMap()) }
     var saved by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
@@ -549,6 +555,7 @@ private fun Reader(
         val key = here?.first ?: return@LaunchedEffect
         body = null
         bodyError = null
+        inlineImages = emptyMap()
         attachments = emptyList()
         saved = null
         // Cleared only when this is a different conversation, so moving between messages in
@@ -564,6 +571,24 @@ private fun Reader(
             null
         }
         attachments = io { session(key).jmap.attachments(message.id) } ?: emptyList()
+
+        // Images the message carries with it are drawn. Fetching them asks the server this
+        // account is already signed in to, so it tells the sender nothing, which is the
+        // whole difference between these and the remote ones that stay blocked.
+        val embedded = attachments.filter { it.inline && it.type.startsWith("image/") }
+        if (embedded.isNotEmpty()) {
+            inlineImages = withContext(Dispatchers.IO) {
+                embedded.mapNotNull { part ->
+                    val bytes = runCatching { session(key).jmap.blob(part) }.getOrNull()
+                        ?: return@mapNotNull null
+                    // A part that claims to be an image and is not must not take the pane
+                    // down with it.
+                    val bitmap = runCatching { Image.makeFromEncoded(bytes).toComposeImageBitmap() }
+                        .getOrNull() ?: return@mapNotNull null
+                    part.blobId to bitmap
+                }.toMap()
+            }
+        }
         if (thread.isEmpty()) thread = io { session(key).jmap.thread(message.threadId) } ?: emptyList()
 
         // A draft is not something to read. Clicking one puts it back in the composer,
@@ -836,6 +861,7 @@ private fun Reader(
                 },
                 onLink = { confirm = it },
                 bodyError = bodyError,
+                images = inlineImages,
                 thread = thread,
                 onPick = { selected = it },
                 actions = actions,
@@ -1321,6 +1347,8 @@ internal fun Message(
     replyAll: Boolean = false,
     /** Why the message would not open, when it would not. */
     bodyError: String? = null,
+    /** Decoded images the message carries, by blob id. */
+    images: Map<String, ImageBitmap> = emptyMap(),
     /** The whole conversation, oldest first, including [summary]. Empty when there is none. */
     thread: List<Summary> = emptyList(),
     onPick: (Summary) -> Unit = {},
@@ -1459,11 +1487,37 @@ internal fun Message(
                     SelectionContainer { Text(rendered.text, style = MaterialTheme.typography.bodyLarge) }
                     }
 
-                    if (attachments.isNotEmpty()) {
+                    val drawn = attachments.filter { it.blobId in images }
+                    if (drawn.isNotEmpty()) {
+                        Spacer(Modifier.height(16.dp))
+                        drawn.forEach { part ->
+                            images[part.blobId]?.let { bitmap ->
+                                Image(
+                                    bitmap = bitmap,
+                                    contentDescription = part.name,
+                                    // Inside rather than Fit, so a small logo stays a small
+                                    // logo. Fit blew a signature image up to the width of
+                                    // the reading pane.
+                                    contentScale = ContentScale.Inside,
+                                    // ponytail: drawn under the text rather than where the
+                                    // body puts them. Placing them in the flow means the
+                                    // renderer returning blocks instead of one string, which
+                                    // is a bigger change than seeing the picture is worth.
+                                    modifier = Modifier
+                                        .sizeIn(maxWidth = 620.dp, maxHeight = 520.dp)
+                                        .padding(vertical = 6.dp),
+                                )
+                            }
+                        }
+                    }
+
+                    // Only the ones that are not already on screen above.
+                    val files = attachments.filter { it.blobId !in images }
+                    if (files.isNotEmpty()) {
                         Spacer(Modifier.height(24.dp))
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         Spacer(Modifier.height(14.dp))
-                        attachments.forEach { attachment ->
+                        files.forEach { attachment ->
                             Row(
                                 Modifier.fillMaxWidth().padding(vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically,

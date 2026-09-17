@@ -62,7 +62,16 @@ data class Summary(
 /** An address this account is allowed to send as. */
 data class Identity(val id: String, val name: String, val email: String)
 
-data class Attachment(val blobId: String, val name: String, val type: String, val size: Long)
+data class Attachment(
+    val blobId: String,
+    val name: String,
+    val type: String,
+    val size: Long,
+    /** The Content-ID an `<img src="cid:...">` in the body points at, when there is one. */
+    val cid: String? = null,
+    /** Part of the message as written, rather than a file sent along with it. */
+    val inline: Boolean = false,
+)
 
 /**
  * Only ever one of these is drawn, and html wins when both are present. The two header
@@ -279,6 +288,33 @@ class Jmap private constructor(
         )
     }
 
+    /**
+     * A part's bytes, held in memory.
+     *
+     * Only for images drawn in the body, which is why it is capped rather than streamed
+     * like [download]. A message that claims a 200MB inline image must not be able to take
+     * the app down with it.
+     */
+    fun blob(attachment: Attachment, limit: Long = 8L * 1024 * 1024): ByteArray? {
+        if (downloadUrl.isBlank() || attachment.size > limit) return null
+        val url = downloadUrl
+            .replace("{accountId}", pct(accountId))
+            .replace("{blobId}", pct(attachment.blobId))
+            .replace("{type}", pct(attachment.type.ifBlank { "application/octet-stream" }))
+            .replace("{name}", pct(attachment.name.ifBlank { "attachment" }))
+        val response = http.send(
+            HttpRequest.newBuilder(runCatching { URI.create(url) }.getOrNull() ?: return null)
+                .header("Authorization", credential)
+                .timeout(Duration.ofSeconds(60))
+                .GET()
+                .build(),
+            HttpResponse.BodyHandlers.ofByteArray(),
+        )
+        if (response.statusCode() != 200) return null
+        val bytes = response.body()
+        return if (bytes.size > limit) null else bytes
+    }
+
     fun attachments(emailId: String): List<Attachment> {
         val email = call(
             invoke("Email/get", "a") {
@@ -300,7 +336,17 @@ class Jmap private constructor(
             val given = (o["name"] as? JsonPrimitive)?.contentOrNull?.ifBlank { null }
             val name = given ?: nameFromType(type)
             val size = (o["size"] as? JsonPrimitive)?.longOrNull ?: 0L
-            Attachment(blobId = blobId, name = name, type = type, size = size)
+            val cid = (o["cid"] as? JsonPrimitive)?.contentOrNull?.ifBlank { null }
+            Attachment(
+                blobId = blobId,
+                name = name,
+                type = type,
+                size = size,
+                cid = cid,
+                // A part is part of the body when it says so, or when the body points at
+                // it by Content-ID. Some senders set the cid and leave the disposition off.
+                inline = (o["disposition"] as? JsonPrimitive)?.contentOrNull == "inline" || cid != null,
+            )
         }
     }
 
