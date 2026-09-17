@@ -54,33 +54,56 @@ The client keeps `id -> (message id, recipient, subject, sent at)` locally. The 
 keeps only the id and when it was fetched. Nothing on the server needs to know who the
 message was to, so it does not get to.
 
-### The endpoint
+### The endpoint, and the fact that a desktop app does not have one
 
-A tiny service on vps1, behind the same nginx that fronts the mail host.
+This is where the first design was wrong, and it was wrong in the way every feature here
+can be wrong: it assumed our server. The first draft put the pixel on vps1 and had it set
+the keyword through the Stalwart admin token. That works for exactly one person.
+
+**Rampart is a desktop app somebody else installs.** They have a mailbox. They do not have
+a public web server, they do not have our vps1, and they certainly do not have admin rights
+on their mail server, which a mail client should never ask for.
+
+So the pixel host is **a separate, optional, self-hosted thing**, and Rampart only needs to
+be pointed at it:
+
+- One setting, a base URL, in the same shape as bringing your own model key. Empty by
+  default.
+- With it empty, the tracking toggle in the composer is visibly unavailable and says why,
+  in one sentence, with a link to the page explaining how to run one. Not hidden: a feature
+  that silently is not there reads as a broken app.
+- The server itself is about a hundred lines and a Dockerfile, in this repo under
+  `tracker/`, so running one is a compose file and a DNS record. It serves the GIF, keeps
+  the log, and answers one authenticated question: what has been opened since this time.
+- Ours runs on vps1 next to the Resend labeller. That is our deployment, not part of the
+  product.
 
 | | |
 |---|---|
-| URL | `https://<a short host>/o/<id>.gif` |
+| URL | `https://<the host you run>/o/<id>.gif` |
 | Answers | a 1x1 transparent GIF, 43 bytes, `Cache-Control: no-store` |
-| Records | the id, the time, the user agent, the requesting IP's network, nothing else |
-| Gated | **never.** A gate answers a machine caller with a 302 that reads as success |
+| Records | the id, the time, the user agent, the requesting network, nothing else |
+| Auth | a token Rampart holds, on the read-back call only. The GIF itself is public, because the recipient's mail client has to be able to fetch it |
+| Gated | **never** put the GIF behind an SSO gate. A gate answers a machine caller with a 302 that reads as success |
 
-Not on `mail.willhitestrategy.org`. A hostname that says "mail" in a tracking URL is a
-tell, and some filters score it. A short neutral host on a domain we already own.
+A hostname with "mail" in it is a tell that some filters score, so the suggested setup uses
+a short neutral host. That is advice in the setup page, not something Rampart enforces.
 
-### Getting the open back to the client
+### Getting the open back to the client, without admin rights
 
-The same shape as the existing bounce and open labelling, and for the same reason: a
-keyword on the message in Sent is the one place both Rampart and Bulwark can see it, and
-it survives Rampart being closed.
+Rampart asks its tracking server what has been opened since it last asked, and writes the
+result into the local store. That is the whole loop, and it needs nothing from the mail
+server at all.
 
-The service sets `$label:opened` on the Sent copy through the management token that
-`/root/stalwart_jmap.py` already holds, which was verified to work on any account before
-`wsg-mail-open-label` was built. So this adds no new secret.
+Then, optionally, it marks the message in the mailbox: a `$label:opened` keyword on the
+Sent copy, **set by Rampart using the signed-in user's own session**. A person can write
+keywords to their own Sent folder on any JMAP server, and on IMAP too, so this needs no
+admin token, no management credential, and nothing that only we have. The earlier design
+reached for our admin token out of habit and was both less portable and more dangerous.
 
-Rampart shows it as a tag on the row and a line on the message: "Opened 14:32 today", and
-on hover the count. It does not need to poll anything; the keyword arrives with the push
-that is already running.
+The keyword is worth setting because it is the one place another client can see the same
+thing: open Bulwark or a phone and the message is still marked. Where the account cannot
+store keywords, the open still shows in Rampart, from the local store.
 
 ### In the composer
 
@@ -167,8 +190,10 @@ of it is somebody else's job here already.
 | Tracking on by default | **No. Off, per message, remembered per recipient domain.** Theirs is on by default on desktop. Say the word and it flips |
 | "Sent with Mailtrack" footer on the free plan | No |
 
-An open notification also goes to Justin's phone through Herald on the `mail` tag, which
-already carries the bounce alerts, so that part is wiring rather than building.
+The open notification is a desktop notification, which every install gets. Getting it
+somewhere else is one optional setting: a webhook URL that Rampart posts to. Ours points at
+Herald, which already carries the bounce alerts, so that part is configuration rather than
+code, and nobody else has to have a Herald to get the feature.
 
 ### Bot filtering, since it is the whole difference
 
@@ -188,9 +213,9 @@ makes somebody chase a lead who never read anything.
 These all need the local store (roadmap 2.3), so they come after it rather than with the
 pixel:
 
-- **A tracking view**: everything sent tracked, opened or not, open rate, filterable, CSV
-  out. Their "activity dashboard" and "campaign report" collapse into one screen for us,
-  because we are not running campaigns.
+- **A tracking view**, which is one panel of the dashboard below: everything sent tracked,
+  opened or not, open rate, filterable, CSV out. Their "activity dashboard" and "campaign
+  report" collapse into one screen for us, because we are not running campaigns.
 - **Not-opened follow-up reminders** at 24, 48 or 72 hours, and **no-reply reminders**.
   A reminder to Justin, never an auto-send. Nothing client-facing sends itself.
 - **Revival alerts**, an old message reopened after a long gap, and **open spikes**. Cheap
@@ -233,6 +258,45 @@ knowing what it is.
 - **CRM, Zapier, Salesforce sync.** The MCP server is the integration story: one boundary,
   outside the process, already planned.
 - **Mobile, and a browser extension.** Rampart is a desktop client.
+
+## The dashboard, which needs no server at all
+
+Asked for alongside the tracking, and it is the better half of the idea: **how your mail is
+actually going**, on one screen.
+
+The thing that makes it worth building first is that **all of it comes out of the mailbox
+Rampart is already reading.** No pixel, no endpoint, no DNS, no setting to configure.
+Somebody who installs Rampart and signs in gets the whole dashboard on day one, whether
+they run a tracking host or not, whether they are on Stalwart or Gmail or plain IMAP. It is
+the one big feature on this list with no infrastructure attached to it.
+
+What goes on it, all of it counted from the local store:
+
+- **Volume.** Received and sent, by day, week and month, per account and combined. The
+  shape of a mailbox over time is something no webmail shows you and everybody is curious
+  about the first time they see it.
+- **Spam and junk.** How much arrived, what share of the total it is, whether it is getting
+  worse, and which senders and domains account for most of it. Counted from what actually
+  landed in Junk, so it measures the filter as well as the spam.
+- **Who you talk to.** Top senders, top recipients, and the ones you never reply to.
+- **How fast you reply**, and what is still waiting on you: received, no reply, oldest
+  first. The most useful number on the screen, because it is the only one that is about
+  something you can still do.
+- **Unread debt**, by folder and by age.
+- **Attachments and storage**, what is eating the quota.
+- **Opens**, when a tracking host is configured. One panel among the others, empty and
+  explained when it is not.
+
+Deliberately not on it: anything that needs a model, and anything that leaves the machine.
+This is counting, and counting is not a feature that should cost money or send mail
+anywhere.
+
+It lands after the local store (roadmap 2.3), because it is a set of queries and there is
+nothing to query before that exists. It should be built in front of the open tracking
+rather than behind it: the dashboard works for every user, and the tracking is one panel on
+it that most users will never switch on.
+
+---
 
 ### Order
 

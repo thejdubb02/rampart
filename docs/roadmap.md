@@ -19,7 +19,7 @@ next.** Section "The next ten" below is that answer, and it is the only ordered 
 matters. Everything after it is the reasoning, kept so the order can be challenged with
 something better rather than with a preference.
 
-The same ten are on the **Rampart board in Kaneo**
+The same list is on the **Rampart board in Kaneo**
 (`kaneo.willhitestrategy.org`, workspace Willhite Strategy Group, project RAM), one card
 each, carrying the same done-when. The board is for tracking what is moving; this file is
 for the reasoning behind the order. When they disagree, this file is wrong and should be
@@ -36,9 +36,37 @@ Three rules for keeping it true:
 
 ---
 
-## The next ten
+## The test every feature has to pass: somebody who is not us
 
-In order. Nothing below line 10 is scheduled; it is only sorted.
+Rampart is public and Apache 2.0, and the person installing it has a mailbox and nothing
+else. No vps1, no Herald, no Vaultwarden, no admin rights on their mail server, and no
+willingness to acquire any of those to read their email.
+
+So every feature is designed against that person first, and our own deployment is treated
+as one install among others rather than as the platform. Three rules that fall out of it:
+
+- **A feature may not require infrastructure we happen to own.** Where one genuinely needs
+  a server, it becomes an optional thing the user can run, with the server in this repo and
+  a setting pointing at it, and the feature is visibly unavailable and explained until they
+  do. Open tracking is the worked example, and the first draft of it failed this test.
+- **Never ask for admin rights on the mail server.** Rampart is a client. Anything it does
+  to a mailbox it does as the signed-in user, with that user's own session. The first open
+  tracking design reached for our Stalwart admin token out of habit; it was both less
+  portable and more dangerous, and it is gone.
+- **Prefer the version that needs no server at all.** The dashboard counts what is already
+  in the mailbox, so it works for everyone on day one with nothing configured. That is the
+  shape to aim for, and it is why it ships in front of the tracking rather than behind it.
+
+What already passes: sign-in takes a bare hostname and finds the server through
+`/.well-known/jmap`; passwords go to the OS credential store or are not stored at all; the
+accounts file cannot hold a secret by construction. What does not pass yet is listed as it
+is found.
+
+---
+
+## The next eleven
+
+In order. Nothing below the last line is scheduled; it is only sorted.
 
 | # | What | Why it is here | Done when |
 |---|---|---|---|
@@ -46,14 +74,15 @@ In order. Nothing below line 10 is scheduled; it is only sorted.
 | 2 | **Sieve filters with a builder** (2.2) | How a mailbox stays usable with nobody tending it. Gates the assistant work. | A rule built in the UI files real mail on the server, survives a round trip through Bulwark, and the raw editor shows the same script. |
 | 3 | **Command palette** (2.6) | Table stakes in every product the spec compares us against, and cheap now. | Ctrl+K runs every action the shortcut list names, by typing part of its name. |
 | 4 | **Local store** (2.3) | No offline, no instant search, nowhere to put anything. Gates tiers 3 and 4. | Reading and searching a folder works with the network off; a refresh asks only for what changed. |
-| 5 | **Folder management** (2.4) | Cannot create, rename or delete a folder today. | Create, rename, move, nest and delete, on both accounts. |
-| 6 | **Message list pass** (2.5) | Individually small, together the difference between a demo and a client. | Sort order, mark-as-read delay, right-click menus, hover actions, virtual scrolling, attachment reminder, empty-subject confirm. |
-| 7 | **IMAP and SMTP with OAuth2** (2.7) | The point Rampart stops being a client for one server. | A Gmail account and a generic IMAP account both read, send, file and search, with SPECIAL-USE folders found correctly. |
-| 8 | **Templates, read receipts, undo-send** (2.8) | Daily-use features with no model anywhere near them. | A template fills placeholders and sends; an MDN is requested and answered; a send can be taken back inside the window. |
-| 9 | **Contacts, read-only** (2.9) | Recipient autocomplete is the one place contacts leak into mail. | Typing three letters into To offers real contacts; a sender can be added from a message. |
-| 10 | **Thread summaries** (tier 4) | The first assistant feature, and the one with nothing to go wrong. | A twenty-message thread summarises in a side pane, off by default, with the packet viewable before it is sent. |
+| 5 | **Mailbox dashboard** (2.11) | Volume, spam, who you talk to, what is still waiting on a reply. Counted from the mailbox, so it needs no server and every install gets it. | Sent and received volume, junk share, top senders, unanswered mail and reply times, per account and combined, computed offline. |
+| 6 | **Folder management** (2.4) | Cannot create, rename or delete a folder today. | Create, rename, move, nest and delete, on both accounts. |
+| 7 | **Message list pass** (2.5) | Individually small, together the difference between a demo and a client. | Sort order, mark-as-read delay, right-click menus, hover actions, virtual scrolling, attachment reminder, empty-subject confirm. |
+| 8 | **IMAP and SMTP with OAuth2** (2.7) | The point Rampart stops being a client for one server. | A Gmail account and a generic IMAP account both read, send, file and search, with SPECIAL-USE folders found correctly. |
+| 9 | **Templates, read receipts, undo-send, open tracking** (2.8) | Daily-use features with no model anywhere near them. | A template fills placeholders and sends; an MDN is requested and answered; a send can be taken back inside the window. |
+| 10 | **Contacts, read-only** (2.9) | Recipient autocomplete is the one place contacts leak into mail. | Typing three letters into To offers real contacts; a sender can be added from a message. |
+| 11 | **Thread summaries** (tier 4) | The first assistant feature, and the one with nothing to go wrong. | A twenty-message thread summarises in a side pane, off by default, with the packet viewable before it is sent. |
 
-**Not in the ten, on purpose:** encryption, calendar, contacts as an application, the
+**Not in the eleven, on purpose:** encryption, calendar, contacts as an application, the
 admin console, and everything else in tiers 3, 5 and 6. They are real and they are later.
 
 ---
@@ -230,6 +259,25 @@ is tier 5.
 Only once it can be made server-truthful, through Sieve or a companion, so the message
 does not come back from the dead on the phone. A snooze that only one device knows about
 is worse than none.
+
+### 2.11 The mailbox dashboard
+
+How your mail is actually going, on one screen. Volume in and out by day, week and month.
+How much junk arrives, what share of the total it is, whether it is getting worse, and
+which domains account for it. Who you talk to most, and who you never reply to. How fast
+you reply, and what is still waiting on you, oldest first. Unread debt by folder and age.
+What is eating the quota. Opens, when a tracking host is configured, as one panel among the
+others.
+
+It is fifth rather than later because of what it does **not** need: no pixel, no endpoint,
+no DNS, no model, no setting. Every number comes out of the mailbox Rampart has already
+read, so it works on Stalwart, on Gmail and on plain IMAP, offline, for anyone who installs
+the app and signs in. It is the largest feature on this list with no infrastructure
+attached, and it is the reason the open tracking sits behind it rather than in front.
+
+**Done when:** sent and received volume, junk share, top senders, unanswered mail and reply
+times all render per account and combined, computed from the local store with the network
+off.
 
 ---
 

@@ -1,7 +1,7 @@
 # rampart - a desktop client for Stalwart
 
-Mail plus the whole server admin surface, on Windows, Linux and macOS. Public repo
-eventually, so everything here is written to be read by strangers.
+Mail plus the whole server admin surface, on Windows, Linux and macOS. **The repo is
+public**, so everything here is written to be read, and run, by strangers.
 
 ## The rules that matter
 
@@ -9,8 +9,12 @@ eventually, so everything here is written to be read by strangers.
   already built that app and builds it faster than we could. Rampart exists for the
   two things Sterna does not do: desktop, and real server administration. Read
   `docs/architecture.md` before arguing with this.
-- **JMAP only.** IMAP cannot carry settings, filters, aliases or admin, so an IMAP
-  account here could only ever be a plain inbox. Not on the roadmap.
+- **JMAP first, IMAP and SMTP second, and both ship.** This said "JMAP only" until
+  2026-09-17, on the reasoning that IMAP cannot carry settings, filters, aliases or
+  admin. All true, and beside the point: a client that only talks to Stalwart is a
+  client almost nobody can install. IMAP accounts get the mail and lose the admin,
+  each missing capability degrading with a visible reason rather than an error.
+  Roadmap 2.7 has the list of what IMAP cannot do and what we do instead.
 - **Do not hand write settings screens.** Stalwart publishes 359 forms at
   `/api/schema`. One renderer, every screen, and it survives Stalwart releases.
   Gate the menu on `GET /api/account` permissions, not on the schema.
@@ -26,7 +30,34 @@ eventually, so everything here is written to be read by strangers.
 
 ## Layout
 
-Nothing built yet. When it is: `docs/` for decisions, the Gradle project at the root.
+The Gradle project is at the root, decisions are in `docs/`, and the optional
+companion server lives in `server/` with its own compose file.
+
+## Built for somebody who is not us
+
+The person installing this has a mailbox and nothing else: no VPS, no notification
+router, no admin rights on their mail server, and no interest in acquiring any of
+them to read their email. Our own deployment is one install among others, never the
+platform. So every feature is one of three things, and which one is a design decision
+made up front rather than discovered at the end:
+
+1. **Works on its own.** The mail, the reader, the dashboard, search, filters. Needs
+   a mailbox and nothing else. **Always prefer this shape.** The dashboard counts what
+   is already in the mailbox, which is why it ships ahead of open tracking.
+2. **Needs the companion server**, the optional thing in `server/`. **One companion,
+   not one per feature**: a single container, a single hostname, a single setting in
+   Rampart, and every feature that needs it lights up together. Five separate addons
+   means nobody runs any of them. A feature in this class is visibly unavailable and
+   says why in one sentence until the setting is filled in, never silently missing.
+3. **Needs their own mail server.** The admin console, and anything Stalwart-specific.
+   Hidden on an account that cannot do it.
+
+**Never ask for admin rights on the mail server to deliver a mail feature.** Rampart
+is a client: what it does to a mailbox it does as the signed-in user, with that user's
+own session. Open tracking's first draft set a keyword through our Stalwart admin
+token, which worked for exactly one person and was more dangerous besides.
+
+`docs/self-hosting.md` is the contract and lists which features sit in which class.
 
 ## Test servers
 
@@ -46,7 +77,7 @@ scrubbed.
 
 Every push runs the tests. Only a manual run packages and publishes:
 
-    gh workflow run build.yml -f release=true
+    gh workflow run build.yml --field release=true
 
 It used to release on every push, which gave a version number to every commit and
 asked an installed copy to restart for a one line change. Packaging is also the
