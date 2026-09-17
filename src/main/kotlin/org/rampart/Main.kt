@@ -535,6 +535,7 @@ private fun Reader(
     var error by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf<String?>(null) }
     var showShortcuts by remember { mutableStateOf(false) }
+    var showPalette by remember { mutableStateOf(false) }
 
     fun session(key: String) = sessions.first { it.key == key }
 
@@ -874,6 +875,69 @@ private fun Reader(
         )
     }
 
+    /** Shows the message as it arrived, or puts it away again. */
+    fun toggleSource() {
+        val message = selected
+        val key = accountOf(message)
+        when {
+            source != null -> source = null
+            message != null && key != null -> {
+                source = "Fetching the original..."
+                scope.launch {
+                    source = io { session(key).jmap.raw(message.id) }
+                        ?: "The server would not hand over the original of this message."
+                }
+            }
+        }
+    }
+
+    /** Opens [role] on the account whose folder is showing, or the first that has one. */
+    fun goTo(role: String) {
+        val key = here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key ?: return
+        folderFor(role, mailboxes[key].orEmpty())?.let { here = key to it }
+    }
+
+    /**
+     * What a command from the palette does. The keyboard shortcuts call the same things,
+     * so the two cannot drift into meaning different things by the same name.
+     */
+    fun run(id: String) {
+        val ours = identities[writingAccount()].orEmpty().map { it.email }.toSet()
+        val from = ours.firstOrNull().orEmpty()
+        when (id) {
+            "compose" -> { sendError = null; composing = Draft(from = from) }
+            "reply" -> selected?.let { composing = replyTo(it, body, from) }
+            "reply-all" -> selected?.let { composing = replyTo(it, body, from, true, ours) }
+            "forward" -> selected?.let { composing = forwardOf(it, body, from) }
+            "archive" -> actions.archive?.invoke()
+            "trash" -> actions.trash?.invoke()
+            "junk" -> actions.junk?.invoke()
+            "star" -> actions.star?.invoke()
+            "read" -> {
+                val message = selected
+                val key = accountOf(message)
+                if (message != null && key != null && !message.seen) {
+                    emails = emails.map { if (it.id == message.id) it.copy(seen = true) else it }
+                    scope.launch { io { session(key).jmap.setKeyword(listOf(message.id), "\$seen", true) } }
+                }
+            }
+            "source" -> toggleSource()
+            "search" -> searchField.requestFocus()
+            "refresh" -> scope.launch { refreshNow() }
+            "next" -> emails.indexOfFirst { it.id == selected?.id }
+                .let { if (emails.isNotEmpty()) selected = emails[nextIndex(it, emails.size, 1)] }
+            "previous" -> emails.indexOfFirst { it.id == selected?.id }
+                .let { if (emails.isNotEmpty()) selected = emails[nextIndex(it, emails.size, -1)] }
+            "go-unified" -> if (sessions.size > 1) here = ALL_ACCOUNTS to allInboxes(0)
+            "go-inbox" -> goTo("inbox")
+            "go-archive" -> goTo("archive")
+            "go-sent" -> goTo("sent")
+            "go-drafts" -> goTo("drafts")
+            "settings" -> settingsOpen = true
+            "shortcuts" -> showShortcuts = true
+        }
+    }
+
     /**
      * The shortcuts, and the one rule that makes them safe: a bare letter does nothing
      * while the search box has focus, or a reply would become a search for "r".
@@ -887,6 +951,11 @@ private fun Reader(
         }
         if (event.isCtrlPressed && event.key == Key.Comma) {
             settingsOpen = true
+            return true
+        }
+        // Above the modifier guard below, because the modifier is what makes it this.
+        if (event.isCtrlPressed && event.key == Key.K) {
+            showPalette = true
             return true
         }
         // Shift is what makes it a question mark on most layouts, so the search key has to
@@ -1316,20 +1385,7 @@ private fun Reader(
                 attachments = attachments,
                 savedTo = saved,
                 source = source,
-                onSource = {
-                    val message = selected
-                    val key = accountOf(message)
-                    when {
-                        source != null -> source = null
-                        message != null && key != null -> {
-                            source = "Fetching the original..."
-                            scope.launch {
-                                source = io { session(key).jmap.raw(message.id) }
-                                    ?: "The server would not hand over the original of this message."
-                            }
-                        }
-                    }
-                },
+                onSource = ::toggleSource,
                 onSaveSource = {
                     val message = selected
                     val text = source
@@ -1397,6 +1453,10 @@ private fun Reader(
             },
             onLater = { update = null },
         )
+    }
+
+    if (showPalette) {
+        CommandPalette(onClose = { showPalette = false }) { command -> run(command.id) }
     }
 
     if (showShortcuts) ShortcutsOverlay { showShortcuts = false }

@@ -100,6 +100,12 @@ class Screenshots {
                 UpdateCard("0.1.44", installing = true, note = null, onRestart = {}, onLater = {})
             }
         }
+        shoot("palette", 1000, 700, dark) {
+            Box(Modifier.fillMaxSize()) {
+                Panes()
+                CommandPalette(onClose = {}, onRun = {})
+            }
+        }
         shoot("shortcuts", 1000, 800, dark) {
             Box(Modifier.fillMaxSize()) {
                 Panes()

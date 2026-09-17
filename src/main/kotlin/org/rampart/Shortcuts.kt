@@ -58,6 +58,7 @@ internal val SHORTCUTS: List<Shortcut> = listOf(
     Shortcut("C", "Write a new message", "Writing"),
     Shortcut("Ctrl+Enter", "Send", "Writing"),
     Shortcut("Esc", "Close the composer", "Writing"),
+    Shortcut("Ctrl+K", "Every command, by name", "Everything else"),
     Shortcut("?", "This list", "Everything else"),
     Shortcut("Ctrl+,", "Settings", "Everything else"),
 )
