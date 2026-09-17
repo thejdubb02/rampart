@@ -139,6 +139,10 @@ Encrypted at rest with a key in the OS credential store, per account.
 What it buys immediately: offline reading, search that answers as you type, and a refresh
 that asks only for what changed. What it unlocks later: everything in tier 4.
 
+It is also where the open-tracking log lives, and with it the tracking view, the
+not-opened and no-reply reminders, and the alert when an old message is opened again.
+Those are queries over a log, so there is nowhere to put them before this exists.
+
 **Done when:** a folder read once can be read and searched with the network off, a
 refresh fetches only what changed since the stored cursor, and the file is unreadable
 without the key in the credential store.
@@ -199,6 +203,18 @@ capability IMAP lacks degrades with a visible reason rather than an error.
   with no model anywhere near it.
 - **Read receipts** (MDN, RFC 8098), both directions, opt-in, and honest: an MDN is not a
   tracking pixel and must never be described as one.
+- **Open tracking**, the pixel kind, the way Mailsuite's Mailtrack does it. Asked for on
+  2026-09-17, which reverses a line that used to sit under "Deliberately not doing": the
+  old reason was that the feature spec warned against copying competitors, and knowing
+  whether outreach was read is a better reason than that was. Our own endpoint, off by
+  default and per message, remembered per recipient domain. One check sent, two checks
+  opened, in the list. The Sent copy never carries the pixel, so opening your own mail
+  cannot register. An open from Gmail's proxy, from Apple Mail Privacy Protection or from a
+  corporate scanner is recorded as a fetch rather than a read, because an open count that
+  counts robots makes somebody chase a lead who never read anything. Every Mailtrack
+  feature is gone through one at a time in `open-tracking.md`, including the ones we are
+  not doing: link rewriting, PDF page analytics, campaigns, and per-recipient identity
+  inside a group send.
 - **Undo-send**, held in the client. **Scheduled send is not possible against this
   server**: Stalwart advertises `urn:ietf:params:jmap:submission` with no
   `maxDelayedSend`, which per RFC 8621 means zero, so a future `sendAt` is refused.
@@ -227,6 +243,12 @@ Roughly the spec's "trust core", and the part where being wrong is expensive.
   worse than no warning, because the next one is not believed either.
 - **On-device phishing signals** that work with AI off: a login form in the HTML, brand
   impersonation, homoglyph domains.
+- **Naming the trackers in mail we receive.** Rampart already blocks remote images and
+  already knows which images are remote, so saying which of them is a tracking pixel and
+  who it reports to is a short step from where we are. We are building a tracker and a
+  tracker-blocker in one application, and that is the right way round: blocking is the
+  default for everyone, tracking is switched on per message by somebody who knows what it
+  is.
 - **Encryption at rest**, local store first, and Stalwart's own as a setting.
 - **S/MIME or OpenPGP.** Pick one and finish it. A client that says a message is signed
   when it has not really checked is a lie with consequences, so half of either is worse
@@ -313,8 +335,6 @@ is new.
   this application. No script engine in the process means the whole class of HTML mail
   exploit does not apply to us, and a newsletter that looks plain is the price.
   `architecture.md` has the full argument.
-- **Open tracking.** The spec lists it as a thing competitors do and says not to copy it
-  blindly. We are not copying it at all. Read receipts are RFC 8098 and consented.
 - **Plugins, an extension marketplace, uploadable themes.** Every hook is an API we then
   keep, and a plugin that can read the mail body is a security boundary we would own. The
   MCP server is the extension story instead: one boundary, outside the process.
