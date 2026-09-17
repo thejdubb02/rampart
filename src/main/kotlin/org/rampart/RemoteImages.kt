@@ -85,8 +85,17 @@ internal fun imageSenderKey(fromEmail: String): String {
  * opening six connections to a sender's server to read their newsletter is not a thing to
  * do to them or to a slow link. The ones that fail are simply missing.
  */
-internal suspend fun fetchRemote(body: Body?): Map<String, ImageBitmap> {
-    val html = body?.html ?: return emptyMap()
+internal suspend fun fetchRemote(body: Body?): Map<String, ImageBitmap> =
+    fetchRemote(body?.html)
+
+/**
+ * The same, for HTML that did not come out of a message.
+ *
+ * Used by the signature preview, where the caution the rest of this file exists for does
+ * not apply: it is your own signature, and there is no sender to be told you opened it.
+ */
+internal suspend fun fetchRemote(html: String?): Map<String, ImageBitmap> {
+    html ?: return emptyMap()
     // Deduplicated: a newsletter that uses the same spacer forty times is forty requests to
     // the same address for the same bytes, and it is drawn from this map by address anyway.
     val urls = htmlBlocks(html, Color.Unspecified, Color.Unspecified) {}.remoteImages.distinct()

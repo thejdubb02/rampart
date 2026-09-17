@@ -1,5 +1,6 @@
 package org.rampart
 
+import androidx.compose.ui.graphics.Color
 import java.util.Base64
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -79,5 +80,35 @@ class SignaturePictureTest {
         val wrapped = b64.chunked(4).joinToString("\n")
         val found = signaturePictures("""<img src="data:image/png;base64,$wrapped">""")
         assertContentEquals(png, found.first().bytes)
+    }
+}
+
+/**
+ * The signature layout that is actually on the server: a two cell table, logo beside the
+ * block. A float does not survive Outlook and a flex box survives almost nothing, so the
+ * table is not a style choice, and the preview has to be able to draw it.
+ */
+class SignatureLayoutTest {
+    private val real = """
+        <div style="font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.5;color:#555;margin-top:18px;padding-top:12px;border-top:1px solid #e5e5e5"><table cellpadding="0" cellspacing="0" border="0"><tr><td style="padding-right:14px;vertical-align:middle"><img src="https://willhitestrategy.com/wsg-logo.png" width="110" height="56" alt="Willhite Strategy Group" style="display:block;border:0"></td><td style="vertical-align:middle;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.5;color:#555"><div style="color:#222;font-weight:600">Justin Willhite</div><div>Willhite Strategy Group</div><div>Web design and local SEO, Santa Rosa, CA</div><div><a href="https://willhitestrategy.com" style="color:#555">willhitestrategy.com</a></div></td></tr></table></div>
+    """.trimIndent()
+
+    @Test
+    fun `the logo is found so the preview has something to fetch`() {
+        val blocks = htmlBlocks(real, Color.Unspecified, Color.Unspecified) {}
+        assertEquals(listOf("https://willhitestrategy.com/wsg-logo.png"), blocks.remoteImages)
+    }
+
+    @Test
+    fun `the words beside the logo are not lost with the table`() {
+        val drawn = htmlBlocks(real, Color.Unspecified, Color.Unspecified) {}.toString()
+        listOf("Justin Willhite", "Willhite Strategy Group", "Santa Rosa", "willhitestrategy.com")
+            .forEach { assertTrue(it in drawn, "the preview dropped \"$it\"") }
+    }
+
+    @Test
+    fun `a signature with no picture asks for nothing`() {
+        val plain = "<div>Justin Willhite</div><div>Dealophant</div>"
+        assertTrue(htmlBlocks(plain, Color.Unspecified, Color.Unspecified) {}.remoteImages.isEmpty())
     }
 }

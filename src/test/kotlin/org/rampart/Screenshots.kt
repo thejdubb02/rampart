@@ -409,9 +409,21 @@ private fun SettingsScreen(page: String) {
             identities = listOf(
                 Identity(
                     "i1", "Justin Willhite", "justin@willhitestrategy.com",
-                    htmlSignature = """<div style="color:#555"><b>Justin Willhite</b><br>""" +
-                        """Willhite Strategy Group<br>""" +
-                        """<a href="https://willhitestrategy.com">willhitestrategy.com</a></div>""",
+                    // The shape a real one has: a two cell table with the logo beside the
+                    // block, because that is the only layout Outlook and Gmail both keep.
+                    htmlSignature = """<div style="font-family:Arial,Helvetica,sans-serif;""" +
+                        """font-size:13px;line-height:1.5;color:#555;margin-top:18px;""" +
+                        """padding-top:12px;border-top:1px solid #e5e5e5">""" +
+                        """<table cellpadding="0" cellspacing="0" border="0"><tr>""" +
+                        """<td style="padding-right:14px;vertical-align:middle">""" +
+                        """<img src="https://willhitestrategy.com/wsg-logo.png" width="110" """ +
+                        """height="56" alt="Willhite Strategy Group" style="display:block"></td>""" +
+                        """<td style="vertical-align:middle">""" +
+                        """<div style="color:#222;font-weight:600">Justin Willhite</div>""" +
+                        """<div>Willhite Strategy Group</div>""" +
+                        """<div>Web design and local SEO, Santa Rosa, CA</div>""" +
+                        """<a href="https://willhitestrategy.com">willhitestrategy.com</a>""" +
+                        """</td></tr></table></div>""",
                 ),
                 Identity("i2", "Skybox7", "admin@skybox7.com"),
             ),

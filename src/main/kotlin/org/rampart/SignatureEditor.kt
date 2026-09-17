@@ -18,6 +18,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,6 +28,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.unit.dp
 import java.nio.file.Files
 import java.nio.file.Path
@@ -127,14 +129,26 @@ internal fun SignatureEditor(
             // renderer as received mail, which is the point: this is how it will look,
             // embedded picture included.
             val rendered = remember(html, linkColor) { htmlBlocks(html, linkColor, quoteColor) {} }
+            // Fetched rather than held back, unlike a message. A signature is one you wrote
+            // yourself, so there is nobody to be told it was opened and nothing being
+            // decided on your behalf. Showing a placeholder where your own logo goes is the
+            // one thing this preview must not do: it is the only place you can check it.
+            var pictures by remember { mutableStateOf<Map<String, ImageBitmap>>(emptyMap()) }
+            // Tracked separately from the map being empty, or the line below would accuse
+            // every signature of a broken picture for as long as the fetch takes.
+            var fetched by remember(html) { mutableStateOf(false) }
+            LaunchedEffect(html) {
+                pictures = fetchRemote(html)
+                fetched = true
+            }
             Column {
-                HtmlBody(rendered, emptyMap(), emptyMap())
-                if (rendered.blockedImages > 0) {
+                HtmlBody(rendered, emptyMap(), pictures)
+                if (fetched && rendered.blockedImages > pictures.size) {
                     Text(
-                        "A picture from the web is held back until the reader asks for it, and " +
-                            "asking tells you the mail was opened. It is still the only way to " +
-                            "put a logo in a signature: one carried inside is far past what a " +
-                            "mail server will store.",
+                        "A picture here could not be loaded, so check the address. Note that a " +
+                            "picture from the web is held back by most clients until the reader " +
+                            "asks for it. It is still the only way to put a logo in a signature: " +
+                            "one carried inside is far past what a mail server will store.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline,
                         modifier = Modifier.padding(top = 6.dp),
