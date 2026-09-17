@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -208,6 +209,7 @@ internal fun Composer(
     var saveState by remember(initial) { mutableStateOf("") }
     var attaching by remember(initial) { mutableStateOf(false) }
     var attachError by remember(initial) { mutableStateOf<String?>(null) }
+    var warning by remember(initial) { mutableStateOf<String?>(null) }
     val firstField = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
 
@@ -242,6 +244,18 @@ internal fun Composer(
      * A preview handler rather than a plain one, because the focus is inside a text field
      * and a field that takes Enter would swallow it first.
      */
+    /*
+     * Both ways of sending go through here, so the button and Ctrl+Enter cannot end up
+     * asking different questions. A warning is a question with a Send anyway on it, never
+     * a refusal: a client that will not send a message with no subject is one people learn
+     * to fight, and the fight is won by turning the warnings off.
+     */
+    fun send() {
+        if (sending || draft.recipients.isEmpty()) return
+        val question = sendWarning(draft.subject, draft.body, draft.attachments.size)
+        if (question == null) onSend(draft) else warning = question
+    }
+
     fun format(before: String, after: String): Boolean {
         if (sending) return false
         val next = wrapSelection(body, before, after)
@@ -254,7 +268,7 @@ internal fun Composer(
         if (event.type != KeyEventType.KeyDown) return false
         return when {
             event.isCtrlPressed && (event.key == Key.Enter || event.key == Key.NumPadEnter) -> {
-                if (!sending && draft.recipients.isNotEmpty()) onSend(draft)
+                send()
                 true
             }
             event.key == Key.Escape -> {
@@ -314,7 +328,7 @@ internal fun Composer(
                     }
                     TextButton(onClick = onDiscard, enabled = !sending) { Text("Discard") }
                     Button(
-                        onClick = { onSend(draft) },
+                        onClick = ::send,
                         enabled = !sending && draft.recipients.isNotEmpty(),
                     ) { Text(if (sending) "Sending" else "Send") }
                 }
@@ -476,6 +490,22 @@ internal fun Composer(
                 }
             }
         }
+    }
+
+    warning?.let { question ->
+        AlertDialog(
+            onDismissRequest = { warning = null },
+            text = { Text(question) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        warning = null
+                        onSend(draft)
+                    },
+                ) { Text("Send anyway") }
+            },
+            dismissButton = { TextButton(onClick = { warning = null }) { Text("Go back") } },
+        )
     }
 
     LaunchedEffect(Unit) { firstField.requestFocus() }

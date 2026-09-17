@@ -55,6 +55,7 @@ internal val SHORTCUTS: List<Shortcut> = listOf(
     Shortcut("S", "Star or unstar", "Acting on a message"),
     Shortcut("Shift+click", "Pick a run of messages", "Acting on a message"),
     Shortcut("Ctrl+click", "Add one message to the picked set", "Acting on a message"),
+    Shortcut("Right-click", "Everything above, on the message under the pointer", "Acting on a message"),
     Shortcut("C", "Write a new message", "Writing"),
     Shortcut("Ctrl+B", "Bold", "Writing"),
     Shortcut("Ctrl+I", "Italic", "Writing"),

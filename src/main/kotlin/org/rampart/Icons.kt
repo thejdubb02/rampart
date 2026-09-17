@@ -67,6 +67,15 @@ internal object RampartIcons {
     val Expand = icon("Expand", "m7 4 5 5-5 5")
     val More = icon("More", "M9 4.2v.1M9 9v.1M9 13.8v.1")
 
+    /** Three rules, longest first, which is what every list reads as "order". */
+    val Sort = icon("Sort", "M3 4.5h12M3 9h8M3 13.5h4")
+
+    /** An open envelope, for marking something unread again. */
+    val Unread = icon("Unread", "M2.6 7.2 9 2.6l6.4 4.6v7.2H2.6zM2.6 7.2 9 11.4l6.4-4.2")
+
+    /** A sealed envelope, for marking something read. */
+    val Read = icon("Read", "M2.6 4.8h12.8v8.4H2.6zM2.6 4.8 9 9.6l6.4-4.8")
+
     /**
      * Roles are the standard JMAP ones. Anything else is somebody's own folder and gets the
      * plain folder glyph rather than a guess.

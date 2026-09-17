@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.VerticalDivider
@@ -176,7 +178,13 @@ class Screenshots {
                 onSelect = { _, _ -> },
             )
             VerticalDivider()
-            MessageList(MESSAGES, MESSAGES[1], loading = false, title = "Inbox") { _, _, _ -> }
+            MessageList(
+                MESSAGES,
+                MESSAGES[1],
+                loading = false,
+                title = "Inbox",
+                rowActions = ROW_ACTIONS,
+            ) { _, _, _ -> }
             VerticalDivider()
             Message(
                 summary = MESSAGES[1].copy(keywords = setOf("\$seen", "invoices", "groundworks")),
@@ -226,6 +234,17 @@ private val MAILBOXES = listOf(
 private val ACCOUNTS = listOf(
     AccountMailboxes("work", "Willhite Strategy", "justin@willhitestrategy.com", MAILBOXES),
     AccountMailboxes("personal", "Skybox7", "admin@skybox7.com", MAILBOXES.take(3)),
+)
+
+/** Every row action present, so a shot shows the whole menu rather than part of it. */
+private val ROW_ACTIONS = RowActions(
+    reply = { _, _ -> },
+    forward = {},
+    archive = {},
+    junk = {},
+    trash = {},
+    star = {},
+    markRead = { _, _ -> },
 )
 
 private val MESSAGES = listOf(

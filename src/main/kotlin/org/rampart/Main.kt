@@ -71,6 +71,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -512,6 +513,7 @@ private fun Reader(
     var installing by remember { mutableStateOf(false) }
     var installNote by remember { mutableStateOf<String?>(null) }
     var notifyOnArrival by remember { mutableStateOf(Settings.notifyOnArrival()) }
+    var order by remember { mutableStateOf(Settings.order()) }
     val searchField = remember { FocusRequester() }
     val keyboard = remember { FocusRequester() }
     var mailboxes by remember { mutableStateOf<Map<String, List<Mailbox>>>(emptyMap()) }
@@ -822,56 +824,126 @@ private fun Reader(
         }
 
         if (!message.seen) {
+            /*
+             * The pause, when there is one, comes out of this effect rather than a timer:
+             * moving to another message cancels it, so a message you passed through on the
+             * way down the list is never marked.
+             *
+             * That is the whole reason to want a delay. Arrow-keying down an inbox with no
+             * pause marks everything you go past as read, which is how a morning's unread
+             * mail disappears while somebody is looking for one message in it.
+             */
+            val wait = Settings.markReadDelay()
+            // Negative means never on its own, so the row menu is the only way. Checked
+            // before the delay, not after, or "never" would be "after a pause".
+            if (wait < 0) return@LaunchedEffect
+            if (wait > 0) delay(wait)
             io { session(key).jmap.markSeen(message.id) }
             emails = emails.map { if (it.id == message.id) it.copy(seen = true) else it }
         }
     }
 
-    // What can be done to the open message depends on which folders this account has:
-    // a server with no Archive folder should not offer an Archive button that fails.
-    val actions = run {
-        val message = selected
-        val key = accountOf(message)
-        if (key == null || message == null) return@run MessageActions()
-        val boxes = mailboxes[key].orEmpty()
-        fun moveTo(role: String): (() -> Unit)? {
-            val target = folderFor(role, boxes) ?: return null
-            val from = sourceFolder(key)
-            return {
-                scope.launch {
-                    if (io { session(key).jmap.move(listOf(message.id), target.id) } != null) {
-                        emails = emails.filterNot { it.id == message.id }
+    /*
+     * Filing one message, wherever the click came from: the button above the open message
+     * and the right-click menu on a row are the same operation and must behave the same
+     * way, including leaving the same thing behind to undo. One function, two callers.
+     *
+     * Returns null when this account has no folder for that role, so a server with no
+     * Archive never offers an Archive that would fail.
+     */
+    fun fileAway(message: Summary, role: String): (() -> Unit)? {
+        val key = accountOf(message) ?: return null
+        val target = folderFor(role, mailboxes[key].orEmpty()) ?: return null
+        val from = sourceFolder(key)
+        return {
+            scope.launch {
+                if (io { session(key).jmap.move(listOf(message.id), target.id) } != null) {
+                    emails = emails.filterNot { it.id == message.id }
+                    if (selected?.id == message.id) {
                         selected = null
                         body = null
-                        // One message can be taken back the same way a batch can. Filing
-                        // the wrong thing is a click, and having to go and find it again
-                        // is the part that makes people slow and careful about a button.
-                        undo = from?.let {
-                            Undoable(listOf(Move(key, listOf(message.id), it)), pastTense(role))
-                        }
+                    }
+                    // One message can be taken back the same way a batch can. Filing the
+                    // wrong thing is a click, and having to go and find it again is the
+                    // part that makes people slow and careful about a button.
+                    undo = from?.let {
+                        Undoable(listOf(Move(key, listOf(message.id), it)), pastTense(role))
                     }
                 }
-                Unit
+            }
+            Unit
+        }
+    }
+
+    /** Starring one message, from the reader or from a row. */
+    fun starOne(message: Summary) {
+        val key = accountOf(message) ?: return
+        val wanted = !message.flagged
+        // The star turns over at once and is put back if the server says no. A star that
+        // waits for a round trip feels broken at the speed people click.
+        fun show(value: Boolean) {
+            emails = emails.map { if (it.id == message.id) it.copy(flagged = value) else it }
+            if (selected?.id == message.id) selected = selected?.copy(flagged = value)
+        }
+        show(wanted)
+        scope.launch {
+            if (io { session(key).jmap.setKeyword(listOf(message.id), "\$flagged", wanted) } == null) {
+                show(!wanted)
             }
         }
+    }
+
+    /** Read or unread, from a row, without having to open the message to do it. */
+    fun markRead(message: Summary, read: Boolean) {
+        val key = accountOf(message) ?: return
+        emails = emails.map { if (it.id == message.id) it.copy(seen = read) else it }
+        if (selected?.id == message.id) selected = selected?.copy(seen = read)
+        scope.launch { io { session(key).jmap.setKeyword(listOf(message.id), "\$seen", read) } }
+    }
+
+    /*
+     * The same operations, reachable without opening the message first.
+     *
+     * Reply and forward have to fetch that message's body before they can quote it: the
+     * body held in state belongs to whatever is open, which on a right-click is usually
+     * something else. Quoting the wrong message is worse than a moment's wait.
+     */
+    val rowActions = RowActions(
+        reply = { message, all ->
+            val key = accountOf(message)
+            if (key != null) {
+                scope.launch {
+                    val ours = identities[key].orEmpty().map { it.email }
+                    val text = io { session(key).jmap.body(message.id) }
+                    composing = replyTo(message, text, ours.firstOrNull().orEmpty(), all, ours.toSet())
+                }
+            }
+        },
+        forward = { message ->
+            val key = accountOf(message)
+            if (key != null) {
+                scope.launch {
+                    val from = identities[key].orEmpty().firstOrNull()?.email.orEmpty()
+                    composing = forwardOf(message, io { session(key).jmap.body(message.id) }, from)
+                }
+            }
+        },
+        archive = { message -> fileAway(message, "archive")?.invoke() },
+        junk = { message -> fileAway(message, "junk")?.invoke() },
+        trash = { message -> fileAway(message, "trash")?.invoke() },
+        star = ::starOne,
+        markRead = ::markRead,
+    )
+
+    val actions = run {
+        val message = selected ?: return@run MessageActions()
+        if (accountOf(message) == null) return@run MessageActions()
+        fun moveTo(role: String): (() -> Unit)? = fileAway(message, role)
         MessageActions(
             archive = moveTo("archive"),
             trash = moveTo("trash"),
             junk = moveTo("junk"),
-            star = {
-                val wanted = !message.flagged
-                // The star turns over at once and is put back if the server says no. A
-                // star that waits for a round trip feels broken at the speed people click.
-                emails = emails.map { if (it.id == message.id) it.copy(flagged = wanted) else it }
-                selected = selected?.copy(flagged = wanted)
-                scope.launch {
-                    if (io { session(key).jmap.setKeyword(listOf(message.id), "\$flagged", wanted) } == null) {
-                        emails = emails.map { if (it.id == message.id) it.copy(flagged = !wanted) else it }
-                        selected = selected?.copy(flagged = !wanted)
-                    }
-                }
-                Unit
-            },
+            star = { starOne(message) },
         )
     }
 
@@ -1255,6 +1327,9 @@ private fun Reader(
                 },
                 picked = picked,
                 onRefresh = { scope.launch { refreshNow() } },
+                order = order,
+                onOrder = { order = it; Settings.setOrder(it) },
+                rowActions = rowActions,
                 onSelect = { message, ctrl, shift ->
                     picked = pickedAfter(emails.map { it.id }, picked, anchor, message.id, ctrl, shift)
                     if (!shift) anchor = message.id
@@ -1802,6 +1877,11 @@ internal fun MessageList(
     /** Everything picked out, which is [selected] alone until somebody holds a key down. */
     picked: Set<String> = emptySet(),
     onRefresh: () -> Unit = {},
+    /** How the rows are ordered, and how to change it. */
+    order: Order = Order.NEWEST,
+    onOrder: (Order) -> Unit = {},
+    /** What a right-click or a hover button on a row can do. */
+    rowActions: RowActions = RowActions(),
     onSelect: (Summary, ctrl: Boolean, shift: Boolean) -> Unit,
 ) {
     Column(
@@ -1823,6 +1903,33 @@ internal fun MessageList(
                     )
                 }
                 Spacer(Modifier.width(6.dp))
+                var sorting by remember { mutableStateOf(false) }
+                Box {
+                    IconButton(onClick = { sorting = true }, modifier = Modifier.size(26.dp)) {
+                        Icon(
+                            RampartIcons.Sort,
+                            contentDescription = "Sort order, currently ${order.label.lowercase()}",
+                            tint = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    }
+                    DropdownMenu(expanded = sorting, onDismissRequest = { sorting = false }) {
+                        Order.entries.forEach { option ->
+                            DropdownMenuItem(
+                                text = { Text(option.label) },
+                                leadingIcon = {
+                                    // A tick on the one in use rather than a highlighted
+                                    // row, which reads as hover on a menu this short.
+                                    Text(if (option == order) "*" else " ")
+                                },
+                                onClick = {
+                                    sorting = false
+                                    onOrder(option)
+                                },
+                            )
+                        }
+                    }
+                }
                 // Rampart looks for new mail on its own, but waiting up to a minute to find
                 // out whether something arrived is not the same as being able to ask.
                 IconButton(onClick = onRefresh, enabled = !loading, modifier = Modifier.size(26.dp)) {
@@ -1846,11 +1953,14 @@ internal fun MessageList(
                     modifier = Modifier.align(Alignment.Center),
                 )
                 else -> LazyColumn(Modifier.fillMaxSize()) {
-                    items(emails, key = { it.id }) { message ->
+                    // LazyColumn only builds the rows on screen, so a folder with thirty
+                    // thousand messages in it costs the same as one with twenty.
+                    items(sorted(emails, order), key = { it.id }) { message ->
                         MessageRow(
                             message = message,
                             selected = message.id == selected?.id || message.id in picked,
                             accountLabel = accountLabels[message.account],
+                            actions = rowActions,
                             onSelect = onSelect,
                         )
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -1867,8 +1977,12 @@ private fun MessageRow(
     message: Summary,
     selected: Boolean,
     accountLabel: String? = null,
+    actions: RowActions = RowActions(),
     onSelect: (Summary, ctrl: Boolean, shift: Boolean) -> Unit,
 ) {
+    var menu by remember { mutableStateOf(false) }
+    var hovered by remember { mutableStateOf(false) }
+
     Row(
         Modifier.fillMaxWidth()
             .background(if (selected) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent)
@@ -1876,13 +1990,26 @@ private fun MessageRow(
             // carry them, and holding control to add a second message to a selection is how
             // every desktop list has worked for thirty years.
             .onPointerEvent(PointerEventType.Press) { event ->
-                if (event.button == PointerButton.Primary) {
-                    val keys = event.keyboardModifiers
-                    onSelect(message, keys.isCtrlPressed || keys.isMetaPressed, keys.isShiftPressed)
+                when (event.button) {
+                    PointerButton.Primary -> {
+                        val keys = event.keyboardModifiers
+                        onSelect(message, keys.isCtrlPressed || keys.isMetaPressed, keys.isShiftPressed)
+                    }
+                    // Right-click selects as well as opening the menu. A menu acting on a
+                    // message other than the one under the pointer is how the wrong thing
+                    // gets deleted.
+                    PointerButton.Secondary -> {
+                        if (!selected) onSelect(message, false, false)
+                        menu = true
+                    }
+                    else -> Unit
                 }
             }
+            .onPointerEvent(PointerEventType.Enter) { hovered = true }
+            .onPointerEvent(PointerEventType.Exit) { hovered = false }
             .height(IntrinsicSize.Min),
     ) {
+        RowMenu(message, actions, menu) { menu = false }
         // A 2px edge rather than a fully tinted row: it marks the selection without
         // competing with the unread dot for the same piece of attention.
         Box(
@@ -1928,11 +2055,31 @@ private fun MessageRow(
                     )
                 }
                 Spacer(Modifier.width(8.dp))
-                Text(
-                    message.receivedAt.asLocalTime(),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline,
-                )
+                // The buttons take the date's place rather than sitting beside it, which is
+                // what every list that has these does: appearing next to it would move the
+                // date sideways under the pointer and make the row twitch as you scan it.
+                if (hovered) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        actions.markRead?.let { mark ->
+                            RowButton(
+                                if (message.seen) RampartIcons.Unread else RampartIcons.Read,
+                                if (message.seen) "Mark unread" else "Mark read",
+                            ) { mark(message, !message.seen) }
+                        }
+                        actions.archive?.let { archive ->
+                            RowButton(RampartIcons.Archive, "Archive") { archive(message) }
+                        }
+                        actions.trash?.let { trash ->
+                            RowButton(RampartIcons.Trash, "Delete") { trash(message) }
+                        }
+                    }
+                } else {
+                    Text(
+                        message.receivedAt.asLocalTime(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
             }
             Spacer(Modifier.height(3.dp))
             Row(Modifier.padding(start = 13.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1980,6 +2127,77 @@ private fun MessageRow(
 }
 
 /** The buttons the open message offers. A null one is not offered at all. */
+/**
+ * What the right-click menu and the hover buttons on a row can do.
+ *
+ * Separate from [MessageActions], which belongs to the message that is open and therefore
+ * needs no argument. A row has to say which message it means, and there are eight of them
+ * on screen at once.
+ *
+ * Every member is nullable for the same reason as [MessageActions]: an account with no Junk
+ * folder does not get a Junk entry rather than getting one that fails.
+ */
+/** One of the small buttons that appear on a row under the pointer. */
+@Composable
+private fun RowButton(icon: ImageVector, what: String, onClick: () -> Unit) {
+    IconButton(onClick = onClick, modifier = Modifier.size(22.dp)) {
+        Icon(
+            icon,
+            contentDescription = what,
+            tint = MaterialTheme.colorScheme.outline,
+            modifier = Modifier.size(13.dp),
+        )
+    }
+}
+
+/**
+ * The right-click menu on a row.
+ *
+ * Every entry is left out rather than disabled when the account cannot do it, because a
+ * greyed row invites a second click to find out why. The order is the one every mail client
+ * uses, and the destructive pair is at the bottom behind a divider so a menu that opens
+ * under the pointer cannot delete something on the way past.
+ */
+@Composable
+private fun RowMenu(message: Summary, actions: RowActions, open: Boolean, onClose: () -> Unit) {
+    DropdownMenu(expanded = open, onDismissRequest = onClose) {
+        // Closing before acting, so the menu is gone by the time the list under it changes.
+        @Composable
+        fun entry(label: String, does: () -> Unit) = DropdownMenuItem(
+            text = { Text(label) },
+            onClick = {
+                onClose()
+                does()
+            },
+        )
+        actions.reply?.let {
+            entry("Reply") { it(message, false) }
+            entry("Reply all") { it(message, true) }
+        }
+        actions.forward?.let { entry("Forward") { it(message) } }
+        actions.markRead?.let {
+            entry(if (message.seen) "Mark unread" else "Mark read") { it(message, !message.seen) }
+        }
+        actions.star?.let { entry(if (message.flagged) "Remove star" else "Star") { it(message) } }
+        actions.archive?.let { entry("Archive") { it(message) } }
+        if (actions.junk != null || actions.trash != null) {
+            HorizontalDivider()
+            actions.junk?.let { entry("Mark as spam") { it(message) } }
+            actions.trash?.let { entry("Delete") { it(message) } }
+        }
+    }
+}
+
+internal data class RowActions(
+    val reply: ((Summary, all: Boolean) -> Unit)? = null,
+    val forward: ((Summary) -> Unit)? = null,
+    val archive: ((Summary) -> Unit)? = null,
+    val junk: ((Summary) -> Unit)? = null,
+    val trash: ((Summary) -> Unit)? = null,
+    val star: ((Summary) -> Unit)? = null,
+    val markRead: ((Summary, read: Boolean) -> Unit)? = null,
+)
+
 internal data class MessageActions(
     val archive: (() -> Unit)? = null,
     val trash: (() -> Unit)? = null,

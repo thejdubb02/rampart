@@ -29,6 +29,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
@@ -103,6 +104,7 @@ internal fun SettingsPane(
                     when (page) {
                         "accounts" -> AccountsPage(accounts, onAddAccount)
                         "notifications" -> NotificationsPage(notifyOnArrival, onNotifyOnArrival)
+                        "reading" -> ReadingPage()
                         "themes" -> ThemesPage(onTheme)
                         "identities" -> IdentitiesPage(
                             identities, signatureError, onSignature, onPickSignatureImage,
@@ -126,6 +128,7 @@ internal fun SettingsPane(
 private val SettingsPages: List<Triple<String, String, String>> = listOf(
     Triple("accounts", "Accounts", "General"),
     Triple("notifications", "Notifications", "General"),
+    Triple("reading", "Reading", "Mail"),
     Triple("themes", "Themes", "Appearance"),
     Triple("identities", "Identities and signatures", "Mail"),
     Triple("away", "Away reply", "Mail"),
@@ -184,6 +187,43 @@ private fun ThemesPage(onTheme: (Theme) -> Unit) {
     ) {
         items(THEMES, key = { it.key }) { theme ->
             ThemeCard(theme, selected = theme.key == current.key) { onTheme(theme) }
+        }
+    }
+}
+
+/**
+ * How long an open message waits before it counts as read.
+ *
+ * Offered as a few choices rather than a number box: the useful values are "at once" and
+ * "long enough to pass over it", and asking somebody for milliseconds is asking them to
+ * guess at something they can only judge by feel.
+ */
+@Composable
+private fun ReadingPage() {
+    var delay by remember { mutableStateOf(Settings.markReadDelay()) }
+    Section(
+        "Marking as read",
+        "Arrow-keying down a list with no pause marks every message you pass through.",
+    )
+    listOf(
+        0L to "At once",
+        2000L to "After 2 seconds",
+        5000L to "After 5 seconds",
+        -1L to "Never, unless I say so",
+    ).forEach { (value, label) ->
+        Row(
+            Modifier.fillMaxWidth().clickable {
+                delay = value
+                Settings.setMarkReadDelay(value)
+            }.padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(selected = delay == value, onClick = {
+                delay = value
+                Settings.setMarkReadDelay(value)
+            })
+            Spacer(Modifier.width(8.dp))
+            Text(label, style = MaterialTheme.typography.bodyMedium)
         }
     }
 }

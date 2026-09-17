@@ -9,6 +9,7 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.nio.file.Files
@@ -68,6 +69,23 @@ object Settings {
     fun notifyOnArrival(): Boolean = read()["notify"]?.jsonPrimitive?.booleanOrNull ?: true
 
     fun setNotifyOnArrival(value: Boolean) = write { put("notify", JsonPrimitive(value)) }
+
+    /** An order that is no longer in the enum reads as the default rather than crashing. */
+    internal fun order(): Order = read()["order"]?.jsonPrimitive?.contentOrNull
+        ?.let { name -> Order.entries.firstOrNull { it.name == name } } ?: Order.NEWEST
+
+    internal fun setOrder(value: Order) = write { put("order", JsonPrimitive(value.name)) }
+
+    /**
+     * How long an open message waits before it counts as read, in milliseconds.
+     *
+     * Zero means at once, which is the default and what Rampart has always done. The reason
+     * to want anything else is arrow-keying down a list: without a pause, every message you
+     * pass through is marked read, which is how a morning's unread mail disappears.
+     */
+    fun markReadDelay(): Long = read()["markReadDelay"]?.jsonPrimitive?.longOrNull ?: 0L
+
+    fun setMarkReadDelay(value: Long) = write { put("markReadDelay", JsonPrimitive(value)) }
 
     /**
      * Senders whose pictures may be fetched from the web. Domains, not addresses: see
