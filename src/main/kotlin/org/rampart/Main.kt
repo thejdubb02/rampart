@@ -404,6 +404,8 @@ private fun Reader(
     var searchFocused by remember { mutableStateOf(false) }
     var collapsed by remember { mutableStateOf(Settings.sidebarCollapsed()) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var installing by remember { mutableStateOf(false) }
+    var installNote by remember { mutableStateOf<String?>(null) }
     var notifyOnArrival by remember { mutableStateOf(Settings.notifyOnArrival()) }
     val searchField = remember { FocusRequester() }
     val keyboard = remember { FocusRequester() }
@@ -441,9 +443,21 @@ private fun Reader(
      */
     LaunchedEffect(Unit) {
         while (true) {
-            update = withContext(Dispatchers.IO) { Updates.newerVersion() }
+            if (!installing) update = withContext(Dispatchers.IO) { Updates.newerVersion() }
             delay(30 * 60_000L)
         }
+    }
+
+    // Windows closes this window when the new version is in place, so still being here
+    // three minutes later means it did not happen. Said plainly rather than left on
+    // "Installing" forever, and the next check offers it again.
+    LaunchedEffect(installing) {
+        if (!installing) return@LaunchedEffect
+        delay(3 * 60_000L)
+        installNote = "That did not install. Windows will fetch it in the background instead."
+        delay(20_000L)
+        installNote = null
+        installing = false
     }
 
     LaunchedEffect(sessions.size) {
@@ -693,17 +707,27 @@ private fun Reader(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "Rampart $version is ready.",
+                    installNote ?: "Rampart $version is ready.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = {
-                        // If the updater is not where it should be, closing is still the
-                        // right move: Windows installs it on its own, just later.
-                        Updates.restartToUpdate()
-                        onQuit()
-                    }) { Text("Restart now") }
-                    TextButton(onClick = { update = null }) { Text("Later") }
+                if (!installing) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = {
+                            // The window stays up while Windows fetches the package, which
+                            // can be most of a minute, and Windows closes it at the swap.
+                            // Quitting first would leave nothing on screen during the wait,
+                            // which looks exactly like a button that did nothing.
+                            if (Updates.restartToUpdate()) {
+                                installing = true
+                                installNote = "Installing Rampart $version. This window will close itself."
+                            } else {
+                                // Not a packaged copy. Closing is still the right move:
+                                // Windows installs it on its own, only later.
+                                onQuit()
+                            }
+                        }) { Text("Restart now") }
+                        TextButton(onClick = { update = null }) { Text("Later") }
+                    }
                 }
             }
         }

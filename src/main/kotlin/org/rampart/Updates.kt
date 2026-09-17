@@ -24,6 +24,13 @@ import kotlinx.serialization.json.jsonPrimitive
 object Updates {
     private const val LATEST = "https://api.github.com/repos/thejdubb02/rampart/releases/latest"
 
+    /** The manifest Windows reads to find the current package. Always names the newest one. */
+    private const val APPINSTALLER =
+        "https://github.com/thejdubb02/rampart/releases/latest/download/rampart.appinstaller"
+
+    /** The package's name in the manifest, which is how Windows finds it to update. */
+    private const val PACKAGE = "Rampart"
+
     private val http: HttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
         .build()
@@ -53,12 +60,12 @@ object Updates {
     }.getOrNull()
 
     /**
-     * The package's own updater, which Windows installs beside the app. Running it applies
-     * whatever is published and starts Rampart again.
+     * The launcher Windows installs beside the app. Its presence is how we know this is a
+     * packaged copy rather than one run from source, which is the only thing it is used for
+     * now: running it does not update anything.
      *
      * Its location is searched for rather than assumed, because it belongs to the packaging
-     * tool rather than to us, and a wrong guess here would be a button that silently does
-     * nothing.
+     * tool rather than to us.
      */
     private fun updater(): Path? {
         val candidates = buildList {
@@ -77,15 +84,43 @@ object Updates {
     }
 
     /**
-     * Applies the update and restarts. Returns false when the updater is not where it
-     * should be, and the caller then just closes: Windows will pick the new version up on
-     * its own, only later.
+     * What to run to replace this copy with the published one and start it again.
+     *
+     * Windows will not replace a package while it is running, which is what
+     * ForceTargetApplicationShutdown is for. If the install fails, Rampart is started again
+     * anyway rather than leaving somebody with no app, and because the version will not have
+     * changed its own check offers the update again within seconds. A failure that corrects
+     * itself is better than a marker file nobody reads.
+     *
+     * The package family name is asked for rather than written down: it carries a hash of
+     * the signing identity, and a hardcoded one would silently stop matching the day that
+     * key is replaced.
+     */
+    internal fun updateCommand(): List<String> = listOf(
+        "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command",
+        // Single quotes and concatenation rather than an interpolated double-quoted string.
+        // The whole script crosses Java's Windows argument quoting as one argument, and a
+        // double quote inside it is the thing most likely not to survive the trip.
+        "try { Add-AppxPackage -AppInstallerFile '$APPINSTALLER' -ForceTargetApplicationShutdown } " +
+            "catch { }; " +
+            "\$f = (Get-AppxPackage -Name $PACKAGE).PackageFamilyName; " +
+            "Start-Process ('shell:appsFolder\\' + \$f + '!$PACKAGE')",
+    )
+
+    /**
+     * Installs the published version and restarts into it. Returns false when this is not a
+     * packaged copy, and the caller then just closes.
+     *
+     * It does not go through the package's own launcher. That launcher only checks for an
+     * update when Conveyor is set to `aggressive`, which we deliberately are not, because
+     * aggressive makes every cold start wait on the network before the window appears. Run
+     * in background mode it prints "Not in aggressive mode, launching the app" and does
+     * exactly that, so the restart button was restarting without updating. Read out of the
+     * shipped binary, not guessed.
      */
     fun restartToUpdate(): Boolean = runCatching {
-        val updater = updater() ?: return false
-        ProcessBuilder(updater.toString())
-            .directory(updater.parent.toFile())
-            .start()
+        updater() ?: return false
+        ProcessBuilder(updateCommand()).start()
         true
     }.getOrDefault(false)
 
