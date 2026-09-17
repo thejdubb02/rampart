@@ -113,7 +113,12 @@ admin console, and everything else in tiers 3, 5 and 6. They are real and they a
 5. **Filters, as Sieve**, in the format Bulwark already writes, so a rule made in either
    opens in the other. Anything a builder did not write is kept verbatim.
 6. **Unread only**, asked of the server rather than filtered out of the page we hold.
-7. **Templates, read receipts and undo-send.** A template fills `{{name}}` style
+7. **Contacts, on the server.** The address book the server already keeps, read and
+   written from here, and folded into the same list that drives recipient autocomplete so
+   there are not two answers to "who is this". Add the sender of an open message in one
+   click. Absent with a sentence saying why on a server with no address book, rather than
+   an error.
+8. **Templates, read receipts and undo-send.** A template fills `{{name}}` style
    placeholders from the recipient and the address book and drops into the composer without
    eating what is already written. A receipt is requested with one button and answered with
    one, as a draft for review rather than a message that sends itself, and a request
@@ -288,10 +293,45 @@ capability IMAP lacks degrades with a visible reason rather than an error.
   `maxDelayedSend`, which per RFC 8621 means zero, so a future `sendAt` is refused.
   Revisit if that changes.
 
-### 2.9 Contacts, read-only
+### 2.9 Contacts
 
-Only far enough for recipient autocomplete and add-from-message. The contacts application
-is tier 5.
+**Shipped 2026-09-17**, and read-write rather than read-only, because the write half turned
+out to be three methods rather than a feature.
+
+The server's address book, on JMAP `AddressBook` and `ContactCard`. Not a second list
+beside the one built from mail history: the cards are folded into the same book that
+already drives recipient autocomplete, through the same merge rule, so somebody typing a
+recipient never has to know which of the two sources knows the address.
+
+Three things checked against the live server rather than taken from the capability being
+advertised:
+
+- **`ContactCard/query` is not implemented in Stalwart 0.16.** Filtered, unfiltered and by
+  address book all answer `serverUnavailable`, which reads as an outage and is not one. So
+  every card is fetched in one call and searching happens in the client. Fine for a list
+  this size, and it is the same answer IMAP will need.
+- **The older draft's `Contact/get` answers `unknownMethod`.** The JSContact flavour
+  (RFC 9553) is the one to write against, and there is no fallback worth having because no
+  server offers one without the other.
+- **A card is saved whole, on top of the one that was read.** A birthday or a photo put
+  there by a phone survives being edited here, which a hand-built card would have deleted
+  silently on the first save. There is a test for exactly that.
+
+Still to come: several address books rather than only the default one, and reading a
+contact's picture.
+
+### 2.9b Calendar
+
+**Viable and not scheduled.** Stalwart advertises `urn:ietf:params:jmap:calendars` and
+`urn:ietf:params:jmap:principals:availability`, so a calendar on the JMAP side is the same
+shape of work contacts just turned out to be.
+
+The honest part of the answer is the other backend: **IMAP has no calendar at all.** It is
+a mail protocol, and a mail account's calendar lives on CalDAV, a separate protocol on a
+separate path with its own discovery. So calendar is a per-server capability the way Sieve
+is, present or absent with a reason shown, and never something that appears for everyone.
+Invitations in mail (`text/calendar` parts, RSVP) are a smaller and more useful first step
+than a calendar view, and they work against any server.
 
 ### 2.10 Snooze
 

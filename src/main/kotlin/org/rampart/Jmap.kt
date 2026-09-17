@@ -39,6 +39,7 @@ private const val MAIL = "urn:ietf:params:jmap:mail"
 private const val SUBMISSION = "urn:ietf:params:jmap:submission"
 private const val VACATION = "urn:ietf:params:jmap:vacationresponse"
 private const val SIEVE = "urn:ietf:params:jmap:sieve"
+private const val CONTACTS = "urn:ietf:params:jmap:contacts"
 
 private val json = Json { ignoreUnknownKeys = true }
 
@@ -687,6 +688,81 @@ class Jmap private constructor(
             active = (o["isActive"] as? JsonPrimitive)?.content == "true",
             blobId = o["blobId"]?.str().orEmpty(),
         )
+    }
+
+    /**
+     * Whether this server keeps an address book, so the UI can be absent rather than fail.
+     *
+     * Stalwart 0.16 advertises `urn:ietf:params:jmap:contacts`, which is the JSContact
+     * flavour: AddressBook and ContactCard. The older draft's Contact/get answers
+     * unknownMethod and are not a fallback worth having, because no server offers one
+     * without the other.
+     */
+    fun hasContacts(): Boolean = capabilities.any { it.endsWith(":contacts") }
+
+    internal fun addressBooks(): List<ContactBook> = call(
+        invoke("AddressBook/get", "a") { put("ids", JsonNull) },
+        also = CONTACTS,
+    )[0].list().map {
+        val o = it.jsonObject
+        ContactBook(
+            id = o["id"].require("id"),
+            name = o["name"]?.str().orEmpty().ifBlank { "Contacts" },
+            isDefault = (o["isDefault"] as? JsonPrimitive)?.content == "true",
+        )
+    }
+
+    /**
+     * Every card, with the raw JSON beside it.
+     *
+     * All of them, not a page and not a search: **ContactCard/query is not implemented in
+     * Stalwart 0.16**, in any form. Filtered, unfiltered and by address book all answer
+     * `serverUnavailable`, which reads as an outage and is not one. Checked against the
+     * live server rather than inferred from the capability being advertised. Searching and
+     * sorting therefore happen here, which is the right place for a list this size anyway.
+     *
+     * The raw object is kept so a save can be built on top of it and not destroy the
+     * properties this build does not draw.
+     */
+    internal fun contacts(): List<Pair<Contact, JsonObject>> = call(
+        invoke("ContactCard/get", "c") { put("ids", JsonNull) },
+        also = CONTACTS,
+    )[0].list().map { contactOf(it.jsonObject) to it.jsonObject }
+
+    /** Creates or updates one card, and returns its id. */
+    internal fun saveContact(contact: Contact, original: JsonObject? = null): String {
+        val card = merged(contact, original)
+        val response = call(
+            invoke("ContactCard/set", "c") {
+                if (contact.id.isBlank()) {
+                    putJsonObject("create") { put("new", card) }
+                } else {
+                    // The whole object rather than a patch. A patch would need every
+                    // property this build does not show spelled out as a path to leave
+                    // alone, and merged() already carries them.
+                    putJsonObject("update") { put(contact.id, card) }
+                }
+            },
+            also = CONTACTS,
+        )[0][1].jsonObject
+        if (contact.id.isBlank()) {
+            return response["created"]?.jsonObject?.get("new")?.jsonObject?.get("id")?.str()
+                ?: throw JmapError(refusal(response, "notCreated", "The server would not store the contact"))
+        }
+        if (response["updated"]?.jsonObject?.containsKey(contact.id) != true) {
+            throw JmapError(refusal(response, "notUpdated", "The server would not change the contact"))
+        }
+        return contact.id
+    }
+
+    fun deleteContact(id: String) {
+        val response = call(
+            invoke("ContactCard/set", "c") { putJsonArray("destroy") { add(id) } },
+            also = CONTACTS,
+        )[0][1].jsonObject
+        if (response["destroyed"]?.jsonArray?.any { it.str() == id } != true) {
+            throw JmapError(refusal(response, "notDestroyed", "The server would not delete the contact"))
+        }
     }
 
     /** The script's text. Empty when the server gave it no blob, which means no script yet. */

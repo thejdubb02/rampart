@@ -75,6 +75,7 @@ internal val COMMANDS: List<Command> = listOf(
     Command("Go to sent", null, "go-sent"),
     Command("Go to drafts", null, "go-drafts"),
     Command("Show only unread", "U", "unread-only"),
+    Command("Contacts", null, "contacts"),
     Command("New folder", null, "new-folder"),
     Command("Settings", "Ctrl+,", "settings"),
     Command("Keyboard shortcuts", "?", "shortcuts"),

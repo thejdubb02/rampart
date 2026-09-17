@@ -1,5 +1,6 @@
 package org.rampart
 
+import kotlinx.serialization.json.JsonObject
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -543,6 +544,12 @@ private fun Reader(
     var typing by remember { mutableStateOf(false) }
     var collapsed by remember { mutableStateOf(Settings.sidebarCollapsed()) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var contactsOpen by remember { mutableStateOf(false) }
+    // The server's cards, with the JSON each came from, so a save can be built on top
+    // of it and leave the properties this build does not draw alone.
+    var contacts by remember { mutableStateOf<List<Pair<Contact, JsonObject>>>(emptyList()) }
+    var contactsLoading by remember { mutableStateOf(false) }
+    var contactsError by remember { mutableStateOf<String?>(null) }
     var signatureError by remember { mutableStateOf<String?>(null) }
     var installing by remember { mutableStateOf(false) }
     var installNote by remember { mutableStateOf<String?>(null) }
@@ -906,6 +913,29 @@ private fun Reader(
                 ?.let { mailboxes = mailboxes + (one to it) }
         }
         reload()
+    }
+
+    /*
+     * Fetched when the pane opens and once on the first signed-in account, because the
+     * second reason for having them is autocomplete, which has to know before anyone asks
+     * for the list. All of them in one call: ContactCard/query is not implemented in
+     * Stalwart 0.16 and answers serverUnavailable in every form, so there is no paging to
+     * do and nothing to search server side.
+     */
+    LaunchedEffect(contactsOpen, sessions.size) {
+        val key = writingAccount() ?: return@LaunchedEffect
+        if (contacts.isNotEmpty() && !contactsOpen) return@LaunchedEffect
+        if (!session(key).jmap.hasContacts()) return@LaunchedEffect
+        contactsLoading = true
+        contactsError = null
+        try {
+            contacts = withContext(Dispatchers.IO) { session(key).jmap.contacts() }
+        } catch (e: Exception) {
+            // Never fatal. The address book built from mail is the one that has to work.
+            contactsError = e.message ?: e.toString()
+        } finally {
+            contactsLoading = false
+        }
     }
 
     LaunchedEffect(settingsOpen, here) {
@@ -1304,7 +1334,8 @@ private fun Reader(
                 val key = here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key
                 if (key != null) folderAsk = FolderAsk(key, null, FolderJob.CreateInside)
             }
-            "settings" -> settingsOpen = true
+            "settings" -> { settingsOpen = true; contactsOpen = false }
+            "contacts" -> { contactsOpen = true; settingsOpen = false }
             "shortcuts" -> showShortcuts = true
         }
     }
@@ -1433,7 +1464,7 @@ private fun Reader(
                     account.jmap.saveDraft(draft, identity, drafts.id, draftId)
                 }
             },
-            book = books[writingAccount()].orEmpty(),
+            book = withContacts(books[writingAccount()].orEmpty(), contacts.map { it.first }),
             full = composeFull,
             onFull = { composeFull = it },
             onSend = { draft ->
@@ -1606,8 +1637,10 @@ private fun Reader(
                     AccountMailboxes(it.key, it.account.name, it.account.email, mailboxes[it.key].orEmpty())
                 },
                 here = here,
-                onSettings = { settingsOpen = !settingsOpen },
+                onSettings = { settingsOpen = !settingsOpen; if (settingsOpen) contactsOpen = false },
                 inSettings = settingsOpen,
+                onContacts = { contactsOpen = !contactsOpen; if (contactsOpen) settingsOpen = false },
+                inContacts = contactsOpen,
                 onAddAccount = onAddAccount,
                 collapsed = collapsed,
                 onToggleCollapsed = { collapsed = !collapsed; Settings.setSidebarCollapsed(collapsed) },
@@ -1629,7 +1662,70 @@ private fun Reader(
                 )
             }
             VerticalDivider()
-            if (settingsOpen) {
+            if (contactsOpen) {
+                ContactsPane(
+                    contacts = contacts.map { it.first },
+                    loading = contactsLoading,
+                    error = contactsError,
+                    onSave = if (sessions.any { it.jmap.hasContacts() }) { wanted ->
+                        val key = writingAccount()
+                        if (key != null) {
+                            scope.launch {
+                                contactsError = null
+                                try {
+                                    withContext(Dispatchers.IO) {
+                                        val jmap = session(key).jmap
+                                        val original = contacts.firstOrNull { it.first.id == wanted.id }?.second
+                                        // A new card has to land in a book, and the default
+                                        // one is the only sane guess. Stalwart refuses a
+                                        // card that belongs to none.
+                                        val books = if (wanted.bookIds.isEmpty()) {
+                                            listOfNotNull(
+                                                jmap.addressBooks()
+                                                    .firstOrNull { it.isDefault }?.id
+                                                    ?: jmap.addressBooks().firstOrNull()?.id,
+                                            )
+                                        } else {
+                                            wanted.bookIds
+                                        }
+                                        jmap.saveContact(wanted.copy(bookIds = books), original)
+                                        contacts = jmap.contacts()
+                                    }
+                                } catch (e: Exception) {
+                                    contactsError = e.message ?: e.toString()
+                                }
+                            }
+                        }
+                    } else {
+                        null
+                    },
+                    onDelete = { gone ->
+                        val key = writingAccount()
+                        if (key != null) {
+                            scope.launch {
+                                contactsError = null
+                                try {
+                                    withContext(Dispatchers.IO) {
+                                        val jmap = session(key).jmap
+                                        jmap.deleteContact(gone.id)
+                                        contacts = jmap.contacts()
+                                    }
+                                } catch (e: Exception) {
+                                    contactsError = e.message ?: e.toString()
+                                }
+                            }
+                        }
+                    },
+                    onWrite = { address ->
+                        contactsOpen = false
+                        sendError = null
+                        composing = Draft(
+                            from = identities[writingAccount()].orEmpty().firstOrNull()?.email.orEmpty(),
+                            to = address,
+                        )
+                    },
+                )
+            } else if (settingsOpen) {
                 SettingsPane(
                     accounts = sessions.map {
                         AccountMailboxes(it.key, it.account.name, it.account.email, mailboxes[it.key].orEmpty())
@@ -1822,6 +1918,38 @@ private fun Reader(
                 onLink = { confirm = it },
                 remoteImages = remoteImages,
                 unsubscribed = unsubscribed,
+                inContacts = selected?.fromEmail?.let { from ->
+                    contacts.any { it.first.emails.any { e -> e.equals(from, ignoreCase = true) } }
+                } ?: false,
+                onAddContact = if (sessions.any { it.jmap.hasContacts() }) {
+                    { message ->
+                        val key = writingAccount()
+                        if (key != null) {
+                            scope.launch {
+                                contactsError = null
+                                try {
+                                    withContext(Dispatchers.IO) {
+                                        val jmap = session(key).jmap
+                                        val book = jmap.addressBooks()
+                                            .let { books -> books.firstOrNull { it.isDefault } ?: books.firstOrNull() }
+                                        jmap.saveContact(
+                                            Contact(
+                                                name = message.from.trim(),
+                                                emails = listOf(message.fromEmail),
+                                                bookIds = listOfNotNull(book?.id),
+                                            ),
+                                        )
+                                        contacts = jmap.contacts()
+                                    }
+                                } catch (e: Exception) {
+                                    contactsError = e.message ?: e.toString()
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    null
+                },
                 onReceipt = { to ->
                     val message = selected ?: return@Message
                     sendError = null
@@ -2030,8 +2158,10 @@ internal fun Sidebar(
     here: Pair<String, Mailbox>?,
     collapsed: Boolean = false,
     inSettings: Boolean = false,
+    inContacts: Boolean = false,
     onToggleCollapsed: () -> Unit = {},
     onSettings: () -> Unit,
+    onContacts: () -> Unit = {},
     onAddAccount: () -> Unit,
     onWrite: () -> Unit,
     /** What a right-click on a folder can ask for. Null hides the menu entirely. */
@@ -2159,6 +2289,15 @@ internal fun Sidebar(
         }
 
         if (collapsed) {
+            IconButton(onClick = onContacts, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    RampartIcons.Contacts,
+                    contentDescription = "Contacts",
+                    tint = if (inContacts) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
             IconButton(onClick = onSettings, modifier = Modifier.size(32.dp)) {
                 Icon(
                     RampartIcons.Settings,
@@ -2183,6 +2322,15 @@ internal fun Sidebar(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 TextButton(onClick = onAddAccount) { Text("Add account", style = MaterialTheme.typography.bodySmall) }
+                IconButton(onClick = onContacts, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        RampartIcons.Contacts,
+                        contentDescription = "Contacts",
+                        tint = if (inContacts) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
                 IconButton(onClick = onSettings, modifier = Modifier.size(28.dp)) {
                     Icon(
                         RampartIcons.Settings,
@@ -2962,6 +3110,10 @@ internal fun Message(
     onUnsubscribe: (Unsubscribe) -> Unit = {},
     /** Answer the sender's read-receipt request, as a draft for review. */
     onReceipt: (String) -> Unit = {},
+    /** Put this sender in the server's address book. Null where there is none. */
+    onAddContact: ((Summary) -> Unit)? = null,
+    /** Whether that sender is already there, so the entry is absent rather than a duplicate. */
+    inContacts: Boolean = false,
     /** The message as it arrived, while somebody is looking at it. */
     source: String? = null,
     onSource: () -> Unit = {},
@@ -3074,6 +3226,16 @@ internal fun Message(
                             text = { Text(if (source == null) "View source" else "Back to the message") },
                             onClick = { more = false; onSource() },
                         )
+                        // Only where there is an address book to put them in, and only
+                        // when they are not already in it. An entry that silently makes a
+                        // second copy of somebody is how an address book stops being
+                        // worth opening.
+                        if (onAddContact != null && !inContacts) {
+                            DropdownMenuItem(
+                                text = { Text("Add to contacts") },
+                                onClick = { more = false; onAddContact(summary) },
+                            )
+                        }
                         // Only when the sender said how. Every client that offers Unsubscribe
                         // on mail that has no List-Unsubscribe is really offering to send a
                         // reply saying "unsubscribe" to somebody who is not reading replies.

@@ -61,6 +61,20 @@ class Screenshots {
         // Taller than any window, because the point of this one is the whole body: a
         // heading, a list, a table, a quote, a rule and a picture the message carries.
         shoot("settings-about", 1200, 900, dark) { SettingsScreen(page = "about") }
+        shoot("contacts", 1000, 760, dark) {
+            ContactsPane(
+                contacts = listOf(
+                    Contact("1", "Dana Reyes", listOf("dana@example.test"), listOf("+1 555 0100"), "Reyes and Co"),
+                    Contact("2", "Sam Okafor", listOf("sam@example.test"), organisation = "Okafor Supply"),
+                    Contact("3", "", listOf("hello@example.test")),
+                ),
+                loading = false,
+                error = null,
+                onSave = {},
+                onDelete = {},
+                onWrite = {},
+            )
+        }
         shoot("settings-signatures", 1200, 900, withArt) { SettingsScreen(page = "identities") }
         shoot("body", 820, 1500) {
             Message(
