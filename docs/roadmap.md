@@ -70,9 +70,10 @@ Reset 2026-09-17 on one instruction: **make it the daily driver first.** The mea
 how it compares to Bulwark on a feature grid, it is whether a working day can be spent in
 it without reaching for the webmail. Analytics is a nice to have and has moved accordingly.
 
-**Items 1 to 4 are the daily-driver set.** They are the friction you hit on every message,
-every day, and none of them needs a server, a model or anything configured. Nothing below
-them is scheduled; it is only sorted.
+**Items 1 to 5 are done**, in the working tree, 2026-09-17. They were the daily-driver set:
+the friction you hit on every message, every day. The list below keeps them so the order can
+still be argued with, and "Where we actually are" above says what each one turned into.
+Nothing below line 5 is scheduled; it is only sorted.
 
 | # | What | Why it is here | Done when |
 |---|---|---|---|
@@ -96,7 +97,7 @@ admin console, and everything else in tiers 3, 5 and 6. They are real and they a
 
 ## Where we actually are
 
-**The four daily-driver items are done**, 2026-09-17, in one run:
+**The daily-driver items are done**, 2026-09-17, in one run:
 
 1. **Writing with formatting in it.** Bold, italic, links, bulleted and numbered lists, and
    an inline picture, on a toolbar and on Ctrl+B, Ctrl+I, Ctrl+K. The text part loses the
@@ -109,6 +110,9 @@ admin console, and everything else in tiers 3, 5 and 6. They are real and they a
    because that is the source every account has.
 4. **Folder management.** Create, rename, nest, move, delete, with the sidebar showing the
    tree, plus archive by year or by month.
+5. **Filters, as Sieve**, in the format Bulwark already writes, so a rule made in either
+   opens in the other. Anything a builder did not write is kept verbatim.
+6. **Unread only**, asked of the server rather than filtered out of the page we hold.
 
 Before that: mailboxes, threaded conversations, a unified inbox across accounts, HTML drawn
 as blocks without a browser engine, pictures in the flow, remote images held per sender,
@@ -121,12 +125,15 @@ JMAP WebSocket, eighteen themes, self-updating, passwords in the operating syste
 credential store.
 
 **What that adds up to: a client a working day can be spent in, against one server.** The
-rest of this file is the distance between that and a client anybody can install. The
-nearest piece of it is item 7, IMAP and SMTP, which is what "anybody" turns on.
+rest of this file is the distance between that and a client anybody can install. The next
+two are the local store, which is what makes search instant and offline possible and gates
+everything in tiers 3 and 4, and then IMAP and SMTP, which is what "anybody" actually turns
+on.
 
-One thing the tests cannot answer and a real send can: whether a formatted message arrives
-looking the same in Bulwark, Gmail and Outlook. Until that is checked, the composer is
-done rather than proven.
+Two things the tests cannot answer and only real mail can. Whether a formatted message
+arrives looking the same in Bulwark, Gmail and Outlook, and whether a rule built here files
+live incoming mail with Rampart closed. Until each is checked it is done rather than
+proven, and it is listed that way on the board.
 
 ---
 
