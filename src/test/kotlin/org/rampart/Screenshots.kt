@@ -53,6 +53,8 @@ class Screenshots {
         shoot("settings", 1400, 900, withArt) {
             SettingsPane(
                 accounts = ACCOUNTS,
+                signatureFor = { "" },
+                onSignature = { _, _ -> },
                 update = "0.1.25",
                 notifyOnArrival = true,
                 onNotifyOnArrival = {},
@@ -117,7 +119,7 @@ class Screenshots {
                     MESSAGES[1],
                     MESSAGES[3].copy(threadId = "t1"),
                 ),
-                actions = MessageActions(archive = {}, junk = {}, trash = {}),
+                actions = MessageActions(archive = {}, junk = {}, trash = {}, star = {}),
                 attachments = listOf(
                     Attachment("b1", "Revised quote September.pdf", "application/pdf", 214_512),
                     Attachment("b2", "rear-elevation.jpg", "image/jpeg", 1_882_100),
@@ -160,7 +162,7 @@ private val MESSAGES = listOf(
         "That works for us. Tuesday morning is fine, and the crew will be there by eight.", true,
         threadId = "t1", threadSize = 3),
     Summary("c", "Companies House", "companies@example.org", "Confirmation statement filed", "2026-09-15T11:02:00Z",
-        "We have accepted your confirmation statement. No further action is needed.", true),
+        "We have accepted your confirmation statement. No further action is needed.", true, flagged = true),
     Summary("d", "Hetzner", "hetzner@example.org", "Invoice 2026-4471", "2026-09-14T06:00:00Z",
         "Your invoice for September is attached and has been paid by direct debit.", true),
     Summary("e", "Alex Moreno", "alex@example.org", "Photos from the site visit", "2026-09-13T20:15:00Z",

@@ -439,6 +439,18 @@ internal fun draftOf(summary: Summary, body: Body?, from: String): Draft = Draft
 )
 
 /**
+ * Puts [signature] above the quoted text, which is where a reply has room to type and
+ * where mail has put a sign-off for as long as `-- ` has been the separator.
+ *
+ * A reopened draft already has one. Adding another is the copy people then send by mistake.
+ */
+internal fun signed(draft: Draft, signature: String): Draft {
+    if (signature.isBlank()) return draft
+    if (draft.body.lineSequence().any { it == "-- " }) return draft
+    return draft.copy(body = "\n\n-- \n" + signature.trimEnd() + draft.body)
+}
+
+/**
  * The operating system's own file picker.
  *
  * AWT's rather than a Compose dialog: on Windows this is the real Explorer window, with the

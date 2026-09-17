@@ -53,6 +53,8 @@ data class Summary(
     val receivedAt: String,
     val preview: String,
     val seen: Boolean,
+    /** Starred. `$flagged` is what every other mail client calls a star too. */
+    val flagged: Boolean = false,
     /** The conversation this belongs to. Empty on a server that does not thread. */
     val threadId: String = "",
     /** How many messages are in that conversation, counting this one. */
@@ -668,6 +670,7 @@ private fun jsonToSummary(o: JsonObject): Summary = Summary(
     receivedAt = o["receivedAt"]?.str() ?: "",
     preview = o["preview"]?.str()?.trim() ?: "",
     seen = o["keywords"]?.jsonObject?.containsKey("\$seen") == true,
+    flagged = o["keywords"]?.jsonObject?.containsKey("\$flagged") == true,
     threadId = o["threadId"]?.str().orEmpty(),
 )
 

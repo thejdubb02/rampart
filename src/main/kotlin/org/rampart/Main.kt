@@ -627,7 +627,25 @@ private fun Reader(
                 Unit
             }
         }
-        MessageActions(archive = moveTo("archive"), trash = moveTo("trash"), junk = moveTo("junk"))
+        MessageActions(
+            archive = moveTo("archive"),
+            trash = moveTo("trash"),
+            junk = moveTo("junk"),
+            star = {
+                val wanted = !message.flagged
+                // The star turns over at once and is put back if the server says no. A
+                // star that waits for a round trip feels broken at the speed people click.
+                emails = emails.map { if (it.id == message.id) it.copy(flagged = wanted) else it }
+                selected = selected?.copy(flagged = wanted)
+                scope.launch {
+                    if (io { session(key).jmap.setKeyword(listOf(message.id), "\$flagged", wanted) } == null) {
+                        emails = emails.map { if (it.id == message.id) it.copy(flagged = !wanted) else it }
+                        selected = selected?.copy(flagged = !wanted)
+                    }
+                }
+                Unit
+            },
+        )
     }
 
     /**
@@ -668,7 +686,7 @@ private fun Reader(
     if (composer != null) {
         Composer(
             identities = identities[here?.first]?.map { it.email }.orEmpty(),
-            initial = composer,
+            initial = signed(composer, Settings.signature(composer.from)),
             sending = sending,
             error = sendError,
             onDiscard = {
@@ -822,6 +840,8 @@ private fun Reader(
                     accounts = sessions.map {
                         AccountMailboxes(it.key, it.account.name, it.account.email, mailboxes[it.key].orEmpty())
                     },
+                    signatureFor = Settings::signature,
+                    onSignature = { address, text -> Settings.setSignature(address, text) },
                     update = update,
                     notifyOnArrival = notifyOnArrival,
                     onNotifyOnArrival = { notifyOnArrival = it; Settings.setNotifyOnArrival(it) },
@@ -1277,6 +1297,15 @@ private fun MessageRow(message: Summary, selected: Boolean, onClick: () -> Unit)
                         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.primary, CircleShape))
                     }
                 }
+                if (message.flagged) {
+                    Spacer(Modifier.width(4.dp))
+                    Icon(
+                        RampartIcons.Star,
+                        contentDescription = "Starred",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(11.dp),
+                    )
+                }
                 Spacer(Modifier.width(6.dp))
                 Text(
                     message.from,
@@ -1337,6 +1366,7 @@ internal data class MessageActions(
     val archive: (() -> Unit)? = null,
     val trash: (() -> Unit)? = null,
     val junk: (() -> Unit)? = null,
+    val star: (() -> Unit)? = null,
 )
 
 @Composable
@@ -1391,6 +1421,17 @@ internal fun Message(
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                actions.star?.let { star ->
+                    IconButton(onClick = star, modifier = Modifier.size(34.dp)) {
+                        Icon(
+                            RampartIcons.Star,
+                            contentDescription = if (summary.flagged) "Remove the star" else "Star this",
+                            tint = if (summary.flagged) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.size(17.dp),
+                        )
+                    }
+                }
                 OutlinedButton(onClick = { onReply(false) }, enabled = body != null) { Text("Reply") }
                 // Only when it would reach someone Reply would not.
                 if (replyAll) {
