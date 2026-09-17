@@ -29,30 +29,13 @@ class SettingsWriteTest {
     fun oneKeyChangesWithoutLosingTheRest() {
         Settings.setTheme("nord")
         Settings.setWindow(SavedWindow(10, 20, 1440, 900, maximized = false))
-        Settings.setSignature("Justin@Example.org", "Justin")
         Settings.setNotifyOnArrival(false)
 
         assertEquals("nord", Settings.theme())
         assertEquals(SavedWindow(10, 20, 1440, 900, false), Settings.window())
-        // Stored lowercased, so the same mailbox written two ways is one signature.
-        assertEquals("Justin", Settings.signature("justin@example.org"))
-        assertEquals("Justin", Settings.signature("  JUSTIN@EXAMPLE.ORG "))
         assertTrue(!Settings.notifyOnArrival())
     }
 
-    @Test
-    fun aBlankSignatureIsRemovedRatherThanStoredEmpty() {
-        Settings.setSignature("gone@example.org", "something")
-        assertEquals("something", Settings.signature("gone@example.org"))
-        Settings.setSignature("gone@example.org", "   ")
-        assertEquals("", Settings.signature("gone@example.org"))
-        assertTrue("gone@example.org" !in Settings.signatures())
-    }
-
-    @Test
-    fun anAddressWithNoSignatureIsEmptyRatherThanNull() {
-        assertEquals("", Settings.signature("nobody@example.org"))
-    }
 
     /** No temporary file is left lying beside the settings after a write. */
     @Test

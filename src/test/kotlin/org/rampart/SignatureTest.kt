@@ -33,17 +33,27 @@ class SignatureTest {
         assertEquals("\n\n-- \nSig", signed(draft, "Sig").body)
     }
 
+    /**
+     * Below the quote, not above it. That is what Justin's webmail is already set to
+     * (`signaturePosition = "below_quote"`), and it is what lets the HTML half of a message
+     * swap the plain sign-off for its formatted version by taking it off the end.
+     */
+    @Test
+    fun theSignOffGoesOnTheEnd() {
+        val draft = Draft(from = "me@example.org", body = "Sounds good.\n\n> their words")
+        assertEquals("Sounds good.\n\n> their words\n\n-- \nSig", signed(draft, "Sig").body)
+    }
+
     @Test
     fun aReplyKeepsTheQuotedTextAfterTheSignature() {
         val draft = replyTo(message, body, "justin@willhitestrategy.com")
-        val quoted = draft.body
         val signed = signed(draft, "Justin")
-        assertEquals("\n\n-- \nJustin$quoted", signed.body)
+        assertEquals(draft.body.trimEnd() + "\n\n-- \nJustin", signed.body)
         assertTrue(signed.body.contains("> Numbers attached."), signed.body)
         assertTrue(signed.body.contains("On "), "the attribution line must still be there")
         assertTrue(
-            signed.body.indexOf("-- ") < signed.body.indexOf("> Numbers attached."),
-            "the quote has to follow the signature, not precede it",
+            signed.body.indexOf("> Numbers attached.") < signed.body.indexOf("\n-- "),
+            "the sign-off follows the quote, which is where this mailbox is set to put it",
         )
     }
 
@@ -90,6 +100,6 @@ class SignatureTest {
     fun aSeparatorInsideTheQuoteDoesNotCountAsAlreadySigned() {
         val draft = Draft(from = "me@example.org", body = "\n\n> -- \n> their sign-off")
         val signed = signed(draft, "Justin")
-        assertEquals("\n\n-- \nJustin\n\n> -- \n> their sign-off", signed.body)
+        assertEquals("\n\n> -- \n> their sign-off\n\n-- \nJustin", signed.body)
     }
 }

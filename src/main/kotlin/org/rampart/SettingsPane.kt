@@ -58,8 +58,10 @@ import androidx.compose.foundation.Image
 @Composable
 internal fun SettingsPane(
     accounts: List<AccountMailboxes>,
-    signatureFor: (String) -> String,
-    onSignature: (String, String) -> Unit,
+    identities: List<Identity>,
+    signatureError: String?,
+    onSignature: (Identity, String) -> Unit,
+    onPickSignatureImage: () -> String?,
     update: String?,
     notifyOnArrival: Boolean,
     onNotifyOnArrival: (Boolean) -> Unit,
@@ -150,37 +152,34 @@ internal fun SettingsPane(
                 OutlinedButton(onClick = onAddAccount) { Text("Add account") }
 
                 Spacer(Modifier.height(30.dp))
-                Section("Signatures", "One per sending address, so a work reply does not go out under a personal sign-off.")
-                accounts.forEach { account ->
-                    var text by remember(account.email) { mutableStateOf(signatureFor(account.email)) }
+                Section(
+                    "Signatures",
+                    "Kept on the server against each sending address, so one written here is the " +
+                        "one the webmail uses too.",
+                )
+                signatureError?.let {
                     Text(
-                        account.email,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(bottom = 6.dp),
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(bottom = 10.dp),
                     )
-                    // Built rather than borrowed: Material's outlined field has a minimum
-                    // height of its own, and a 90dp box is the size a sign-off actually needs.
-                    Box(
-                        Modifier.fillMaxWidth().height(90.dp)
-                            .clip(MaterialTheme.shapes.small)
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
-                            .padding(horizontal = 11.dp, vertical = 8.dp),
-                    ) {
-                        BasicTextField(
-                            value = text,
-                            onValueChange = {
-                                text = it
-                                onSignature(account.email, it)
-                            },
-                            textStyle = MaterialTheme.typography.bodyMedium.copy(
-                                color = MaterialTheme.colorScheme.onSurface,
-                            ),
-                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    }
-                    Spacer(Modifier.height(12.dp))
+                }
+                if (identities.isEmpty()) {
+                    Text(
+                        "This account has no sending address, so there is nothing to sign.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+                identities.forEach { identity ->
+                    SignatureEditor(
+                        address = identity.email,
+                        html = identity.htmlSignature,
+                        onHtml = { onSignature(identity, it) },
+                        onAddImage = onPickSignatureImage,
+                    )
+                    Spacer(Modifier.height(18.dp))
                 }
 
                 Spacer(Modifier.height(30.dp))

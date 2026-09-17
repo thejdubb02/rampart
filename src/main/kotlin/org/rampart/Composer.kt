@@ -67,6 +67,10 @@ data class Draft(
     val references: List<String> = emptyList(),
     /** Files already uploaded to the server, ready to be named on the way out. */
     val attachments: List<Attachment> = emptyList(),
+    /** The sign-off, as it was appended to [body], so the HTML part can swap it out. */
+    val textSignature: String = "",
+    /** The same sign-off written as HTML, or empty when there is none. */
+    val htmlSignature: String = "",
     /**
      * Whether this answers something. Not derived from [inReplyTo]: a message with no
      * Message-ID of its own is still being replied to, and telling the writer otherwise
@@ -439,15 +443,53 @@ internal fun draftOf(summary: Summary, body: Body?, from: String): Draft = Draft
 )
 
 /**
- * Puts [signature] above the quoted text, which is where a reply has room to type and
- * where mail has put a sign-off for as long as `-- ` has been the separator.
+ * Appends the sign-off, after the quoted text.
+ *
+ * Below the quote rather than above it, which is what Justin's webmail is already set to
+ * (`signaturePosition = "below_quote"`), and it is also what makes the HTML part possible:
+ * a block on the end can be swapped for its HTML version by taking it off the end, where
+ * one buried between the reply and the quote would need finding first.
  *
  * A reopened draft already has one. Adding another is the copy people then send by mistake.
  */
-internal fun signed(draft: Draft, signature: String): Draft {
+internal fun signed(draft: Draft, signature: String, html: String = ""): Draft {
     if (signature.isBlank()) return draft
     if (draft.body.lineSequence().any { it == "-- " }) return draft
-    return draft.copy(body = "\n\n-- \n" + signature.trimEnd() + draft.body)
+    return draft.copy(
+        body = draft.body.trimEnd() + signatureBlock(signature),
+        textSignature = signature.trimEnd(),
+        htmlSignature = html,
+    )
+}
+
+/** The separator and the sign-off, exactly as [signed] appends it and [htmlBodyOf] removes it. */
+internal fun signatureBlock(signature: String) = "\n\n-- \n" + signature.trimEnd()
+
+/**
+ * The HTML half of the message, or null when there is no HTML sign-off to justify one.
+ *
+ * The text sign-off is taken back off the end and the HTML one put in its place, so the two
+ * parts say the same thing rather than one carrying a formatted block and the other a copy
+ * of it in plain text underneath.
+ */
+internal fun htmlBodyOf(body: String, textSignature: String, htmlSignature: String): String? {
+    if (htmlSignature.isBlank()) return null
+    val typed = if (textSignature.isBlank()) body
+    else body.removeSuffix(signatureBlock(textSignature))
+    return htmlOf(typed) + htmlSignature
+}
+
+/**
+ * Plain text as HTML, escaped.
+ *
+ * A div per line, because that is what every other client produces and what every client
+ * renders the same way. Escaping is the part that matters: an ampersand or an angle bracket
+ * in what somebody typed must arrive as itself, not as the start of a tag.
+ */
+internal fun htmlOf(plain: String): String = plain.trimEnd().ifBlank { return "" }
+    .lineSequence().joinToString("") { line ->
+    if (line.isBlank()) "<div><br></div>"
+    else "<div>" + line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") + "</div>"
 }
 
 /**
@@ -459,7 +501,7 @@ internal fun signed(draft: Draft, signature: String): Draft {
  * picker does anyway, and it is called from the click handler on the UI thread for the same
  * reason.
  */
-private fun pickFiles(): List<Path> {
+internal fun pickFiles(): List<Path> {
     val dialog = FileDialog(null as Frame?, "Attach files", FileDialog.LOAD)
     dialog.isMultipleMode = true
     dialog.isVisible = true

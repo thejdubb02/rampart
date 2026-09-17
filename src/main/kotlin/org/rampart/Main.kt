@@ -409,6 +409,7 @@ private fun Reader(
     var searchFocused by remember { mutableStateOf(false) }
     var collapsed by remember { mutableStateOf(Settings.sidebarCollapsed()) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var signatureError by remember { mutableStateOf<String?>(null) }
     var installing by remember { mutableStateOf(false) }
     var installNote by remember { mutableStateOf<String?>(null) }
     var notifyOnArrival by remember { mutableStateOf(Settings.notifyOnArrival()) }
@@ -686,7 +687,12 @@ private fun Reader(
     if (composer != null) {
         Composer(
             identities = identities[here?.first]?.map { it.email }.orEmpty(),
-            initial = signed(composer, Settings.signature(composer.from)),
+            // The sign-off comes off the identity on the server, so one written in Bulwark
+            // is the one used here without anything having to be imported or kept in step.
+            initial = identities[here?.first].orEmpty()
+                .firstOrNull { it.email.equals(composer.from, ignoreCase = true) }
+                ?.let { signed(composer, it.textSignature, it.htmlSignature) }
+                ?: composer,
             sending = sending,
             error = sendError,
             onDiscard = {
@@ -840,8 +846,49 @@ private fun Reader(
                     accounts = sessions.map {
                         AccountMailboxes(it.key, it.account.name, it.account.email, mailboxes[it.key].orEmpty())
                     },
-                    signatureFor = Settings::signature,
-                    onSignature = { address, text -> Settings.setSignature(address, text) },
+                    identities = identities[here?.first].orEmpty(),
+                    signatureError = signatureError,
+                    onSignature = { identity, html ->
+                        val key = here?.first
+                        if (key != null) {
+                            signatureError = null
+                            scope.launch {
+                                // The plain half is derived from the HTML, so there is one
+                                // thing to edit and the two cannot drift apart.
+                                val text = plainOf(html)
+                                try {
+                                    withContext(Dispatchers.IO) {
+                                        session(key).jmap.setSignature(identity.id, text, html)
+                                    }
+                                    identities = identities + (
+                                        key to identities[key].orEmpty().map {
+                                            if (it.id == identity.id) {
+                                                it.copy(textSignature = text, htmlSignature = html)
+                                            } else {
+                                                it
+                                            }
+                                        }
+                                        )
+                                } catch (e: Exception) {
+                                    signatureError = e.message ?: e.toString()
+                                }
+                            }
+                        }
+                    },
+                    onPickSignatureImage = {
+                        val file = pickFiles().firstOrNull()
+                        if (file == null) {
+                            null
+                        } else {
+                            try {
+                                signatureError = null
+                                imageDataUri(file)
+                            } catch (e: Exception) {
+                                signatureError = e.message ?: e.toString()
+                                null
+                            }
+                        }
+                    },
                     update = update,
                     notifyOnArrival = notifyOnArrival,
                     onNotifyOnArrival = { notifyOnArrival = it; Settings.setNotifyOnArrival(it) },

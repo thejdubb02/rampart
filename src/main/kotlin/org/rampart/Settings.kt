@@ -104,27 +104,4 @@ object Settings {
         )
     }
 
-    /**
-     * The sign-off for [address], or empty if none has been written. Compared without case,
-     * because the same mailbox shows up as both Justin@ and justin@.
-     */
-    fun signature(address: String): String =
-        read()["signatures"]?.jsonObject
-            ?.get(address.trim().lowercase())
-            ?.jsonPrimitive?.contentOrNull
-            ?: ""
-
-    fun signatures(): Map<String, String> =
-        read()["signatures"]?.jsonObject
-            ?.mapValues { it.value.jsonPrimitive.contentOrNull.orEmpty() }
-            ?: emptyMap()
-
-    /** Blank deletes the entry rather than storing an empty string that would still count as set. */
-    fun setSignature(address: String, text: String) = write {
-        val key = address.trim().lowercase()
-        val current = (this["signatures"]?.jsonObject ?: JsonObject(emptyMap())).toMutableMap()
-        if (text.isBlank()) current.remove(key)
-        else current[key] = JsonPrimitive(text)
-        put("signatures", JsonObject(current))
-    }
 }

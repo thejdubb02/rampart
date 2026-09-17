@@ -62,8 +62,20 @@ data class Summary(
     val threadSize: Int = 1,
 )
 
-/** An address this account is allowed to send as. */
-data class Identity(val id: String, val name: String, val email: String)
+/**
+ * An address this account is allowed to send as, and the sign-off that goes with it.
+ *
+ * The signature lives on the identity, on the server, rather than in a file beside this
+ * app. That is where JMAP puts it and where Bulwark reads it, so one written in either
+ * turns up in the other with nothing to sync and nothing to import.
+ */
+data class Identity(
+    val id: String,
+    val name: String,
+    val email: String,
+    val textSignature: String = "",
+    val htmlSignature: String = "",
+)
 
 data class Attachment(
     val blobId: String,
@@ -402,8 +414,32 @@ class Jmap private constructor(
                 id = o["id"].require("id"),
                 name = o["name"]?.str()?.ifBlank { null } ?: o["email"]?.str().orEmpty(),
                 email = o["email"].require("email"),
+                textSignature = o["textSignature"]?.str().orEmpty(),
+                htmlSignature = o["htmlSignature"]?.str().orEmpty(),
             )
         }
+
+    /**
+     * Stores the sign-off on the server, against the identity it belongs to.
+     *
+     * Checked against the live server, on a spare identity that was put back afterwards:
+     * the HTML comes back byte for byte, including a data URI image.
+     */
+    fun setSignature(identityId: String, text: String, html: String) {
+        val response = call(
+            invoke("Identity/set", "u") {
+                putJsonObject("update") {
+                    putJsonObject(identityId) {
+                        put("textSignature", text)
+                        put("htmlSignature", html)
+                    }
+                }
+            },
+        )[0][1].jsonObject
+        if (response["updated"]?.jsonObject?.containsKey(identityId) != true) {
+            throw JmapError(refusal(response, "notUpdated", "The server would not store the signature"))
+        }
+    }
 
     /**
      * Writes the message to Drafts and hands it to the server to send, in one request.
@@ -440,8 +476,19 @@ class Jmap private constructor(
         // bodyStructure and attachments ("Cannot set both properties on a same request"),
         // and one path that works with and without attachments is better than two that can
         // drift apart. Checked against the live server both ways.
+        // Both parts when there is an HTML sign-off, so the message reads as written in a
+        // client that shows HTML and still reads as text in one that does not. Checked
+        // against the live server, alongside an attachment, because the two together are
+        // what the convenience properties are fussy about.
+        val html = htmlBodyOf(draft.body, draft.textSignature, draft.htmlSignature)
         putJsonArray("textBody") { add(buildJsonObject { put("partId", "b"); put("type", "text/plain") }) }
-        putJsonObject("bodyValues") { putJsonObject("b") { put("value", draft.body) } }
+        if (html != null) {
+            putJsonArray("htmlBody") { add(buildJsonObject { put("partId", "h"); put("type", "text/html") }) }
+        }
+        putJsonObject("bodyValues") {
+            putJsonObject("b") { put("value", draft.body) }
+            if (html != null) putJsonObject("h") { put("value", html) }
+        }
         if (draft.attachments.isNotEmpty()) {
             putJsonArray("attachments") {
                 draft.attachments.forEach { file ->

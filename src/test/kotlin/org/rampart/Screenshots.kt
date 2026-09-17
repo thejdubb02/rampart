@@ -55,8 +55,18 @@ class Screenshots {
         shoot("settings", 1400, 1900, withArt) {
             SettingsPane(
                 accounts = ACCOUNTS,
-                signatureFor = { "Justin Willhite\nWillhite Strategy Group\nwillhitestrategy.com" },
+                identities = listOf(
+                    Identity(
+                        "i1", "Justin Willhite", "justin@willhitestrategy.com",
+                        htmlSignature = """<div style="color:#555"><b>Justin Willhite</b><br>""" +
+                            """Willhite Strategy Group<br>""" +
+                            """<a href="https://willhitestrategy.com">willhitestrategy.com</a></div>""",
+                    ),
+                    Identity("i2", "Skybox7", "admin@skybox7.com"),
+                ),
+                signatureError = null,
                 onSignature = { _, _ -> },
+                onPickSignatureImage = { null },
                 update = "0.1.25",
                 notifyOnArrival = true,
                 onNotifyOnArrival = {},
