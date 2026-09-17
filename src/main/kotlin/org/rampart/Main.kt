@@ -424,6 +424,9 @@ private fun Reader(
     var thread by remember { mutableStateOf<List<Summary>>(emptyList()) }
     var bodyError by remember { mutableStateOf<String?>(null) }
     var inlineImages by remember { mutableStateOf<Map<String, ImageBitmap>>(emptyMap()) }
+    var remoteImages by remember { mutableStateOf<List<ImageBitmap>>(emptyList()) }
+    var unsubscribed by remember { mutableStateOf<String?>(null) }
+    var allowedSenders by remember { mutableStateOf(Settings.imageSenders()) }
     var saved by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
@@ -557,6 +560,8 @@ private fun Reader(
         body = null
         bodyError = null
         inlineImages = emptyMap()
+        remoteImages = emptyList()
+        unsubscribed = null
         attachments = emptyList()
         saved = null
         // Cleared only when this is a different conversation, so moving between messages in
@@ -591,6 +596,10 @@ private fun Reader(
             }
         }
         if (thread.isEmpty()) thread = io { session(key).jmap.thread(message.threadId) } ?: emptyList()
+
+        // Already answered for this sender, so it is not asked again. The question is
+        // whether to tell them the message was opened, and that was settled the first time.
+        if (imageSenderKey(message.fromEmail) in allowedSenders) remoteImages = fetchRemote(body)
 
         // A draft is not something to read. Clicking one puts it back in the composer,
         // under the id it is already saved at, so carrying on writing replaces that copy
@@ -927,6 +936,48 @@ private fun Reader(
                     composing = forwardOf(message, body, from)
                 },
                 onLink = { confirm = it },
+                remoteImages = remoteImages,
+                unsubscribed = unsubscribed,
+                onUnsubscribe = { off ->
+                    when {
+                        // One-click is the only route that finishes without leaving Rampart,
+                        // and it is the only one the sender promised would work that way.
+                        off.oneClick && off.url != null -> {
+                            unsubscribed = "Asking to be taken off the list."
+                            scope.launch {
+                                val done = withContext(Dispatchers.IO) { oneClickPost(off.url) }
+                                unsubscribed = if (done) {
+                                    "Asked to be taken off the list. It can take a few days."
+                                } else {
+                                    // Not an error worth a dialog: the link is still there.
+                                    "That did not go through. Try the link instead."
+                                }
+                            }
+                        }
+                        // A page to open is a page somebody should see before it acts, so it
+                        // goes through the same confirmation as any other link in a message.
+                        off.url != null -> confirm = off.url
+                        off.mailto != null -> {
+                            sendError = null
+                            composing = Draft(
+                                from = identities[here?.first].orEmpty().firstOrNull()?.email.orEmpty(),
+                                to = off.mailto,
+                                subject = off.mailtoSubject ?: "unsubscribe",
+                            )
+                        }
+                    }
+                },
+                onShowImages = { always ->
+                    val message = selected
+                    if (message != null) {
+                        if (always) {
+                            val key = imageSenderKey(message.fromEmail)
+                            Settings.allowImagesFrom(key)
+                            allowedSenders = allowedSenders + key
+                        }
+                        scope.launch { remoteImages = fetchRemote(body) }
+                    }
+                },
                 bodyError = bodyError,
                 images = inlineImages,
                 thread = thread,
@@ -1426,6 +1477,12 @@ internal fun Message(
     bodyError: String? = null,
     /** Decoded images the message carries, by blob id. */
     images: Map<String, ImageBitmap> = emptyMap(),
+    /** Pictures fetched from the web, once the reader said to. */
+    remoteImages: List<ImageBitmap> = emptyList(),
+    onShowImages: (always: Boolean) -> Unit = {},
+    /** What happened to an unsubscribe that was pressed, when one was. */
+    unsubscribed: String? = null,
+    onUnsubscribe: (Unsubscribe) -> Unit = {},
     /** The whole conversation, oldest first, including [summary]. Empty when there is none. */
     thread: List<Summary> = emptyList(),
     onPick: (Summary) -> Unit = {},
@@ -1489,6 +1546,14 @@ internal fun Message(
                 actions.archive?.let { OutlinedButton(onClick = it) { Text("Archive") } }
                 actions.junk?.let { OutlinedButton(onClick = it) { Text("Spam") } }
                 actions.trash?.let { OutlinedButton(onClick = it) { Text("Delete") } }
+                // Only when the sender said how. Every client that offers Unsubscribe on
+                // mail that has no List-Unsubscribe is really offering to send a reply
+                // saying "unsubscribe" to somebody who is not reading replies.
+                unsubscribeFrom(body?.listUnsubscribe, body?.listUnsubscribePost)?.let { off ->
+                    OutlinedButton(onClick = { onUnsubscribe(off) }) {
+                        Text(if (off.oneClick) "Unsubscribe" else "Unsubscribe...")
+                    }
+                }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
@@ -1504,6 +1569,34 @@ internal fun Message(
                     // thread every message carries the same one with more Re: in front.
                     Text(summary.subject, style = MaterialTheme.typography.titleLarge)
                     Spacer(Modifier.height(14.dp))
+
+                    val proof = remember(body) {
+                        authenticityOf(body?.authenticationResults?.joinToString("\n"), body?.spamStatus)
+                    }
+                    if (proof.worthShowing) {
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clip(MaterialTheme.shapes.small)
+                                .background(MaterialTheme.colorScheme.errorContainer)
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                proof.summary,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                            )
+                        }
+                        Spacer(Modifier.height(14.dp))
+                    }
+                    unsubscribed?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.padding(bottom = 12.dp),
+                        )
+                    }
 
                     // The rest of the conversation sits around this message in date order,
                     // one line each. Reading the thread is then scrolling, not going back
@@ -1554,21 +1647,36 @@ internal fun Message(
                             else -> Text("This message has no readable body.")
                         }
                     } else {
-                    if (rendered.blockedImages > 0) {
+                    if (rendered.blockedImages > 0 && remoteImages.isEmpty()) {
                         Spacer(Modifier.height(16.dp))
                         Row(
                             Modifier.fillMaxWidth()
                                 .clip(MaterialTheme.shapes.small)
                                 .background(MaterialTheme.colorScheme.surfaceVariant)
-                                .padding(horizontal = 12.dp, vertical = 9.dp),
+                                .padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                if (rendered.blockedImages == 1) "1 image was not loaded."
-                                else "${rendered.blockedImages} images were not loaded.",
+                                if (rendered.blockedImages == 1) "1 picture is held back."
+                                else "${rendered.blockedImages} pictures are held back.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.weight(1f),
                             )
+                            // Fetching one tells the sender the message was opened, so it is
+                            // the reader's call, and the answer is kept per sender rather
+                            // than asked again on the next newsletter from the same place.
+                            TextButton(onClick = { onShowImages(false) }) {
+                                Text("Show", style = MaterialTheme.typography.bodySmall)
+                            }
+                            TextButton(onClick = { onShowImages(true) }) {
+                                Text(
+                                    "Always from " + imageSenderKey(summary.fromEmail),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
                     }
                     Spacer(Modifier.height(20.dp))
@@ -1576,26 +1684,24 @@ internal fun Message(
                     }
 
                     val drawn = attachments.filter { it.blobId in images }
-                    if (drawn.isNotEmpty()) {
+                    if (drawn.isNotEmpty() || remoteImages.isNotEmpty()) {
                         Spacer(Modifier.height(16.dp))
-                        drawn.forEach { part ->
-                            images[part.blobId]?.let { bitmap ->
-                                Image(
-                                    bitmap = bitmap,
-                                    contentDescription = part.name,
-                                    // Inside rather than Fit, so a small logo stays a small
-                                    // logo. Fit blew a signature image up to the width of
-                                    // the reading pane.
-                                    contentScale = ContentScale.Inside,
-                                    // ponytail: drawn under the text rather than where the
-                                    // body puts them. Placing them in the flow means the
-                                    // renderer returning blocks instead of one string, which
-                                    // is a bigger change than seeing the picture is worth.
-                                    modifier = Modifier
-                                        .sizeIn(maxWidth = 620.dp, maxHeight = 520.dp)
-                                        .padding(vertical = 6.dp),
-                                )
-                            }
+                        (drawn.mapNotNull { images[it.blobId] } + remoteImages).forEach { bitmap ->
+                            Image(
+                                bitmap = bitmap,
+                                contentDescription = null,
+                                // Inside rather than Fit, so a small logo stays a small
+                                // logo. Fit blew a signature image up to the width of the
+                                // reading pane.
+                                contentScale = ContentScale.Inside,
+                                // ponytail: drawn under the text rather than where the body
+                                // puts them. Placing them in the flow means the renderer
+                                // returning blocks instead of one string, which is a bigger
+                                // change than seeing the picture is worth.
+                                modifier = Modifier
+                                    .sizeIn(maxWidth = 620.dp, maxHeight = 520.dp)
+                                    .padding(vertical = 6.dp),
+                            )
                         }
                     }
 

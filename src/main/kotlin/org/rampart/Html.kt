@@ -23,7 +23,13 @@ import org.jsoup.safety.Safelist
  * cannot run code, phone home, or read anything. The cost is that a marketing email loses its
  * layout. See docs/architecture.md, "Rendering HTML mail has no free answer on the desktop".
  */
-data class Rendered(val text: AnnotatedString, val blockedImages: Int)
+data class Rendered(
+    val text: AnnotatedString,
+    /** Every picture the body wants to fetch from the web, in the order it names them. */
+    val remoteImages: List<String> = emptyList(),
+) {
+    val blockedImages: Int get() = remoteImages.size
+}
 
 /**
  * Tags whose content we keep. Everything else is unwrapped or dropped by jsoup's Cleaner,
@@ -60,14 +66,23 @@ private val LINKS = Regex("""(https?://|mailto:)[^\s<>"'`)\]}]+""")
 fun renderHtml(html: String, linkColor: Color, quoteColor: Color, onLink: (String) -> Unit): Rendered {
     val doc = Jsoup.parse(html)
     doc.select("script, style, noscript, head, title").remove()
-    // Only remote images count as blocked. An image the message carries with it is drawn
-    // from the message's own parts and tells the sender nothing, so counting it here would
-    // put "1 image was not loaded" above an image that is right there.
-    val blocked = doc.select("img").count { !it.attr("src").startsWith("cid:", ignoreCase = true) }
+    // Only remote images are held back. An image the message carries with it is drawn from
+    // the message's own parts and tells the sender nothing, so listing it here would put
+    // "1 image was not loaded" above an image that is right there.
+    //
+    // Collected rather than counted, because fetching one is a decision the reader makes
+    // per sender and the addresses are what that decision needs.
+    val remote = doc.select("img")
+        .map { it.attr("abs:src").ifBlank { it.attr("src") }.trim() }
+        // A src beginning "//" is still a fetch from the web, and a common one in mail. It
+        // means "whatever scheme this page came from", and a message did not come from a
+        // scheme, so it is read as https rather than quietly ignored.
+        .map { if (it.startsWith("//")) "https:$it" else it }
+        .filter { it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true) }
     val clean = Cleaner(SAFELIST).clean(doc)
     val walker = Walker(linkColor, quoteColor, onLink)
     clean.body().childNodes().forEach { walker.node(it) }
-    return Rendered(walker.build(), blocked)
+    return Rendered(walker.build(), remote)
 }
 
 fun renderText(text: String, linkColor: Color, onLink: (String) -> Unit): Rendered {
@@ -83,7 +98,7 @@ fun renderText(text: String, linkColor: Color, onLink: (String) -> Unit): Render
         at = match.range.last + 1
     }
     out.append(text.substring(at))
-    return Rendered(out.toAnnotatedString(), 0)
+    return Rendered(out.toAnnotatedString())
 }
 
 private fun link(url: String, color: Color, onLink: (String) -> Unit) = LinkAnnotation.Clickable(

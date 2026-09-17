@@ -124,7 +124,13 @@ class Screenshots {
             VerticalDivider()
             Message(
                 summary = MESSAGES[1],
-                body = Body(SAMPLE_HTML, null),
+                body = Body(
+                    SAMPLE_HTML,
+                    null,
+                    listUnsubscribe = "<https://lists.example.org/off?id=9>",
+                    listUnsubscribePost = "List-Unsubscribe=One-Click",
+                    authenticationResults = listOf("mx.example.org; spf=fail; dkim=none; dmarc=fail"),
+                ),
                 replyAll = true,
                 thread = listOf(
                     MESSAGES[4].copy(threadId = "t1"),

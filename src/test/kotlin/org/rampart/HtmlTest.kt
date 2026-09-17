@@ -49,8 +49,9 @@ class HtmlTest {
 
     @Test
     fun `remote images are counted and never drawn`() {
-        val r = render("""<p>Hi</p><img src="https://tracker.example/pixel.gif"><img src="//x/p.gif">""")
+        val r = render("""<p>Hi</p><img src="https://tracker.example/pixel.gif"><img src="//x.test/p.gif">""")
         assertEquals(2, r.blockedImages)
+        assertEquals("https://x.test/p.gif", r.remoteImages.last(), "a scheme-relative src is still the web")
         assertFalse(r.text.text.contains("tracker"))
     }
 

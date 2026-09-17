@@ -101,6 +101,12 @@ data class Body(
     /** Everyone the message was addressed to, which is what Reply all needs. */
     val to: List<String> = emptyList(),
     val cc: List<String> = emptyList(),
+    /** The raw List-Unsubscribe header, when the sender offered a way off the list. */
+    val listUnsubscribe: String? = null,
+    val listUnsubscribePost: String? = null,
+    /** Every Authentication-Results header, ours first, as the server stacked them. */
+    val authenticationResults: List<String> = emptyList(),
+    val spamStatus: String? = null,
 )
 
 class Jmap private constructor(
@@ -279,6 +285,12 @@ class Jmap private constructor(
                 putJsonArray("properties") {
                     add("htmlBody"); add("textBody"); add("bodyValues")
                     add("messageId"); add("references"); add("to"); add("cc")
+                    // Asked for by name. These are not JMAP properties, they are ordinary
+                    // headers, and a header nobody asks for is not sent.
+                    add("header:List-Unsubscribe:asText")
+                    add("header:List-Unsubscribe-Post:asText")
+                    add("header:Authentication-Results:asText:all")
+                    add("header:X-Spam-Status:asText")
                 }
                 put("fetchHTMLBodyValues", true)
                 put("fetchTextBodyValues", true)
@@ -307,6 +319,10 @@ class Jmap private constructor(
             references = ids("references"),
             to = addresses("to"),
             cc = addresses("cc"),
+            listUnsubscribe = email["header:List-Unsubscribe:asText"]?.str(),
+            listUnsubscribePost = email["header:List-Unsubscribe-Post:asText"]?.str(),
+            authenticationResults = stringsIn(email["header:Authentication-Results:asText:all"]),
+            spamStatus = email["header:X-Spam-Status:asText"]?.str(),
         )
     }
 

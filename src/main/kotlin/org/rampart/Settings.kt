@@ -1,6 +1,7 @@
 package org.rampart
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
@@ -67,6 +68,20 @@ object Settings {
     fun notifyOnArrival(): Boolean = read()["notify"]?.jsonPrimitive?.booleanOrNull ?: true
 
     fun setNotifyOnArrival(value: Boolean) = write { put("notify", JsonPrimitive(value)) }
+
+    /**
+     * Senders whose pictures may be fetched from the web. Domains, not addresses: see
+     * [imageSenderKey].
+     */
+    fun imageSenders(): Set<String> =
+        (read()["imageSenders"] as? JsonArray)?.mapNotNull { it.jsonPrimitive.contentOrNull }?.toSet()
+            ?: emptySet()
+
+    fun allowImagesFrom(key: String) = write {
+        val current = (this["imageSenders"] as? JsonArray)?.toMutableList() ?: mutableListOf()
+        if (current.none { it.jsonPrimitive.contentOrNull == key }) current.add(JsonPrimitive(key))
+        put("imageSenders", JsonArray(current))
+    }
 
     fun sidebarCollapsed(): Boolean = read()["sidebarCollapsed"]?.jsonPrimitive?.booleanOrNull ?: false
 
