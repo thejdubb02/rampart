@@ -73,21 +73,58 @@ data class Draft(
  * The threading headers are the part that matters: In-Reply-To is the message being
  * answered and References is the conversation so far with that message appended. Get
  * either wrong and the reply shows up as a new conversation.
+ *
+ * With [all], everyone on the original is carried over: the sender and the original To
+ * line become To, the original Cc stays Cc, and [mine] is dropped from both, because the
+ * one thing nobody wants from Reply all is a copy of their own answer.
  */
-internal fun replyTo(summary: Summary, body: Body?, from: String): Draft {
+internal fun replyTo(
+    summary: Summary,
+    body: Body?,
+    from: String,
+    all: Boolean = false,
+    mine: Set<String> = emptySet(),
+): Draft {
     val original = plainTextOf(body)
     val quoted = original.trim().lineSequence().joinToString("\n") { if (it.isEmpty()) ">" else "> $it" }
     val subject = summary.subject.trim()
     val answered = body?.messageId?.firstOrNull()
+    val ours = (mine + from).map { it.trim().lowercase() }.filterTo(mutableSetOf()) { it.isNotEmpty() }
+    // Answering your own message is the case where dropping your own address leaves nobody
+    // to send to, so the sender goes back in rather than the reply opening addressed to no one.
+    val to = if (!all) listOf(summary.fromEmail)
+    else dedupe(listOf(summary.fromEmail) + body?.to.orEmpty(), ours)
+        .ifEmpty { listOf(summary.fromEmail) }
+    val cc = if (!all) emptyList() else dedupe(body?.cc.orEmpty(), ours + to.map { it.lowercase() })
     return Draft(
         from = from,
-        to = summary.fromEmail,
+        to = to.joinToString(", "),
+        cc = cc.joinToString(", "),
         subject = if (subject.startsWith("Re:", ignoreCase = true)) subject else "Re: $subject",
         body = "\n\nOn ${summary.receivedAt.asLocalTime()}, ${summary.from} wrote:\n$quoted",
         inReplyTo = answered,
         references = body?.references.orEmpty() + listOfNotNull(answered),
         replying = true,
     )
+}
+
+/**
+ * Whether Reply all would reach anyone Reply would not, which is the only reason to offer
+ * the button. On the usual one-to-one message it would send exactly the same mail, and a
+ * second button that does the same thing as the first is a button people click by mistake.
+ */
+internal fun hasOtherRecipients(summary: Summary, body: Body?, mine: Set<String>): Boolean {
+    val ours = (mine + summary.fromEmail).map { it.trim().lowercase() }.filter { it.isNotEmpty() }.toSet()
+    return dedupe(body?.to.orEmpty() + body?.cc.orEmpty(), ours).isNotEmpty()
+}
+
+/** Addresses in the order they were written, without repeats and without [exclude]. */
+private fun dedupe(addresses: List<String>, exclude: Set<String>): List<String> {
+    val seen = exclude.toMutableSet()
+    return addresses.mapNotNull { address ->
+        val key = address.trim().lowercase()
+        if (key.isEmpty() || !seen.add(key)) null else address.trim()
+    }
 }
 
 /**

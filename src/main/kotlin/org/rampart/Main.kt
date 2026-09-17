@@ -703,12 +703,15 @@ private fun Reader(
             Message(
                 summary = selected,
                 body = body,
-                onReply = {
+                onReply = { all ->
                     val message = selected ?: return@Message
-                    val from = identities[here?.first].orEmpty().firstOrNull()?.email.orEmpty()
+                    val ours = identities[here?.first].orEmpty().map { it.email }.toSet()
                     sendError = null
-                    composing = replyTo(message, body, from)
+                    composing = replyTo(message, body, ours.firstOrNull().orEmpty(), all, ours)
                 },
+                replyAll = selected?.let {
+                    hasOtherRecipients(it, body, identities[here?.first].orEmpty().map { id -> id.email }.toSet())
+                } ?: false,
                 onForward = {
                     val message = selected ?: return@Message
                     val from = identities[here?.first].orEmpty().firstOrNull()?.email.orEmpty()
@@ -1166,7 +1169,8 @@ internal data class MessageActions(
 internal fun Message(
     summary: Summary?,
     body: Body?,
-    onReply: () -> Unit = {},
+    onReply: (all: Boolean) -> Unit = {},
+    replyAll: Boolean = false,
     onForward: () -> Unit = {},
     actions: MessageActions = MessageActions(),
     attachments: List<Attachment> = emptyList(),
@@ -1206,7 +1210,11 @@ internal fun Message(
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                OutlinedButton(onClick = onReply, enabled = body != null) { Text("Reply") }
+                OutlinedButton(onClick = { onReply(false) }, enabled = body != null) { Text("Reply") }
+                // Only when it would reach someone Reply would not.
+                if (replyAll) {
+                    OutlinedButton(onClick = { onReply(true) }, enabled = body != null) { Text("Reply all") }
+                }
                 OutlinedButton(onClick = onForward, enabled = body != null) { Text("Forward") }
                 Spacer(Modifier.weight(1f))
                 actions.archive?.let { OutlinedButton(onClick = it) { Text("Archive") } }

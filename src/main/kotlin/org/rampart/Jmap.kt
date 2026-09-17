@@ -70,6 +70,9 @@ data class Body(
     val text: String?,
     val messageId: List<String> = emptyList(),
     val references: List<String> = emptyList(),
+    /** Everyone the message was addressed to, which is what Reply all needs. */
+    val to: List<String> = emptyList(),
+    val cc: List<String> = emptyList(),
 )
 
 class Jmap private constructor(
@@ -181,7 +184,8 @@ class Jmap private constructor(
             invoke("Email/get", "b") {
                 putJsonArray("ids") { add(id) }
                 putJsonArray("properties") {
-                    add("htmlBody"); add("textBody"); add("bodyValues"); add("messageId"); add("references")
+                    add("htmlBody"); add("textBody"); add("bodyValues")
+                    add("messageId"); add("references"); add("to"); add("cc")
                 }
                 put("fetchHTMLBodyValues", true)
                 put("fetchTextBodyValues", true)
@@ -196,7 +200,16 @@ class Jmap private constructor(
             ?.joinToString("\n")
             ?.ifBlank { null }
         fun ids(field: String) = email[field]?.jsonArray?.mapNotNull { it.str() }.orEmpty()
-        return Body(join("htmlBody"), join("textBody"), ids("messageId"), ids("references"))
+        fun addresses(field: String) = email[field]?.jsonArray
+            ?.mapNotNull { it.jsonObject["email"]?.str() }.orEmpty()
+        return Body(
+            html = join("htmlBody"),
+            text = join("textBody"),
+            messageId = ids("messageId"),
+            references = ids("references"),
+            to = addresses("to"),
+            cc = addresses("cc"),
+        )
     }
 
     fun attachments(emailId: String): List<Attachment> {

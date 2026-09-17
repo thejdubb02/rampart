@@ -102,6 +102,7 @@ class Screenshots {
             Message(
                 summary = MESSAGES[1],
                 body = Body(SAMPLE_HTML, null),
+                replyAll = true,
                 actions = MessageActions(archive = {}, junk = {}, trash = {}),
                 attachments = listOf(
                     Attachment("b1", "Revised quote September.pdf", "application/pdf", 214_512),
