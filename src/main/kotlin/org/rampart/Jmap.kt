@@ -82,7 +82,17 @@ class Jmap private constructor(
     private val downloadUrl: String,
 ) {
     companion object {
-        fun connect(server: String, user: String, password: String): Jmap {
+        fun connect(server: String, user: String, password: String): Jmap = try {
+            session(server, user, password)
+        } catch (e: JmapError) {
+            throw e
+        } catch (e: Exception) {
+            // Everything below this line is a network fault, and the sign-in screen is the
+            // first thing anyone sees. A Java class name there is not an error message.
+            throw JmapError(plainNetworkError(e, server))
+        }
+
+        private fun session(server: String, user: String, password: String): Jmap {
             val credential = "Basic " + Base64.getEncoder()
                 .encodeToString("$user:$password".toByteArray(Charsets.UTF_8))
             var response = get(sessionUrl(server), credential)
@@ -529,5 +539,34 @@ private fun pct(value: String): String = buildString(value.length * 3) {
             append("0123456789ABCDEF"[u shr 4])
             append("0123456789ABCDEF"[u and 0xF])
         }
+    }
+}
+
+/**
+ * A network failure, said the way a person would say it.
+ *
+ * The reason this exists is that `java.net.http` reports a name that does not resolve as a
+ * ConnectException whose own message is null, so the sign-in screen was showing the words
+ * "java.net.ConnectException" and nothing else. The cause chain is walked because the fault
+ * worth naming is usually two or three levels down from what was thrown.
+ */
+internal fun plainNetworkError(e: Throwable, server: String): String {
+    val chain = generateSequence(e) { it.cause }.take(8).toList()
+    fun kind(name: String) = chain.any { it.javaClass.name.endsWith(name) }
+    return when {
+        // java.net.http reports a name that does not resolve as an UnresolvedAddressException
+        // wrapped in two ConnectExceptions, all three with a null message. Checked against a
+        // real lookup rather than assumed, because the obvious guess is UnknownHostException
+        // and that is not what comes out.
+        kind("UnresolvedAddressException") || kind("UnknownHostException") ->
+            "There is no server called $server. Check the address for a typo."
+        kind("SSLHandshakeException") || kind("CertificateException") ->
+            "$server answered, but its security certificate is not one this computer trusts."
+        kind("HttpTimeoutException") || kind("SocketTimeoutException") ->
+            "$server did not answer in time."
+        kind("ConnectException") || kind("NoRouteToHostException") ->
+            "Could not reach $server. Either the address is wrong or it is not answering."
+        else -> chain.firstNotNullOfOrNull { it.message?.takeIf(String::isNotBlank) }
+            ?: "Could not reach $server."
     }
 }
