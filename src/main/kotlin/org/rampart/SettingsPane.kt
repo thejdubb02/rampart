@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -30,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -39,6 +41,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -73,8 +76,10 @@ internal fun SettingsPane(
     onAddAccount: () -> Unit,
     onRestart: () -> Unit,
     onClose: () -> Unit,
+    /** Which page opens first. Only ever passed by the screenshot tests. */
+    initialPage: String = SettingsPages.first().first,
 ) {
-    val current = LocalRampartTheme.current
+    var page by remember { mutableStateOf(initialPage) }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
@@ -88,135 +93,229 @@ internal fun SettingsPane(
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-        Column(
-            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Column(Modifier.widthIn(max = 860.dp).fillMaxWidth()) {
-                Section("Theme", "Ported from Clique, so the ones you already picked there are here.")
-                // Not lazy in any useful sense: there are eighteen of these and the column
-                // above already scrolls. The grid is here for the wrapping, so the height
-                // has to be given, and a fixed row height times the number of rows is it.
-                val columns = 3
-                val rows = (THEMES.size + columns - 1) / columns
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(columns),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.fillMaxWidth().height((rows * 104).dp),
-                ) {
-                    items(THEMES, key = { it.key }) { theme ->
-                        ThemeCard(theme, selected = theme.key == current.key) { onTheme(theme) }
-                    }
-                }
-
-                Spacer(Modifier.height(30.dp))
-                Section("Notifications", "Rampart checks for new mail every minute while it is open.")
-                Row(
-                    Modifier.fillMaxWidth().clickable { onNotifyOnArrival(!notifyOnArrival) }.padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Tell me when mail arrives", style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            if (isTraySupported) "One notification per batch, not one per message."
-                            // Worth saying rather than leaving a switch that does nothing.
-                            else "This desktop has no notification area, so nothing will appear.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline,
+        Row(Modifier.fillMaxSize()) {
+            SettingsNav(page) { page = it }
+            VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Column(
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(28.dp),
+            ) {
+                Column(Modifier.widthIn(max = 720.dp).fillMaxWidth()) {
+                    when (page) {
+                        "accounts" -> AccountsPage(accounts, onAddAccount)
+                        "notifications" -> NotificationsPage(notifyOnArrival, onNotifyOnArrival)
+                        "themes" -> ThemesPage(onTheme)
+                        "identities" -> IdentitiesPage(
+                            identities, signatureError, onSignature, onPickSignatureImage,
                         )
-                    }
-                    Switch(checked = notifyOnArrival, onCheckedChange = onNotifyOnArrival, enabled = isTraySupported)
-                }
-
-                Spacer(Modifier.height(30.dp))
-                Section("Accounts", "Signed in on this computer. Passwords stay in Windows, never in a file.")
-                accounts.forEach { account ->
-                    Row(
-                        Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Avatar(account.name, account.email, 32.dp)
-                        Spacer(Modifier.width(11.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                shortAccountName(account.name, account.email),
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            Text(
-                                account.email,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.outline,
-                            )
-                        }
-                    }
-                }
-                Spacer(Modifier.height(6.dp))
-                OutlinedButton(onClick = onAddAccount) { Text("Add account") }
-
-                Spacer(Modifier.height(30.dp))
-                Section(
-                    "Signatures",
-                    "Kept on the server against each sending address, so one written here is the " +
-                        "one the webmail uses too.",
-                )
-                signatureError?.let {
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(bottom = 10.dp),
-                    )
-                }
-                if (identities.isEmpty()) {
-                    Text(
-                        "This account has no sending address, so there is nothing to sign.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
-                }
-                identities.forEach { identity ->
-                    SignatureEditor(
-                        address = identity.email,
-                        html = identity.htmlSignature,
-                        onHtml = { onSignature(identity, it) },
-                        onAddImage = onPickSignatureImage,
-                    )
-                    Spacer(Modifier.height(18.dp))
-                }
-
-                if (vacation != null) {
-                    Spacer(Modifier.height(30.dp))
-                    Section(
-                        "When you are away",
-                        "The server sends this on your behalf, so it keeps working when Rampart " +
-                            "is closed. One reply per person, not one per message.",
-                    )
-                    AwayReply(vacation, vacationError, onVacation)
-                }
-
-                Spacer(Modifier.height(30.dp))
-                Section("Version", "Rampart updates itself in the background and asks before restarting.")
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        Updates.current?.let { "You are on $it." } ?: "Running from source.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    if (update != null) {
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            "$update is ready.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        TextButton(onClick = onRestart) { Text("Restart now") }
+                        "away" -> AwayPage(vacation, vacationError, onVacation)
+                        "about" -> AboutPage(update, onRestart)
                     }
                 }
             }
         }
     }
+}
+
+/**
+ * The pages, in the order they appear, each under a heading.
+ *
+ * A flat list rather than a nested structure: the heading is just the third element, and
+ * a run of pages sharing one is drawn under it. Two levels of data for a menu with six
+ * entries in it would be more machinery than the menu.
+ */
+private val SettingsPages: List<Triple<String, String, String>> = listOf(
+    Triple("accounts", "Accounts", "General"),
+    Triple("notifications", "Notifications", "General"),
+    Triple("themes", "Themes", "Appearance"),
+    Triple("identities", "Identities and signatures", "Mail"),
+    Triple("away", "Away reply", "Mail"),
+    Triple("about", "About", "Rampart"),
+)
+
+@Composable
+private fun SettingsNav(current: String, onPick: (String) -> Unit) {
+    Column(
+        Modifier.width(232.dp).fillMaxHeight().verticalScroll(rememberScrollState())
+            .padding(vertical = 14.dp, horizontal = 10.dp),
+    ) {
+        var heading: String? = null
+        SettingsPages.forEach { (key, label, group) ->
+            if (group != heading) {
+                heading = group
+                Text(
+                    group.uppercase(),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.padding(start = 10.dp, top = 14.dp, bottom = 5.dp),
+                )
+            }
+            val here = key == current
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (here) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (here) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small)
+                    .background(
+                        if (here) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
+                    )
+                    .clickable { onPick(key) }
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ThemesPage(onTheme: (Theme) -> Unit) {
+    val current = LocalRampartTheme.current
+    Section("Theme", "Ported from Clique, so the ones you already picked there are here.")
+    // Not lazy in any useful sense: there are eighteen of these and the column above
+    // already scrolls. The grid is here for the wrapping, so the height has to be given,
+    // and a fixed row height times the number of rows is it.
+    val columns = 3
+    val rows = (THEMES.size + columns - 1) / columns
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(columns),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.fillMaxWidth().height((rows * 104).dp),
+    ) {
+        items(THEMES, key = { it.key }) { theme ->
+            ThemeCard(theme, selected = theme.key == current.key) { onTheme(theme) }
+        }
+    }
+}
+
+@Composable
+private fun NotificationsPage(notifyOnArrival: Boolean, onNotifyOnArrival: (Boolean) -> Unit) {
+    Section("Notifications", "Rampart checks for new mail every minute while it is open.")
+    Row(
+        Modifier.fillMaxWidth().clickable { onNotifyOnArrival(!notifyOnArrival) }.padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Tell me when mail arrives", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                if (isTraySupported) "One notification per batch, not one per message."
+                // Worth saying rather than leaving a switch that does nothing.
+                else "This desktop has no notification area, so nothing will appear.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+        Switch(checked = notifyOnArrival, onCheckedChange = onNotifyOnArrival, enabled = isTraySupported)
+    }
+}
+
+@Composable
+private fun AccountsPage(accounts: List<AccountMailboxes>, onAddAccount: () -> Unit) {
+    Section("Accounts", "Signed in on this computer. Passwords stay in Windows, never in a file.")
+    accounts.forEach { account ->
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Avatar(account.name, account.email, 32.dp)
+            Spacer(Modifier.width(11.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    shortAccountName(account.name, account.email),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    account.email,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+        }
+    }
+    Spacer(Modifier.height(6.dp))
+    OutlinedButton(onClick = onAddAccount) { Text("Add account") }
+}
+
+@Composable
+private fun IdentitiesPage(
+    identities: List<Identity>,
+    signatureError: String?,
+    onSignature: (Identity, String) -> Unit,
+    onPickSignatureImage: () -> String?,
+) {
+    Section(
+        "Identities and signatures",
+        "Kept on the server against each sending address, so one written here is the " +
+            "one the webmail uses too.",
+    )
+    signatureError?.let {
+        Text(
+            it,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(bottom = 10.dp),
+        )
+    }
+    if (identities.isEmpty()) {
+        Text(
+            "This account has no sending address, so there is nothing to sign.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline,
+        )
+    }
+    identities.forEach { identity ->
+        SignatureEditor(
+            address = identity.email,
+            html = identity.htmlSignature,
+            onHtml = { onSignature(identity, it) },
+            onAddImage = onPickSignatureImage,
+        )
+        Spacer(Modifier.height(18.dp))
+    }
+}
+
+@Composable
+private fun AwayPage(vacation: Vacation?, vacationError: String?, onVacation: (Vacation) -> Unit) {
+    Section(
+        "When you are away",
+        "The server sends this on your behalf, so it keeps working when Rampart " +
+            "is closed. One reply per person, not one per message.",
+    )
+    if (vacation == null) {
+        Text(
+            "This server does not do away replies, or it has not answered yet.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline,
+        )
+        return
+    }
+    AwayReply(vacation, vacationError, onVacation)
+}
+
+@Composable
+private fun AboutPage(update: String?, onRestart: () -> Unit) {
+    Section("Version", "Rampart updates itself in the background and asks before restarting.")
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            Updates.current?.let { "You are on $it." } ?: "Running from source.",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        if (update != null) {
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "$update is ready.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.width(6.dp))
+            TextButton(onClick = onRestart) { Text("Restart now") }
+        }
+    }
+
+    Spacer(Modifier.height(30.dp))
+    Section("What changed", "Every version, newest first.")
+    Changes()
 }
 
 @Composable
@@ -394,5 +493,62 @@ private fun Entry(value: String, hint: String, lines: Int = 1, onChange: (String
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             modifier = Modifier.fillMaxSize(),
         )
+    }
+}
+
+/**
+ * The changelog.
+ *
+ * Ten at a time, because the useful question is almost always "what changed since I last
+ * looked" and the rest is history somebody can ask for.
+ */
+@Composable
+private fun Changes() {
+    val all = remember { changelog() }
+    var showAll by remember { mutableStateOf(false) }
+    if (all.isEmpty()) {
+        Text(
+            "This build has no changelog in it.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline,
+        )
+        return
+    }
+    val shown = if (showAll) all else all.take(10)
+    shown.forEach { change ->
+        val running = isRunning(change)
+        Row(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
+            Column(Modifier.width(96.dp)) {
+                Text(
+                    change.version,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = if (running) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (running) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    change.date,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f)) {
+                Text(change.what, style = MaterialTheme.typography.bodyMedium)
+                // Said once, next to the version it refers to, rather than as a legend
+                // somewhere else that has to be found and understood.
+                if (running) {
+                    Text(
+                        "This is the version you are running.",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+        }
+    }
+    if (!showAll && all.size > shown.size) {
+        Spacer(Modifier.height(6.dp))
+        TextButton(onClick = { showAll = true }) { Text("Show all ${all.size}") }
     }
 }

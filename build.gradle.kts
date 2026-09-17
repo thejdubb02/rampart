@@ -48,6 +48,42 @@ tasks.test {
     useJUnitPlatform()
 }
 
+/*
+ * The changelog, written into the build rather than fetched.
+ *
+ * Every commit is a version, because the version is the commit count, and every commit
+ * subject is already one plain sentence saying what changed: that is the house style and
+ * it exists for this. So the log is the changelog and there is nothing to maintain by
+ * hand, nothing to forget to update, and no second place for the two to disagree.
+ *
+ * Baked in as a resource rather than fetched from GitHub so it works offline and so it
+ * always describes the build it is inside, rather than whatever has been released since.
+ */
+val changelogFile = layout.buildDirectory.file("generated/changelog/changelog.tsv")
+
+val changelog by tasks.registering {
+    outputs.file(changelogFile)
+    // Never up to date: a new commit changes the answer and nothing else tells Gradle so.
+    outputs.upToDateWhen { false }
+    doLast {
+        val out = changelogFile.get().asFile
+        out.parentFile.mkdirs()
+        val log = runCatching {
+            ProcessBuilder("git", "log", "--reverse", "--pretty=format:%cs%x09%s")
+                .directory(rootDir).start().inputStream.bufferedReader().readText()
+        }.getOrDefault("")
+        // Numbered from the first commit forward, so line N is version 0.1.N, then
+        // reversed so the newest is first. Capped: nobody scrolls two hundred releases.
+        val lines = log.lineSequence().filter { it.isNotBlank() }
+            .mapIndexed { at, line -> "0.1.${at + 1}\t$line" }
+            .toList().asReversed().take(200)
+        out.writeText(lines.joinToString("\n"))
+    }
+}
+
+sourceSets.main { resources.srcDir(changelogFile.map { it.asFile.parentFile }) }
+tasks.named("processResources") { dependsOn(changelog) }
+
 compose.desktop {
     application {
         mainClass = "org.rampart.MainKt"

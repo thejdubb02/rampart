@@ -50,6 +50,8 @@ class Screenshots {
         shoot("sidebar-collapsed", 1400, 900, dark) { Panes(collapsed = true) }
         // Taller than any window, because the point of this one is the whole body: a
         // heading, a list, a table, a quote, a rule and a picture the message carries.
+        shoot("settings-about", 1200, 900, dark) { SettingsScreen(page = "about") }
+        shoot("settings-signatures", 1200, 900, withArt) { SettingsScreen(page = "identities") }
         shoot("body", 820, 1500) {
             Message(
                 summary = MESSAGES[1],
@@ -116,41 +118,7 @@ class Screenshots {
         // A ported theme, and the one thing about it that cannot be checked by reading the
         // palette: whether the character in the corner is faint enough to read mail over.
         shoot("reader-themed", 1400, 900, withArt) { Panes() }
-        // Taller than any real window on purpose: the pane scrolls, and a screenshot that
-        // stops at the fold is how a section nobody has looked at ships.
-        shoot("settings", 1400, 2500, withArt) {
-            SettingsPane(
-                accounts = ACCOUNTS,
-                identities = listOf(
-                    Identity(
-                        "i1", "Justin Willhite", "justin@willhitestrategy.com",
-                        htmlSignature = """<div style="color:#555"><b>Justin Willhite</b><br>""" +
-                            """Willhite Strategy Group<br>""" +
-                            """<a href="https://willhitestrategy.com">willhitestrategy.com</a></div>""",
-                    ),
-                    Identity("i2", "Skybox7", "admin@skybox7.com"),
-                ),
-                vacation = Vacation(
-                    enabled = true,
-                    from = "2026-12-24T00:00:00Z",
-                    subject = "Out of office until the 2nd",
-                    text = "I am away until 2 January and will not be picking up email. " +
-                        "For anything urgent, please call the office.",
-                ),
-                vacationError = null,
-                onVacation = {},
-                signatureError = null,
-                onSignature = { _, _ -> },
-                onPickSignatureImage = { null },
-                update = "0.1.25",
-                notifyOnArrival = true,
-                onNotifyOnArrival = {},
-                onTheme = {},
-                onAddAccount = {},
-                onRestart = {},
-                onClose = {},
-            )
-        }
+        shoot("settings", 1200, 900, withArt) { SettingsScreen("accounts") }
         shoot("composer", 1000, 640) {
             Composer(
                 identities = listOf("you@example.org", "billing@example.org"),
@@ -293,6 +261,43 @@ and the difference is about four percent.</p>
 """.trimIndent()
 
 /** Enough of a real message to see that headers and body are told apart. */
+/** The settings pane with fixtures, opened on one page. */
+@Composable
+private fun SettingsScreen(page: String) {
+    SettingsPane(
+            accounts = ACCOUNTS,
+            identities = listOf(
+                Identity(
+                    "i1", "Justin Willhite", "justin@willhitestrategy.com",
+                    htmlSignature = """<div style="color:#555"><b>Justin Willhite</b><br>""" +
+                        """Willhite Strategy Group<br>""" +
+                        """<a href="https://willhitestrategy.com">willhitestrategy.com</a></div>""",
+                ),
+                Identity("i2", "Skybox7", "admin@skybox7.com"),
+            ),
+            vacation = Vacation(
+                enabled = true,
+                from = "2026-12-24T00:00:00Z",
+                subject = "Out of office until the 2nd",
+                text = "I am away until 2 January and will not be picking up email. " +
+                    "For anything urgent, please call the office.",
+            ),
+            vacationError = null,
+            onVacation = {},
+            signatureError = null,
+            onSignature = { _, _ -> },
+            onPickSignatureImage = { null },
+            update = "0.1.25",
+            notifyOnArrival = true,
+            onNotifyOnArrival = {},
+            onTheme = {},
+            onAddAccount = {},
+            onRestart = {},
+            onClose = {},
+            initialPage = page,
+    )
+}
+
 private val SAMPLE_RAW = """
 Return-Path: <dana@example.org>
 Received: from mx.example.org (mx.example.org [203.0.113.24])
