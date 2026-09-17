@@ -48,6 +48,30 @@ class Screenshots {
         shoot("reader", 1400, 900) { Panes() }
         shoot("reader-dark", 1400, 900, dark) { Panes() }
         shoot("sidebar-collapsed", 1400, 900, dark) { Panes(collapsed = true) }
+        shoot("unified", 1400, 900) {
+            Row(Modifier.fillMaxSize()) {
+                Sidebar(
+                    accounts = ACCOUNTS,
+                    here = ALL_ACCOUNTS to allInboxes(6),
+                    onSettings = {},
+                    collapsed = false,
+                    onToggleCollapsed = {},
+                    onAddAccount = {},
+                    onWrite = {},
+                    onSelect = { _, _ -> },
+                )
+                VerticalDivider()
+                MessageList(
+                    MESSAGES.mapIndexed { i, m -> m.copy(account = ACCOUNTS[i % 2].key) },
+                    null,
+                    loading = false,
+                    title = "All inboxes",
+                    accountLabels = ACCOUNTS.associate { it.key to shortAccountName(it.name, it.email) },
+                ) { _, _, _ -> }
+                VerticalDivider()
+                Message(summary = null, body = null, onLink = {})
+            }
+        }
         shoot("update", 1000, 700, dark) {
             Box(Modifier.fillMaxSize()) {
                 Panes()

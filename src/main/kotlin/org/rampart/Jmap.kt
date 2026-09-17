@@ -64,6 +64,11 @@ data class Summary(
     val flagged: Boolean = false,
     /** Every keyword on the message, protocol ones included. See [tagsOf]. */
     val keywords: Set<String> = emptySet(),
+    /**
+     * Which signed in account this came from. Blank everywhere except a merged list, where
+     * it is the only thing that says which server to talk to about this message.
+     */
+    val account: String = "",
     /** The conversation this belongs to. Empty on a server that does not thread. */
     val threadId: String = "",
     /** How many messages are in that conversation, counting this one. */

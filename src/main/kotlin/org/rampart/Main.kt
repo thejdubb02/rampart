@@ -538,6 +538,53 @@ private fun Reader(
 
     fun session(key: String) = sessions.first { it.key == key }
 
+    /** Whether the open folder is the merged one rather than a real folder on a server. */
+    fun unified() = here?.first == ALL_ACCOUNTS
+
+    /**
+     * Which server to talk to about [message].
+     *
+     * In a normal folder that is simply the account the folder belongs to. In the merged
+     * inbox every message carries its own, and using the folder's would send every reply,
+     * star and archive to whichever account happened to be first.
+     */
+    fun accountOf(message: Summary?): String? =
+        message?.account?.ifBlank { null } ?: here?.first?.takeIf { it != ALL_ACCOUNTS }
+
+    /**
+     * The account a new message is written from. The one being replied to, when there is
+     * one, so a reply in the merged inbox goes back out of the mailbox it arrived in.
+     */
+    fun writingAccount(): String? = accountOf(selected) ?: sessions.firstOrNull()?.key
+
+    /**
+     * Where these messages are now, which is what undo puts them back into. In a real folder
+     * that is the folder on screen. In the merged inbox it is that account's own inbox,
+     * which is the only folder a message in there can have come from.
+     */
+    fun sourceFolder(key: String): String? =
+        if (!unified()) here?.second?.id
+        else mailboxes[key].orEmpty().firstOrNull { it.role == "inbox" }?.id
+
+    /** Settings are always about one real account, never about the merged row. */
+    fun settingsAccount(): String? =
+        here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key
+
+    /** The inbox of every signed in account, as one list. */
+    suspend fun everyInbox(): List<Summary> = merged(
+        sessions.associate { open ->
+            val inbox = mailboxes[open.key]?.firstOrNull { it.role == "inbox" }
+            open.key to (
+                inbox?.let {
+                    runCatching {
+                        if (showingResults && query.isNotBlank()) open.jmap.search(query, it.id)
+                        else open.jmap.emails(it.id)
+                    }.getOrDefault(emptyList())
+                } ?: emptyList()
+                )
+        },
+    )
+
     suspend fun <T> io(block: () -> T): T? = try {
         error = ""
         withContext(Dispatchers.IO) { block() }
@@ -589,16 +636,27 @@ private fun Reader(
                 val inbox = found.firstOrNull { it.role == "inbox" } ?: found.firstOrNull()
                 if (inbox != null) here = open.key to inbox
             }
+            // Only once every account is in, or it would land on one account's inbox and
+            // move under whoever was reading it a second later.
+            if (sessions.size > 1 && mailboxes.size == sessions.size && here?.first != ALL_ACCOUNTS) {
+                here = ALL_ACCOUNTS to allInboxes(0)
+            }
         }
         loading = false
     }
     suspend fun reload() {
         val (key, mailbox) = here ?: return
         loading = true
-        emails = io {
-            if (showingResults && query.isNotBlank()) session(key).jmap.search(query, mailbox.id)
-            else session(key).jmap.emails(mailbox.id)
-        } ?: emptyList()
+        emails = if (key == ALL_ACCOUNTS) {
+            // One account failing is not the whole list failing, so each is caught inside
+            // rather than out here: the others still show.
+            withContext(Dispatchers.IO) { everyInbox() }
+        } else {
+            io {
+                if (showingResults && query.isNotBlank()) session(key).jmap.search(query, mailbox.id)
+                else session(key).jmap.emails(mailbox.id)
+            } ?: emptyList()
+        }
         loading = false
     }
 
@@ -638,7 +696,7 @@ private fun Reader(
                     ?.let { mailboxes = mailboxes + (open.key to it) }
                 // Anything this account changed can be in the folder on screen, not only in
                 // its inbox: mail read or filed in another client moves the open folder too.
-                if (here?.first == open.key && !showingResults) reload()
+                if ((here?.first == open.key || unified()) && !showingResults) reload()
                 if (notifyOnArrival) arrivalText(found.fresh)?.let { (title, body) -> notify(title, body) }
             }
             // Until every account has been looked at once there is nothing to compare
@@ -681,13 +739,16 @@ private fun Reader(
     /** Folder counts and the open folder, brought up to date now rather than at the next poll. */
     suspend fun refreshNow() {
         val key = here?.first ?: return
-        withContext(Dispatchers.IO) { runCatching { session(key).jmap.mailboxes() }.getOrNull() }
-            ?.let { mailboxes = mailboxes + (key to it) }
+        val touched = if (key == ALL_ACCOUNTS) sessions.map { it.key } else listOf(key)
+        touched.forEach { one ->
+            withContext(Dispatchers.IO) { runCatching { session(one).jmap.mailboxes() }.getOrNull() }
+                ?.let { mailboxes = mailboxes + (one to it) }
+        }
         reload()
     }
 
     LaunchedEffect(settingsOpen, here) {
-        val key = here?.first
+        val key = settingsAccount()
         if (!settingsOpen || key == null) return@LaunchedEffect
         vacationError = null
         vacation = withContext(Dispatchers.IO) { runCatching { session(key).jmap.vacation() }.getOrNull() }
@@ -703,7 +764,7 @@ private fun Reader(
     }
     LaunchedEffect(selected) {
         val message = selected ?: return@LaunchedEffect
-        val key = here?.first ?: return@LaunchedEffect
+        val key = accountOf(message) ?: return@LaunchedEffect
         body = null
         bodyError = null
         inlineImages = emptyMap()
@@ -768,8 +829,8 @@ private fun Reader(
     // What can be done to the open message depends on which folders this account has:
     // a server with no Archive folder should not offer an Archive button that fails.
     val actions = run {
-        val key = here?.first
         val message = selected
+        val key = accountOf(message)
         if (key == null || message == null) return@run MessageActions()
         val boxes = mailboxes[key].orEmpty()
         fun moveTo(role: String): (() -> Unit)? {
@@ -847,12 +908,12 @@ private fun Reader(
             Key.J, Key.DirectionDown -> step(1)
             Key.K, Key.DirectionUp -> step(-1)
             Key.F5 -> { scope.launch { refreshNow() }; true }
-            Key.C -> { sendError = null; composing = Draft(from = identities[here?.first].orEmpty().firstOrNull()?.email.orEmpty()); true }
-            Key.R -> { selected?.let { m -> composing = replyTo(m, body, identities[here?.first].orEmpty().firstOrNull()?.email.orEmpty()) }; true }
-            Key.F -> { selected?.let { m -> composing = forwardOf(m, body, identities[here?.first].orEmpty().firstOrNull()?.email.orEmpty()) }; true }
+            Key.C -> { sendError = null; composing = Draft(from = identities[writingAccount()].orEmpty().firstOrNull()?.email.orEmpty()); true }
+            Key.R -> { selected?.let { m -> composing = replyTo(m, body, identities[writingAccount()].orEmpty().firstOrNull()?.email.orEmpty()) }; true }
+            Key.F -> { selected?.let { m -> composing = forwardOf(m, body, identities[writingAccount()].orEmpty().firstOrNull()?.email.orEmpty()) }; true }
             Key.A -> {
                 selected?.let { m ->
-                    val ours = identities[here?.first].orEmpty().map { it.email }.toSet()
+                    val ours = identities[writingAccount()].orEmpty().map { it.email }.toSet()
                     if (hasOtherRecipients(m, body, ours)) {
                         composing = replyTo(m, body, ours.firstOrNull().orEmpty(), true, ours)
                     }
@@ -873,10 +934,10 @@ private fun Reader(
     val composer = composing
     if (composer != null) {
         Composer(
-            identities = identities[here?.first]?.map { it.email }.orEmpty(),
+            identities = identities[writingAccount()]?.map { it.email }.orEmpty(),
             // The sign-off comes off the identity on the server, so one written in Bulwark
             // is the one used here without anything having to be imported or kept in step.
-            initial = identities[here?.first].orEmpty()
+            initial = identities[writingAccount()].orEmpty()
                 .firstOrNull { it.email.equals(composer.from, ignoreCase = true) }
                 ?.let { signed(composer, it.textSignature, it.htmlSignature) }
                 ?: composer,
@@ -885,7 +946,7 @@ private fun Reader(
             onDiscard = {
                 // What was autosaved goes with it. Discard has to mean discarded, or the
                 // Drafts folder fills with messages somebody decided against.
-                val key = here?.first
+                val key = writingAccount()
                 val going = draftId
                 if (key != null && going != null) {
                     scope.launch { io { session(key).jmap.destroy(listOf(going)) } }
@@ -895,7 +956,7 @@ private fun Reader(
                 sendError = null
             },
             onAttach = { files ->
-                val key = here?.first
+                val key = writingAccount()
                 val account = key?.let(::session)
                     ?: throw JmapError("Pick an account before attaching anything.")
                 // One at a time rather than in parallel: a mail server is not a CDN, and
@@ -903,7 +964,7 @@ private fun Reader(
                 withContext(Dispatchers.IO) { files.map { account.jmap.upload(it) } }
             },
             onSave = { draft ->
-                val key = here?.first
+                val key = writingAccount()
                 val account = key?.let(::session)
                 val drafts = mailboxes[key].orEmpty().firstOrNull { it.role == "drafts" }
                 val identity = identities[key].orEmpty().firstOrNull { it.email.equals(draft.from, true) }
@@ -916,7 +977,7 @@ private fun Reader(
                 }
             },
             onSend = { draft ->
-                val key = here?.first
+                val key = writingAccount()
                 val account = key?.let(::session)
                 val boxes = mailboxes[key].orEmpty()
                 val drafts = boxes.firstOrNull { it.role == "drafts" }
@@ -964,13 +1025,21 @@ private fun Reader(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "${last.ids.size} messages ${last.what}.",
+                    "${last.count} messages ${last.what}.",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.weight(1f),
                 )
                 TextButton(onClick = {
                     scope.launch {
-                        if (io { session(last.accountKey).jmap.move(last.ids, last.fromMailboxId) } != null) {
+                        // Every account is put back, and the notice only clears if they all
+                        // did. One that failed leaves the offer up rather than pretending.
+                        val allBack = withContext(Dispatchers.IO) {
+                            last.moves.all { move ->
+                                runCatching { session(move.accountKey).jmap.move(move.ids, move.fromMailboxId) }
+                                    .isSuccess
+                            }
+                        }
+                        if (allBack) {
                             undo = null
                             refreshNow()
                         }
@@ -1014,8 +1083,8 @@ private fun Reader(
                 onToggleCollapsed = { collapsed = !collapsed; Settings.setSidebarCollapsed(collapsed) },
                 onSelect = { key, mailbox -> here = key to mailbox },
                 onWrite = {
-                    val from = identities[here?.first].orEmpty().firstOrNull()?.email
-                        ?: sessions.firstOrNull { it.key == here?.first }?.account.let { it?.email }.orEmpty()
+                    val from = identities[writingAccount()].orEmpty().firstOrNull()?.email
+                        ?: sessions.firstOrNull { it.key == writingAccount() }?.account?.email.orEmpty()
                     sendError = null
                     composing = Draft(from = from)
                 },
@@ -1026,11 +1095,11 @@ private fun Reader(
                     accounts = sessions.map {
                         AccountMailboxes(it.key, it.account.name, it.account.email, mailboxes[it.key].orEmpty())
                     },
-                    identities = identities[here?.first].orEmpty(),
+                    identities = identities[settingsAccount()].orEmpty(),
                     vacation = vacation,
                     vacationError = vacationError,
                     onVacation = { wanted ->
-                        val key = here?.first
+                        val key = settingsAccount()
                         vacationError = vacationProblem(wanted)
                         if (key != null && vacationError == null) {
                             scope.launch {
@@ -1046,7 +1115,7 @@ private fun Reader(
                     },
                     signatureError = signatureError,
                     onSignature = { identity, html ->
-                        val key = here?.first
+                        val key = settingsAccount()
                         if (key != null) {
                             signatureError = null
                             scope.launch {
@@ -1101,6 +1170,13 @@ private fun Reader(
                 selected = selected,
                 loading = loading,
                 title = here?.second?.name.orEmpty(),
+                // Only in the merged list. Everywhere else the folder says which account it
+                // is, and repeating it on every row would be noise on most screens.
+                accountLabels = if (unified()) {
+                    sessions.associate { it.key to shortAccountName(it.account.name, it.account.email) }
+                } else {
+                    emptyMap()
+                },
                 picked = picked,
                 onRefresh = { scope.launch { refreshNow() } },
                 onSelect = { message, ctrl, shift ->
@@ -1115,32 +1191,49 @@ private fun Reader(
                     count = picked.size,
                     onClear = { picked = emptySet() },
                     onFile = { role, what ->
-                        val key = here?.first
-                        val here2 = here?.second
-                        val target = mailboxes[key].orEmpty().firstOrNull { it.role == role }
-                        if (key != null && here2 != null && target != null) {
-                            val ids = emails.filter { it.id in picked }.map { it.id }
+                        // Grouped by account, because in the merged inbox the picked
+                        // messages can come from several, and each has its own Archive.
+                        val byAccount = emails.filter { it.id in picked }
+                            .groupBy { accountOf(it) }
+                            .mapNotNull { (key, group) ->
+                                key ?: return@mapNotNull null
+                                val from = sourceFolder(key)
+                                val target = mailboxes[key].orEmpty().firstOrNull { it.role == role }
+                                if (from == null || target == null) null
+                                else Triple(key, Move(key, group.map { it.id }, from), target.id)
+                            }
+                        if (byAccount.isNotEmpty()) {
                             scope.launch {
-                                if (io { session(key).jmap.move(ids, target.id) } != null) {
-                                    emails = emails.filterNot { it.id in picked }
+                                val done = withContext(Dispatchers.IO) {
+                                    byAccount.filter { (key, move, target) ->
+                                        runCatching { session(key).jmap.move(move.ids, target) }.isSuccess
+                                    }
+                                }
+                                if (done.isNotEmpty()) {
+                                    val moved = done.flatMap { it.second.ids }.toSet()
+                                    emails = emails.filterNot { it.id in moved }
                                     picked = emptySet()
                                     selected = null
                                     body = null
-                                    undo = Undoable(key, ids, here2.id, what)
+                                    undo = Undoable(done.map { it.second }, what)
                                 }
                             }
                         }
                     },
                     onRead = {
-                        val key = here?.first
-                        if (key != null) {
-                            val ids = emails.filter { it.id in picked && !it.seen }.map { it.id }
-                            if (ids.isNotEmpty()) {
-                                scope.launch {
-                                    if (io { session(key).jmap.setKeyword(ids, "\$seen", true) } != null) {
-                                        emails = emails.map { if (it.id in ids) it.copy(seen = true) else it }
-                                    }
+                        val byAccount = emails.filter { it.id in picked && !it.seen }
+                            .groupBy { accountOf(it) }
+                        if (byAccount.isNotEmpty()) {
+                            scope.launch {
+                                val read = withContext(Dispatchers.IO) {
+                                    byAccount.mapNotNull { (key, group) ->
+                                        key ?: return@mapNotNull null
+                                        val ids = group.map { it.id }
+                                        runCatching { session(key).jmap.setKeyword(ids, "\$seen", true) }
+                                            .map { ids }.getOrNull()
+                                    }.flatten().toSet()
                                 }
+                                emails = emails.map { if (it.id in read) it.copy(seen = true) else it }
                             }
                         }
                     },
@@ -1152,16 +1245,16 @@ private fun Reader(
                 body = body,
                 onReply = { all ->
                     val message = selected ?: return@Message
-                    val ours = identities[here?.first].orEmpty().map { it.email }.toSet()
+                    val ours = identities[writingAccount()].orEmpty().map { it.email }.toSet()
                     sendError = null
                     composing = replyTo(message, body, ours.firstOrNull().orEmpty(), all, ours)
                 },
                 replyAll = selected?.let {
-                    hasOtherRecipients(it, body, identities[here?.first].orEmpty().map { id -> id.email }.toSet())
+                    hasOtherRecipients(it, body, identities[writingAccount()].orEmpty().map { id -> id.email }.toSet())
                 } ?: false,
                 onForward = {
                     val message = selected ?: return@Message
-                    val from = identities[here?.first].orEmpty().firstOrNull()?.email.orEmpty()
+                    val from = identities[writingAccount()].orEmpty().firstOrNull()?.email.orEmpty()
                     sendError = null
                     composing = forwardOf(message, body, from)
                 },
@@ -1190,7 +1283,7 @@ private fun Reader(
                         off.mailto != null -> {
                             sendError = null
                             composing = Draft(
-                                from = identities[here?.first].orEmpty().firstOrNull()?.email.orEmpty(),
+                                from = identities[writingAccount()].orEmpty().firstOrNull()?.email.orEmpty(),
                                 to = off.mailto,
                                 subject = off.mailtoSubject ?: "unsubscribe",
                             )
@@ -1218,7 +1311,7 @@ private fun Reader(
                 source = source,
                 onSource = {
                     val message = selected
-                    val key = here?.first
+                    val key = accountOf(message)
                     when {
                         source != null -> source = null
                         message != null && key != null -> {
@@ -1245,7 +1338,7 @@ private fun Reader(
                 },
                 onTag = { keyword, on ->
                     val message = selected
-                    val key = here?.first
+                    val key = accountOf(message)
                     if (message != null && key != null) {
                         // Same bargain as the star: it moves now, and moves back if the
                         // server says no. Nobody waits on a round trip to see a label.
@@ -1262,7 +1355,7 @@ private fun Reader(
                 },
                 onTyping = { typing = it },
                 onDownload = { attachment ->
-                    val key = here?.first
+                    val key = accountOf(selected)
                     if (key != null) {
                         scope.launch {
                             val landed = io {
@@ -1354,6 +1447,24 @@ internal fun Sidebar(
         Spacer(Modifier.height(14.dp))
 
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            // One account has nothing to merge, so the row would be a second name for Inbox.
+            if (accounts.size > 1) {
+                item(key = "all-inboxes") {
+                    val unread = accounts.sumOf { a ->
+                        a.mailboxes.firstOrNull { it.role == "inbox" }?.unread ?: 0
+                    }
+                    FolderRow(
+                        mailbox = allInboxes(unread),
+                        collapsed = collapsed,
+                        selected = here?.first == ALL_ACCOUNTS,
+                        onClick = { onSelect(ALL_ACCOUNTS, allInboxes(unread)) },
+                    )
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                        modifier = Modifier.padding(vertical = 8.dp),
+                    )
+                }
+            }
             accounts.forEachIndexed { index, account ->
                 // With one account the heading is noise. With two it is the only way to tell
                 // one Inbox from the other. Collapsed, there is no room for it at all, so
@@ -1619,6 +1730,8 @@ internal fun MessageList(
     selected: Summary?,
     loading: Boolean,
     title: String = "",
+    /** Account key to a short name, when a row has to say which mailbox it arrived in. */
+    accountLabels: Map<String, String> = emptyMap(),
     /** Everything picked out, which is [selected] alone until somebody holds a key down. */
     picked: Set<String> = emptySet(),
     onRefresh: () -> Unit = {},
@@ -1670,6 +1783,7 @@ internal fun MessageList(
                         MessageRow(
                             message = message,
                             selected = message.id == selected?.id || message.id in picked,
+                            accountLabel = accountLabels[message.account],
                             onSelect = onSelect,
                         )
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -1685,6 +1799,7 @@ internal fun MessageList(
 private fun MessageRow(
     message: Summary,
     selected: Boolean,
+    accountLabel: String? = null,
     onSelect: (Summary, ctrl: Boolean, shift: Boolean) -> Unit,
 ) {
     Row(
@@ -1732,6 +1847,19 @@ private fun MessageRow(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
+                accountLabel?.let {
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.outline,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
+                            .padding(horizontal = 7.dp, vertical = 1.dp),
+                    )
+                }
                 Spacer(Modifier.width(8.dp))
                 Text(
                     message.receivedAt.asLocalTime(),
@@ -2295,13 +2423,20 @@ internal fun conversationAround(thread: List<Summary>, open: Summary): Pair<List
  * by accident is recoverable, and a client that makes that unrecoverable is one people
  * stop using for anything but reading.
  */
+/** One account's share of a batch that was moved, and where to put it back. */
+internal data class Move(val accountKey: String, val ids: List<String>, val fromMailboxId: String)
+
+/**
+ * A list of moves rather than one, because a batch picked out of the merged inbox can span
+ * accounts, and putting half of it back is worse than offering no undo at all.
+ */
 internal data class Undoable(
-    val accountKey: String,
-    val ids: List<String>,
-    val fromMailboxId: String,
+    val moves: List<Move>,
     /** What to call it on screen, already in the past tense. */
     val what: String,
-)
+) {
+    val count: Int get() = moves.sumOf { it.ids.size }
+}
 
 /**
  * What the reading pane shows while more than one message is picked.
