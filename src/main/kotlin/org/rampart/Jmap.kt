@@ -865,6 +865,72 @@ class Jmap private constructor(
     }
 
     /**
+     * The same, for bytes already in hand rather than a file on disk.
+     *
+     * A separate path rather than a temporary file, because the only caller is a signature
+     * picture that is already decoded in memory and writing it out to be read straight back
+     * would be the long way round to the same request.
+     */
+    private fun upload(bytes: ByteArray, name: String, type: String): Attachment {
+        if (uploadUrl.isBlank()) throw JmapError("This server did not say where to upload files.")
+        if (maxUpload in 1 until bytes.size.toLong()) {
+            throw JmapError(
+                "$name is ${humanSize(bytes.size.toLong())}, and this server accepts at most " +
+                    "${humanSize(maxUpload)} in one file.",
+            )
+        }
+        val response = http.send(
+            HttpRequest.newBuilder(URI.create(uploadUrl.replace("{accountId}", pct(accountId))))
+                .header("Authorization", credential)
+                .header("Content-Type", type)
+                .timeout(Duration.ofMinutes(2))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(bytes))
+                .build(),
+            HttpResponse.BodyHandlers.ofString(),
+        )
+        if (response.statusCode() !in 200..299) {
+            throw JmapError("The server would not take $name (HTTP ${response.statusCode()}).")
+        }
+        val blob = json.parseToJsonElement(response.body()).jsonObject
+        return Attachment(
+            blobId = blob["blobId"].require("blobId"),
+            name = name,
+            type = blob["type"]?.str()?.ifBlank { null } ?: type,
+            size = blob["size"]?.jsonPrimitive?.longOrNull ?: bytes.size.toLong(),
+        )
+    }
+
+    /**
+     * The signature's pictures uploaded, and pointed at by Content-ID rather than carried
+     * inline as base64.
+     *
+     * **Gmail and Outlook both refuse to draw a `data:` URI in a received message.** The
+     * body already went out as cid for exactly that reason; the signature did not, because
+     * it is stored on the identity as finished HTML and nothing rewrote it on the way out.
+     * So a logo added in the signature editor arrived as a broken image for most of the
+     * people it was sent to, and looked right in every test because it looked right here.
+     *
+     * Done on send rather than when the signature is saved: a blob expires on its own, so a
+     * Content-ID written into the identity would go stale on a timer with nothing watching.
+     * The cost is one upload of a picture capped at 96 KB per message.
+     */
+    private fun withInlineSignature(draft: Draft): Draft {
+        val pictures = signaturePictures(draft.htmlSignature)
+        if (pictures.isEmpty()) return draft
+        val cids = mutableMapOf<String, String>()
+        val extra = pictures.map { picture ->
+            val uploaded = upload(picture.bytes, signaturePictureName(picture.type), picture.type)
+            val cid = cidFor(uploaded.blobId)
+            cids[picture.src] = cid
+            uploaded.copy(cid = cid, inline = true)
+        }
+        return draft.copy(
+            htmlSignature = withCids(draft.htmlSignature, cids),
+            attachments = draft.attachments + extra,
+        )
+    }
+
+    /**
      * Writes the draft to the Drafts folder and returns the id it was stored under.
      *
      * [replacing] is the id of the previous save, and it is destroyed in the same request
@@ -885,10 +951,13 @@ class Jmap private constructor(
     }
 
     fun send(draft: Draft, identity: Identity, draftsMailboxId: String, sentMailboxId: String?) {
+        // Only on the way out. A draft keeps the base64 in it, which is what makes the
+        // picture still visible when the draft is reopened.
+        val ready = withInlineSignature(draft)
         val responses = call(
             invoke("Email/set", "e") {
                 putJsonObject("create") {
-                    putJsonObject("m") { emailObject(draft, identity, draftsMailboxId) }
+                    putJsonObject("m") { emailObject(ready, identity, draftsMailboxId) }
                 }
             },
             invoke("EmailSubmission/set", "s") {

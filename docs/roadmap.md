@@ -141,6 +141,12 @@ two are the local store, which is what makes search instant and offline possible
 everything in tiers 3 and 4, and then IMAP and SMTP, which is what "anybody" actually turns
 on.
 
+A signature picture now goes out as a cid attachment rather than base64. It was stored on
+the identity as finished HTML and nothing rewrote it on the way out, so a logo added in the
+signature editor looked right here and arrived broken in Gmail and Outlook, which both
+refuse a `data:` URI in a received message. The body already did this correctly; the
+signature was the path nobody had followed all the way to somebody else's inbox.
+
 Two things the tests cannot answer and only real mail can. Whether a formatted message
 arrives looking the same in Bulwark, Gmail and Outlook, and whether a rule built here files
 live incoming mail with Rampart closed. Until each is checked it is done rather than

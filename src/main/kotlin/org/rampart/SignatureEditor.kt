@@ -195,3 +195,38 @@ internal fun imageDataUri(file: Path, limit: Long = 96L * 1024): String {
  */
 internal fun plainOf(html: String): String =
     flatten(htmlBlocks(html, Color.Unspecified, Color.Unspecified) {}.blocks).text.trim()
+
+/** One `data:` picture found in a signature, with its bytes already decoded. */
+internal class SignaturePicture(val src: String, val type: String, val bytes: ByteArray)
+
+// The base64 run ends at the quote that closes the attribute, which is why the character
+// class does not include one. Whitespace is allowed inside it because a signature that has
+// been through another client may have been line-wrapped.
+private val DATA_IMAGE = Regex("""data:(image/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)""")
+
+/**
+ * Every distinct `data:` picture in [html].
+ *
+ * Distinct by the URI itself, so the same logo referred to twice is uploaded and attached
+ * once rather than riding along in the message twice.
+ */
+internal fun signaturePictures(html: String): List<SignaturePicture> =
+    DATA_IMAGE.findAll(html)
+        .mapNotNull { match ->
+            val bytes = runCatching { Base64.getMimeDecoder().decode(match.groupValues[2]) }
+                .getOrNull()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            SignaturePicture(match.value, match.groupValues[1], bytes)
+        }
+        .distinctBy { it.src }
+        .toList()
+
+/** The same signature with each `data:` picture pointing at a Content-ID instead. */
+internal fun withCids(html: String, cids: Map<String, String>): String {
+    var out = html
+    cids.forEach { (src, cid) -> out = out.replace(src, "cid:$cid") }
+    return out
+}
+
+/** A filename for an attached signature picture, so a client has something to label it. */
+internal fun signaturePictureName(type: String): String =
+    "signature." + type.substringAfter('/').substringBefore('+').ifBlank { "png" }
