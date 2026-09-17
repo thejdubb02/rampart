@@ -1,12 +1,25 @@
 name: Build
 
+# Every push is checked. Only a deliberate run publishes one.
+#
+# It used to release on every push, which meant a version number for every commit and an
+# installed copy being asked to restart for a one line change. Packaging and uploading a
+# release is also the slowest and least reliable part of this: three of five in one morning
+# died halfway through uploading to GitHub, with nothing wrong with the code. So the two are
+# split. The version is still the commit count, so it keeps climbing whether or not a given
+# commit was released, and a released one is simply the count at the moment it went out.
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      release:
+        description: Package and publish a release, not just run the tests
+        type: boolean
+        default: true
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -32,6 +45,7 @@ jobs:
       # Conveyor cross-builds Windows and Linux packages here on Linux, signs them with
       # the root key, and replaces the GitHub release the installed apps update from.
       - uses: hydraulic-software/conveyor/actions/build@v22.2
+        if: inputs.release
         with:
           command: make copied-site
           signing_key: ${{ secrets.SIGNING_KEY }}
@@ -44,6 +58,7 @@ jobs:
       # trust yet, and whose Cancel button then does nothing. So the notes say what to run
       # instead. The version is the commit count, the same as build.gradle.kts computes it.
       - name: Say how to install it
+        if: inputs.release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release edit "0.1.$(git rev-list --count HEAD)" --notes-file docs/release-notes.md
