@@ -519,6 +519,12 @@ private fun Reader(
     // Not remembered between runs on purpose: opening the app into a folder that is hiding
     // most of itself, with no memory of having asked for that, reads as lost mail.
     var unreadOnly by remember { mutableStateOf(false) }
+    // The server's filter script, for the account whose settings are showing.
+    var filters by remember { mutableStateOf<Script?>(null) }
+    var filterScript by remember { mutableStateOf<Jmap.SieveInfo?>(null) }
+    var filtersSaving by remember { mutableStateOf(false) }
+    var filtersSupported by remember { mutableStateOf(true) }
+    var filtersError by remember { mutableStateOf<String?>(null) }
     // Who you write to, per account, read once and kept up to date as mail goes past.
     var books by remember { mutableStateOf<Map<String, List<Person>>>(emptyMap()) }
     // A folder operation waiting on a name, or on a yes.
@@ -1030,6 +1036,60 @@ private fun Reader(
         }
     }
 
+    /*
+     * Reads the account's filters when the settings pane opens, not before.
+     *
+     * Two calls and a blob download, so it is not worth doing on every start for a screen
+     * most people open rarely. Which script: the active one if there is one, because that
+     * is the one actually running, otherwise the one a builder made, otherwise none and we
+     * write a new one on the first save.
+     */
+    suspend fun loadFilters(key: String) {
+        filtersError = null
+        val jmap = session(key).jmap
+        filtersSupported = io { jmap.hasSieve() } == true
+        if (!filtersSupported) {
+            filters = Script(emptyList())
+            return
+        }
+        val all = io { jmap.sieveScripts() }.orEmpty()
+        val chosen = all.firstOrNull { it.active } ?: all.firstOrNull { it.name == "rampart" } ?: all.firstOrNull()
+        filterScript = chosen
+        filters = Script(emptyList()).takeIf { chosen == null }
+            ?: scriptOf(io { jmap.sieveText(chosen!!) }.orEmpty())
+    }
+
+    /*
+     * Read when the settings pane opens, and only then. Two calls and a blob download is
+     * not worth doing on every start for a screen most people open rarely.
+     */
+    LaunchedEffect(settingsOpen, settingsAccount()) {
+        val key = settingsAccount()
+        if (!settingsOpen || key == null) return@LaunchedEffect
+        filters = null
+        runCatching { loadFilters(key) }
+            .onFailure { filtersError = it.message ?: "The filters could not be read." }
+    }
+
+    fun saveFilters(key: String, next: Script) {
+        filtersSaving = true
+        scope.launch {
+            filtersError = try {
+                withContext(Dispatchers.IO) {
+                    session(key).jmap.saveSieve(filterScript?.name ?: "rampart", sieveOf(next), filterScript)
+                }
+                filters = next
+                null
+            } catch (e: Exception) {
+                e.message ?: "The server would not take those filters."
+            }
+            filtersSaving = false
+            // Re-read rather than trust: the server rewrites nothing, but an activation
+            // that half worked should show as what is actually there.
+            if (filtersError == null) loadFilters(key)
+        }
+    }
+
     val rowActions = RowActions(
         reply = { message, all ->
             val key = accountOf(message)
@@ -1460,6 +1520,11 @@ private fun Reader(
                     onTheme = onTheme,
                     onAddAccount = onAddAccount,
                     onRestart = { Updates.restartToUpdate(); onQuit() },
+                    filters = filters,
+                    filtersSupported = filtersSupported,
+                    filtersSaving = filtersSaving,
+                    filtersError = filtersError,
+                    onFilters = { next -> settingsAccount()?.let { saveFilters(it, next) } },
                     onClose = { settingsOpen = false },
                 )
                 return@Row

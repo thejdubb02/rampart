@@ -179,4 +179,31 @@ class SieveTest {
         assertTrue(scriptOf(written).builderMade)
         assertTrue(scriptOf(written).rules.isEmpty())
     }
+
+    // --- the sentence people actually read ---------------------------------------------
+
+    @Test
+    fun `a rule reads as one sentence`() {
+        assertEquals(
+            """If from contains "hetzner.test", file into Invoices.""",
+            summarise(filing),
+        )
+    }
+
+    @Test
+    fun `all and any read as and and or`() {
+        val two = filing.copy(
+            tests = filing.tests + Test(Field.SUBJECT, Match.IS, "Invoice"),
+            acts = listOf(Act.FileInto("Invoices"), Act.MarkRead),
+        )
+        assertContains(summarise(two), " and ")
+        assertContains(summarise(two.copy(all = false)), " or ")
+        assertContains(summarise(two), "file into Invoices, mark read")
+    }
+
+    @Test
+    fun `a rule with nothing to do says so rather than reading as a blank`() {
+        assertEquals("Incomplete.", summarise(filing.copy(acts = emptyList())))
+        assertEquals("Incomplete.", summarise(filing.copy(tests = emptyList())))
+    }
 }

@@ -76,6 +76,12 @@ internal fun SettingsPane(
     onTheme: (Theme) -> Unit,
     onAddAccount: () -> Unit,
     onRestart: () -> Unit,
+    /** Null while the server's filter script is still being read. */
+    filters: Script?,
+    filtersSupported: Boolean,
+    filtersSaving: Boolean,
+    filtersError: String?,
+    onFilters: (Script) -> Unit,
     onClose: () -> Unit,
     /** Which page opens first. Only ever passed by the screenshot tests. */
     initialPage: String = SettingsPages.first().first,
@@ -105,6 +111,15 @@ internal fun SettingsPane(
                         "accounts" -> AccountsPage(accounts, onAddAccount)
                         "notifications" -> NotificationsPage(notifyOnArrival, onNotifyOnArrival)
                         "reading" -> ReadingPage()
+                        "filters" -> FiltersPage(
+                            script = filters,
+                            // Only real folders, so nobody files into one that does not exist.
+                            folders = accounts.flatMap { it.mailboxes }.map { it.name }.distinct().sorted(),
+                            saving = filtersSaving,
+                            error = filtersError,
+                            supported = filtersSupported,
+                            onSave = onFilters,
+                        )
                         "themes" -> ThemesPage(onTheme)
                         "identities" -> IdentitiesPage(
                             identities, signatureError, onSignature, onPickSignatureImage,
@@ -132,6 +147,7 @@ private val SettingsPages: List<Triple<String, String, String>> = listOf(
     // Kept with the other Mail pages. The nav groups in list order, so a page filed out of
     // sequence makes its heading appear twice.
     Triple("reading", "Reading and archiving", "Mail"),
+    Triple("filters", "Filters", "Mail"),
     Triple("identities", "Identities and signatures", "Mail"),
     Triple("away", "Away reply", "Mail"),
     Triple("about", "About", "Rampart"),
@@ -388,7 +404,7 @@ private fun AboutPage(update: String?, onRestart: () -> Unit) {
 }
 
 @Composable
-private fun Section(title: String, note: String) {
+internal fun Section(title: String, note: String) {
     Text(title, style = MaterialTheme.typography.titleMedium)
     Text(
         note,

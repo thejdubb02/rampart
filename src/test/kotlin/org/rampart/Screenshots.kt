@@ -138,6 +138,7 @@ class Screenshots {
         shoot("reader-themed", 1400, 900, withArt) { Panes() }
         shoot("settings", 1200, 900, withArt) { SettingsScreen("accounts") }
         shoot("settings-reading", 1200, 900) { SettingsScreen("reading") }
+        shoot("settings-filters", 1200, 900) { SettingsScreen("filters") }
         shoot("composer", 1000, 640) {
             Composer(
                 identities = listOf("you@example.org", "billing@example.org"),
@@ -259,6 +260,26 @@ private val ROW_ACTIONS = RowActions(
     markRead = { _, _ -> },
 )
 
+/** Two rules that between them show every part of the row: a sentence, and a switch. */
+private val SAMPLE_FILTERS = Script(
+    listOf(
+        Rule(
+            id = "f1",
+            name = "Invoices",
+            tests = listOf(Test(Field.FROM, Match.CONTAINS, "billing@")),
+            acts = listOf(Act.FileInto("Invoices"), Act.MarkRead),
+        ),
+        Rule(
+            id = "f2",
+            name = "Newsletters",
+            tests = listOf(Test(Field.SUBJECT, Match.CONTAINS, "newsletter")),
+            acts = listOf(Act.FileInto("Reading")),
+            enabled = false,
+        ),
+    ),
+    tail = "# Delivery probes, managed outside any builder.\nif address :matches \"to\" \"zz-canary@*\" { discard; stop; }",
+)
+
 private val MESSAGES = listOf(
     Summary("a", "Stalwart", "stalwart@example.org", "Your certificate renews in 7 days", "2026-09-16T09:12:00Z",
         "The certificate for mail.example.org will be renewed automatically on 23 September.", false),
@@ -336,7 +357,12 @@ private fun SettingsScreen(page: String) {
             onNotifyOnArrival = {},
             onTheme = {},
             onAddAccount = {},
-            onRestart = {},
+            filters = SAMPLE_FILTERS,
+        filtersSupported = true,
+        filtersSaving = false,
+        filtersError = null,
+        onFilters = {},
+        onRestart = {},
             onClose = {},
             initialPage = page,
     )
