@@ -73,6 +73,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.ImageBitmap
@@ -534,6 +536,9 @@ private fun Reader(
     // most of itself, with no memory of having asked for that, reads as lost mail.
     var unreadOnly by remember { mutableStateOf(false) }
     var paper by remember { mutableStateOf(false) }
+    // Not remembered: a panel is the right default every time, and a message that needed
+    // the whole window last week is not a reason to open the next one that way.
+    var composeFull by remember { mutableStateOf(false) }
     // The server's filter script, for the account whose settings are showing.
     var filters by remember { mutableStateOf<Script?>(null) }
     var filterScript by remember { mutableStateOf<Jmap.SieveInfo?>(null) }
@@ -1328,8 +1333,17 @@ private fun Reader(
         }
     }
 
-    val composer = composing
-    if (composer != null) {
+    /*
+     * The composer, as a panel rather than a screen.
+     *
+     * It used to replace the window, which meant writing a reply and checking what was in
+     * the message above it were two things you could not do at once. A local composable
+     * rather than a separate one because it closes over a dozen pieces of this screen's
+     * state, and threading those through a parameter list would be a worse trade than the
+     * indentation.
+     */
+    @Composable
+    fun ComposerPanel(composer: Draft) {
         Composer(
             identities = identities[writingAccount()]?.map { it.email }.orEmpty(),
             // The sign-off comes off the identity on the server, so one written in Bulwark
@@ -1374,6 +1388,8 @@ private fun Reader(
                 }
             },
             book = books[writingAccount()].orEmpty(),
+            full = composeFull,
+            onFull = { composeFull = it },
             onSend = { draft ->
                 val key = writingAccount()
                 val account = key?.let(::session)
@@ -1412,10 +1428,11 @@ private fun Reader(
                 }
             },
         )
-        return
+
     }
 
     LaunchedEffect(Unit) { runCatching { keyboard.requestFocus() } }
+    Box(Modifier.fillMaxSize()) {
     Column(
         Modifier.fillMaxSize()
             .focusRequester(keyboard)
@@ -1808,6 +1825,35 @@ private fun Reader(
                     }
                 },
             )
+        }
+    }
+
+        /*
+         * Bottom right, over the mail, the way every webmail does it. Writing a reply and
+         * looking at what is above it are the same task, and a composer that takes the
+         * window makes them two.
+         *
+         * Full screen is one button away for a long message, because a panel is the wrong
+         * shape for anything with a table in it.
+         */
+        composing?.let { draft ->
+            Box(
+                Modifier
+                    .align(if (composeFull) Alignment.Center else Alignment.BottomEnd)
+                    .then(
+                        if (composeFull) Modifier.fillMaxSize()
+                        else Modifier.padding(16.dp).width(620.dp).heightIn(max = 620.dp).fillMaxHeight(0.8f),
+                    ),
+            ) {
+                Surface(
+                    shape = if (composeFull) RectangleShape else MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.surface,
+                    shadowElevation = if (composeFull) 0.dp else 12.dp,
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    ComposerPanel(draft)
+                }
+            }
         }
     }
 
@@ -2486,9 +2532,25 @@ private fun MessageRow(
     var pointerOver by remember { mutableStateOf(false) }
     val hovered = pointerOver || showHover
 
+    /*
+     * Unread rows carry a tint as well as the dot and the weight.
+     *
+     * Three signals rather than one because the dot is 7px and the weight difference is a
+     * font grade: on a full inbox, at a glance, neither of them separates what has been
+     * read from what has not. The tint is deliberately faint, taken from the theme's own
+     * surface rather than a colour of its own, so a mostly unread inbox does not turn into
+     * a wall of highlight.
+     *
+     * Selection still wins, because that is the row being acted on.
+     */
+    val background = when {
+        selected -> MaterialTheme.colorScheme.surfaceVariant
+        !message.seen -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        else -> Color.Transparent
+    }
     Row(
         Modifier.fillMaxWidth()
-            .background(if (selected) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent)
+            .background(background)
             // The modifier keys have to be read from the press itself. clickable() does not
             // carry them, and holding control to add a second message to a selection is how
             // every desktop list has worked for thirty years.
@@ -2539,7 +2601,7 @@ private fun MessageRow(
                 Text(
                     message.from,
                     style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = if (message.seen) FontWeight.Normal else FontWeight.SemiBold,
+                    fontWeight = if (message.seen) FontWeight.Normal else FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
@@ -2602,7 +2664,7 @@ private fun MessageRow(
                 Text(
                     message.subject,
                     style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = if (message.seen) FontWeight.Normal else FontWeight.SemiBold,
+                    fontWeight = if (message.seen) FontWeight.Normal else FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),

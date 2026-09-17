@@ -16,6 +16,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.window.PopupProperties
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -198,6 +200,9 @@ internal fun Composer(
     onAttach: (suspend (List<Path>) -> List<Attachment>)? = null,
     /** Addresses to offer while a recipient is being typed. */
     book: List<Person> = emptyList(),
+    /** Filling the window rather than sitting in the corner of it. */
+    full: Boolean = false,
+    onFull: (Boolean) -> Unit = {},
 ) {
     var draft by remember(initial) { mutableStateOf(initial) }
     // The selection has to live here, not be derived from the string, or every formatting
@@ -329,6 +334,11 @@ internal fun Composer(
                             enabled = !sending && !attaching,
                         ) { Text(if (attaching) "Attaching" else "Attach") }
                     }
+                    // Next to Discard rather than in the corner, because at panel width
+                    // a title bar of its own would cost a line of the message.
+                    TextButton(onClick = { onFull(!full) }) {
+                        Text(if (full) "Shrink" else "Full screen")
+                    }
                     TextButton(onClick = onDiscard, enabled = !sending) { Text("Discard") }
                     Button(
                         onClick = ::send,
@@ -443,6 +453,46 @@ internal fun Composer(
                     TextButton(onClick = { apply(wrapSelection(body, "[", "](https://)")) }) { Text("Link") }
                     TextButton(onClick = { apply(prefixLines(body, "- ")) }) { Text("Bullets") }
                     TextButton(onClick = { apply(prefixLines(body, "1. ")) }) { Text("Numbers") }
+                    var emoji by remember { mutableStateOf(false) }
+                    Box {
+                        TextButton(onClick = { emoji = true }) { Text("Emoji") }
+                        DropdownMenu(expanded = emoji, onDismissRequest = { emoji = false }) {
+                            Column(
+                                Modifier.width(320.dp).heightIn(max = 300.dp)
+                                    .verticalScroll(rememberScrollState())
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                            ) {
+                                EMOJI.forEach { group ->
+                                    Text(
+                                        group.name,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.outline,
+                                        modifier = Modifier.padding(vertical = 6.dp),
+                                    )
+                                    // A plain wrapping row of characters. Compose has no
+                                    // flow layout that is not experimental, and chunking a
+                                    // fixed grid is both stable and eight lines shorter.
+                                    group.emoji.chunked(10).forEach { line ->
+                                        Row {
+                                            line.forEach { one ->
+                                                Text(
+                                                    one,
+                                                    style = MaterialTheme.typography.titleMedium,
+                                                    modifier = Modifier
+                                                        .clip(MaterialTheme.shapes.small)
+                                                        .clickable {
+                                                            emoji = false
+                                                            apply(insertAt(body, one))
+                                                        }
+                                                        .padding(4.dp),
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     if (onAttach != null) {
                         TextButton(
                             onClick = {

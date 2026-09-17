@@ -3,6 +3,10 @@ package org.rampart
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.padding
@@ -68,6 +72,33 @@ class Screenshots {
         }
         // Both states of the row at once: the pointer is over every row in the second,
         // so the two can be laid side by side and nothing should have moved.
+        // The composer as it actually opens: a panel over the mail, not a screen.
+        shoot("compose-panel", 1400, 900, dark) {
+            Box(Modifier.fillMaxSize()) {
+                Panes()
+                Box(
+                    Modifier.align(Alignment.BottomEnd)
+                        .padding(16.dp).width(620.dp).heightIn(max = 620.dp).fillMaxHeight(0.8f),
+                ) {
+                    Surface(
+                        shape = MaterialTheme.shapes.medium,
+                        color = MaterialTheme.colorScheme.surface,
+                        shadowElevation = 12.dp,
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
+                        Composer(
+                            identities = listOf("you@example.org"),
+                            initial = replyTo(MESSAGES[1], Body(null, "Could you confirm the start time?"), "you@example.org")
+                                .copy(body = "Yes, **ten past nine** works.\n"),
+                            sending = false,
+                            error = null,
+                            onDiscard = {},
+                            onSend = {},
+                        )
+                    }
+                }
+            }
+        }
         shoot("paper", 900, 700, dark) {
             Message(
                 summary = MESSAGES[1],
