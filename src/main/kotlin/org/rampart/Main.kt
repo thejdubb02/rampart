@@ -735,10 +735,33 @@ private fun Reader(
          * spinner over mail we already hold is the thing a local store exists to stop. A
          * folder read once opens instantly and corrects itself a moment later.
          */
-        val cached = if (key == ALL_ACCOUNTS || showingResults) emptyList()
+        val plain = key != ALL_ACCOUNTS && !showingResults
+        val cached = if (!plain) emptyList()
         else io { session(key).store?.messages(mailbox.id, unreadOnly = unreadOnly) }.orEmpty()
         if (cached.isNotEmpty()) emails = cached
         loading = cached.isEmpty()
+
+        /*
+         * If nothing about this account's mail has moved since this folder was last read,
+         * the folder has not moved either, and the copy on screen is already right.
+         *
+         * The state is account-wide rather than per folder, which makes this conservative
+         * in the right direction: any change anywhere costs a re-read, and no change
+         * anywhere is proof that this folder is unchanged. The check itself is the cheapest
+         * question the protocol has, a few hundred bytes against the several hundred
+         * kilobytes of re-reading the folder.
+         *
+         * Only for a plain folder view. A filtered or searched list is not a faithful
+         * picture of the folder, so it neither trusts the cursor nor sets one.
+         */
+        // Read whenever this is a plain folder view, not only when there is something
+        // cached: a first read has to leave a cursor behind or the second one cannot skip.
+        val state = if (plain) io { session(key).jmap.mailState() } else null
+        if (state != null && cached.isNotEmpty() && state == io { session(key).store?.cursor(mailbox.id) }) {
+            loading = false
+            exhausted = false
+            return
+        }
         emails = if (key == ALL_ACCOUNTS) {
             // One account failing is not the whole list failing, so each is caught inside
             // rather than out here: the others still show.
@@ -759,8 +782,12 @@ private fun Reader(
         learnFrom(emails)
         // Written back after the server has answered, so the copy is what the server
         // last said rather than what we guessed it would say.
-        if (key != ALL_ACCOUNTS && !showingResults && emails.isNotEmpty()) {
+        if (plain && emails.isNotEmpty()) {
             io { session(key).store?.put(mailbox.id, emails) }
+            // The cursor is set from the state read before the fetch, never after it: mail
+            // arriving between the two would otherwise be marked as already seen and the
+            // next open would skip it.
+            state?.let { io { session(key).store?.setCursor(mailbox.id, it) } }
         }
     }
 
