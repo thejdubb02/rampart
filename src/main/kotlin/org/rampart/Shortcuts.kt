@@ -56,6 +56,11 @@ internal val SHORTCUTS: List<Shortcut> = listOf(
     Shortcut("Shift+click", "Pick a run of messages", "Acting on a message"),
     Shortcut("Ctrl+click", "Add one message to the picked set", "Acting on a message"),
     Shortcut("C", "Write a new message", "Writing"),
+    Shortcut("Ctrl+B", "Bold", "Writing"),
+    Shortcut("Ctrl+I", "Italic", "Writing"),
+    // Shadows the command palette, but only while the composer has the focus, which is
+    // what Ctrl+K does in every other editor somebody has used.
+    Shortcut("Ctrl+K", "Link", "Writing"),
     Shortcut("Ctrl+Enter", "Send", "Writing"),
     Shortcut("Esc", "Close the composer", "Writing"),
     Shortcut("Ctrl+K", "Every command, by name", "Everything else"),

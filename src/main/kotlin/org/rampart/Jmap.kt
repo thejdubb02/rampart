@@ -593,7 +593,9 @@ class Jmap private constructor(
             putJsonArray("htmlBody") { add(buildJsonObject { put("partId", "h"); put("type", "text/html") }) }
         }
         putJsonObject("bodyValues") {
-            putJsonObject("b") { put("value", draft.body) }
+            // The markers come off the text part. Somebody reading in a client with no
+            // HTML should see "the price" rather than "**the price**".
+            putJsonObject("b") { put("value", markupToPlain(draft.body)) }
             if (html != null) putJsonObject("h") { put("value", html) }
         }
         if (draft.attachments.isNotEmpty()) {
@@ -604,7 +606,16 @@ class Jmap private constructor(
                             put("blobId", file.blobId)
                             put("type", file.type.ifBlank { "application/octet-stream" })
                             put("name", file.name)
-                            put("disposition", "attachment")
+                            // An inline picture is part of the message rather than a file
+                            // sent with it, and the cid is what the img in the body points
+                            // at. Sent as cid rather than a data: URI because Gmail and
+                            // Outlook both refuse to draw a data: URI in a received message.
+                            if (file.inline && file.cid != null) {
+                                put("cid", file.cid)
+                                put("disposition", "inline")
+                            } else {
+                                put("disposition", "attachment")
+                            }
                         },
                     )
                 }

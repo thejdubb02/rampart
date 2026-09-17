@@ -64,26 +64,33 @@ is found.
 
 ---
 
-## The next eleven
+## The order
 
-In order. Nothing below the last line is scheduled; it is only sorted.
+Reset 2026-09-17 on one instruction: **make it the daily driver first.** The measure is not
+how it compares to Bulwark on a feature grid, it is whether a working day can be spent in
+it without reaching for the webmail. Analytics is a nice to have and has moved accordingly.
+
+**Items 1 to 4 are the daily-driver set.** They are the friction you hit on every message,
+every day, and none of them needs a server, a model or anything configured. Nothing below
+them is scheduled; it is only sorted.
 
 | # | What | Why it is here | Done when |
 |---|---|---|---|
-| 1 | **Rich-text composer** (2.1) | The largest thing a person notices. You cannot bold a word in mail you write. | Bold, italic, links, lists and an inline picture compose and arrive intact in Bulwark, Gmail and Outlook; quoted text is untouched. |
-| 2 | **Sieve filters with a builder** (2.2) | How a mailbox stays usable with nobody tending it. Gates the assistant work. | A rule built in the UI files real mail on the server, survives a round trip through Bulwark, and the raw editor shows the same script. |
-| 3 | **Command palette** (2.6) | Table stakes in every product the spec compares us against, and cheap now. | Ctrl+K runs every action the shortcut list names, by typing part of its name. |
-| 4 | **Local store** (2.3) | No offline, no instant search, nowhere to put anything. Gates tiers 3 and 4. | Reading and searching a folder works with the network off; a refresh asks only for what changed. |
-| 5 | **Mailbox dashboard** (2.11) | Volume, spam, who you talk to, what is still waiting on a reply. Counted from the mailbox, so it needs no server and every install gets it. | Sent and received volume, junk share, top senders, unanswered mail and reply times, per account and combined, computed offline. |
-| 6 | **Folder management** (2.4) | Cannot create, rename or delete a folder today. | Create, rename, move, nest and delete, on both accounts. |
-| 7 | **Message list pass** (2.5) | Individually small, together the difference between a demo and a client. | Sort order, mark-as-read delay, right-click menus, hover actions, virtual scrolling, attachment reminder, empty-subject confirm. |
-| 8 | **IMAP and SMTP with OAuth2** (2.7) | The point Rampart stops being a client for one server. | A Gmail account and a generic IMAP account both read, send, file and search, with SPECIAL-USE folders found correctly. |
-| 9 | **Templates, read receipts, undo-send, open tracking** (2.8) | Daily-use features with no model anywhere near them. | A template fills placeholders and sends; an MDN is requested and answered; a send can be taken back inside the window. |
-| 10 | **Contacts, read-only** (2.9) | Recipient autocomplete is the one place contacts leak into mail. | Typing three letters into To offers real contacts; a sender can be added from a message. |
-| 11 | **Thread summaries** (tier 4) | The first assistant feature, and the one with nothing to go wrong. | A twenty-message thread summarises in a side pane, off by default, with the packet viewable before it is sent. |
+| 1 | **Rich-text composer** (2.1) | You cannot bold a word, add a link or put a picture in mail you write. The largest single thing standing between this and daily use. | Bold, italic, links, lists and an inline picture compose and arrive intact in Bulwark, Gmail and Outlook; quoted text is untouched. |
+| 2 | **Message list pass** (2.5) | Right-click, hover actions, sort order, mark-as-read delay. Individually small, hit on every message, and together most of what makes a client feel finished. | Sort order, mark-as-read delay, right-click menus, hover actions, virtual scrolling, attachment reminder, empty-subject confirm. |
+| 3 | **Recipient autocomplete** (2.9) | Typing a full address for every message is the friction you notice most after the composer. | Typing three letters into To offers real addresses, from the server's contacts where it has them and from your own mail history where it does not. |
+| 4 | **Folder management** (2.4) | Cannot create, rename or delete a folder today, so filing has to be set up somewhere else. | Create, rename, move, nest and delete, and the sidebar follows without a restart. |
+| 5 | **Sieve filters with a builder** (2.2) | How a mailbox stays usable with nobody tending it. Gates the assistant work. | A rule built in the UI files real mail on the server, survives a round trip through Bulwark, and the raw editor shows the same script. |
+| 6 | **Local store** (2.3) | Offline, instant search, and the place everything later keeps its state. Gates tiers 3 and 4. | Reading and searching a folder works with the network off; a refresh asks only for what changed. |
+| 7 | **IMAP and SMTP with OAuth2** (2.7) | The point Rampart stops being a client for one server, and the point anyone else can use it. | A Gmail account and a generic IMAP account both read, send, file and search, with SPECIAL-USE folders found correctly. |
+| 8 | **Templates, read receipts, undo-send, open tracking** (2.8) | Daily-use features with no model anywhere near them, plus the tracking pixel and its companion server. | A template fills placeholders and sends; an MDN is requested and answered; a send can be taken back; a tracked message shows opened, and a scanner fetch does not. |
+| 9 | **Mailbox dashboard** (2.11) | Volume, junk, who you talk to, what is waiting on you. Genuinely useful, and explicitly a nice to have. | Sent and received volume, junk share, top senders, unanswered mail and reply times, computed offline. |
+| 10 | **Thread summaries** (tier 4) | The first assistant feature, and the one with nothing to go wrong. | A twenty-message thread summarises in a side pane, off by default, with the packet viewable before it is sent. |
 
-**Not in the eleven, on purpose:** encryption, calendar, contacts as an application, the
+**Not in the list, on purpose:** encryption, calendar, contacts as an application, the
 admin console, and everything else in tiers 3, 5 and 6. They are real and they are later.
+
+**Already done:** the command palette (2.6), shipped in 0.1.53.
 
 ---
 

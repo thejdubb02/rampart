@@ -66,4 +66,28 @@ class HtmlSignatureTest {
         val once = signed(Draft(from = "me@example.org", body = "Hi"), text, html)
         assertEquals(once, signed(once, text, html))
     }
+
+    /*
+     * The new branch: formatting the person typed is reason enough for an HTML part, with
+     * no sign-off involved. The plain part has to lose the markers at the same time, or a
+     * client that shows text gets asterisks.
+     */
+    @Test
+    fun `typed formatting alone earns an html part`() {
+        assertEquals("<div>the <b>price</b></div>", htmlBodyOf("the **price**", "", ""))
+        assertEquals("the price", markupToPlain("the **price**"))
+    }
+
+    @Test
+    fun `a message with no formatting and no sign-off stays text only`() {
+        assertNull(htmlBodyOf("Sounds good, see you then.", "", ""))
+    }
+
+    @Test
+    fun `a content id is stable and safe to put in a header`() {
+        assertEquals(cidFor("Gd7-x_1"), cidFor("Gd7-x_1"))
+        assertEquals("Gd7-x_1@rampart.invalid", cidFor("Gd7-x_1"))
+        // A blob id with punctuation in it must not produce a malformed Content-ID.
+        assertEquals("abc@rampart.invalid", cidFor("a<b>c"))
+    }
 }

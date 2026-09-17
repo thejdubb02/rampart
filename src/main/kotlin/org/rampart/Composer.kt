@@ -46,6 +46,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -195,6 +196,13 @@ internal fun Composer(
     onAttach: (suspend (List<Path>) -> List<Attachment>)? = null,
 ) {
     var draft by remember(initial) { mutableStateOf(initial) }
+    // The selection has to live here, not be derived from the string, or every formatting
+    // button would have to guess where the caret is. Kept beside draft.body rather than
+    // replacing it, because the draft is what gets saved and sent.
+    var body by remember(initial) { mutableStateOf(TextFieldValue(initial.body)) }
+    // Only when the change came from somewhere else, such as the sign-off being appended.
+    // Typing sets both, so they already agree and the caret is left alone.
+    if (body.text != draft.body) body = body.copy(text = draft.body)
     var showCc by remember(initial) { mutableStateOf(initial.cc.isNotEmpty()) }
     var pickingIdentity by remember { mutableStateOf(false) }
     var saveState by remember(initial) { mutableStateOf("") }
@@ -234,6 +242,14 @@ internal fun Composer(
      * A preview handler rather than a plain one, because the focus is inside a text field
      * and a field that takes Enter would swallow it first.
      */
+    fun format(before: String, after: String): Boolean {
+        if (sending) return false
+        val next = wrapSelection(body, before, after)
+        body = next
+        draft = draft.copy(body = next.text)
+        return true
+    }
+
     fun typed(event: KeyEvent): Boolean {
         if (event.type != KeyEventType.KeyDown) return false
         return when {
@@ -245,6 +261,9 @@ internal fun Composer(
                 if (!sending) onDiscard()
                 true
             }
+            event.isCtrlPressed && event.key == Key.B -> format("**", "**")
+            event.isCtrlPressed && event.key == Key.I -> format("*", "*")
+            event.isCtrlPressed && event.key == Key.K -> format("[", "](https://)")
             else -> false
         }
     }
@@ -392,13 +411,62 @@ internal fun Composer(
                 HorizontalDivider()
             }
 
+            if (!sending) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    fun apply(next: TextFieldValue) {
+                        body = next
+                        draft = draft.copy(body = next.text)
+                    }
+                    TextButton(onClick = { apply(wrapSelection(body, "**", "**")) }) { Text("Bold") }
+                    TextButton(onClick = { apply(wrapSelection(body, "*", "*")) }) { Text("Italic") }
+                    TextButton(onClick = { apply(wrapSelection(body, "[", "](https://)")) }) { Text("Link") }
+                    TextButton(onClick = { apply(prefixLines(body, "- ")) }) { Text("Bullets") }
+                    TextButton(onClick = { apply(prefixLines(body, "1. ")) }) { Text("Numbers") }
+                    if (onAttach != null) {
+                        TextButton(
+                            onClick = {
+                                val chosen = pickFiles().firstOrNull()
+                                if (chosen != null) {
+                                    scope.launch {
+                                        attaching = true
+                                        attachError = null
+                                        try {
+                                            val put = onAttach(listOf(chosen)).firstOrNull()
+                                            if (put != null) {
+                                                val inline = put.copy(cid = cidFor(put.blobId), inline = true)
+                                                draft = draft.copy(attachments = draft.attachments + inline)
+                                                apply(insertAt(body, "![${put.name}](cid:${inline.cid})"))
+                                            }
+                                        } catch (e: Exception) {
+                                            attachError = e.message ?: "That picture could not be added."
+                                        } finally {
+                                            attaching = false
+                                        }
+                                    }
+                                }
+                            },
+                            enabled = !attaching,
+                        ) { Text("Picture") }
+                    }
+                }
+                HorizontalDivider()
+            }
+
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (sending) {
                     CircularProgressIndicator(Modifier.align(Alignment.Center))
                 } else {
                     BasicTextField(
-                        value = draft.body,
-                        onValueChange = { draft = draft.copy(body = it) },
+                        value = body,
+                        onValueChange = {
+                            body = it
+                            draft = draft.copy(body = it.text)
+                        },
+                        visualTransformation = MarkupStyling,
                         textStyle = LocalTextStyle.current.copy(color = MaterialTheme.colorScheme.onSurface),
                         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                         modifier = Modifier.fillMaxSize()
@@ -499,31 +567,42 @@ internal fun signed(draft: Draft, signature: String, html: String = ""): Draft {
 internal fun signatureBlock(signature: String) = "\n\n-- \n" + signature.trimEnd()
 
 /**
- * The HTML half of the message, or null when there is no HTML sign-off to justify one.
+ * The HTML half of the message, or null when nothing in it needs HTML.
+ *
+ * Two things can need it: an HTML sign-off, and formatting the person typed. A message with
+ * neither is sent as text alone, which is the right shape for a one line reply and is what
+ * every mail client does.
  *
  * The text sign-off is taken back off the end and the HTML one put in its place, so the two
  * parts say the same thing rather than one carrying a formatted block and the other a copy
  * of it in plain text underneath.
  */
 internal fun htmlBodyOf(body: String, textSignature: String, htmlSignature: String): String? {
-    if (htmlSignature.isBlank()) return null
     val typed = if (textSignature.isBlank()) body
     else body.removeSuffix(signatureBlock(textSignature))
+    if (htmlSignature.isBlank() && markupToPlain(typed) == typed) return null
     return htmlOf(typed) + htmlSignature
 }
 
 /**
- * Plain text as HTML, escaped.
+ * What was typed, as HTML.
  *
- * A div per line, because that is what every other client produces and what every client
- * renders the same way. Escaping is the part that matters: an ampersand or an angle bracket
- * in what somebody typed must arrive as itself, not as the start of a tag.
+ * A div per line for ordinary text, because that is what every other client produces and
+ * what every client renders the same way, plus the composer's markers turned into real
+ * tags. Escaping is the part that matters: an ampersand or an angle bracket in what
+ * somebody typed must arrive as itself, not as the start of a tag. `RichText.kt` does both.
  */
-internal fun htmlOf(plain: String): String = plain.trimEnd().ifBlank { return "" }
-    .lineSequence().joinToString("") { line ->
-    if (line.isBlank()) "<div><br></div>"
-    else "<div>" + line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") + "</div>"
-}
+internal fun htmlOf(plain: String): String = markupToHtml(plain)
+
+/**
+ * A Content-ID for a picture put in the body.
+ *
+ * Derived from the blob id rather than random, so adding the same picture twice reuses one
+ * reference instead of attaching it twice. The `@rampart.invalid` domain is the reserved
+ * one from RFC 2606: a Content-ID looks like an address and this one must never resolve.
+ */
+internal fun cidFor(blobId: String): String =
+    blobId.filter { it.isLetterOrDigit() || it == '-' || it == '_' } + "@rampart.invalid"
 
 /**
  * The operating system's own file picker.

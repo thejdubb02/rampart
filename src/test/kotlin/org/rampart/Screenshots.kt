@@ -129,7 +129,14 @@ class Screenshots {
             Composer(
                 identities = listOf("you@example.org", "billing@example.org"),
                 initial = replyTo(MESSAGES[1], Body(null, "Could you confirm the start time?"), "you@example.org")
-                    .copy(attachments = listOf(Attachment("b1", "Revised quote September.pdf", "application/pdf", 214_512))),
+                    .copy(
+                        // With markers in it, because the point of this shot is the
+                        // formatting bar and whether the marked words really draw bold.
+                        body = "Yes, **ten past nine** works, and I will bring:\n" +
+                            "- the *revised* quote\n- the signed copy\n" +
+                            "Details are on [the page](https://example.org/booking).\n",
+                        attachments = listOf(Attachment("b1", "Revised quote September.pdf", "application/pdf", 214_512)),
+                    ),
                 sending = false,
                 error = null,
                 onDiscard = {},
