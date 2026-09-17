@@ -516,6 +516,8 @@ private fun Reader(
     var installNote by remember { mutableStateOf<String?>(null) }
     var notifyOnArrival by remember { mutableStateOf(Settings.notifyOnArrival()) }
     var order by remember { mutableStateOf(Settings.order()) }
+    // Who you write to, per account, read once and kept up to date as mail goes past.
+    var books by remember { mutableStateOf<Map<String, List<Person>>>(emptyMap()) }
     var loadingMore by remember { mutableStateOf(false) }
     // Set when a page comes back short, so the bottom of a folder is not re-queried forever.
     var exhausted by remember { mutableStateOf(false) }
@@ -652,6 +654,30 @@ private fun Reader(
         }
         loading = false
     }
+    /*
+     * Folds the senders of whatever is on screen into that account's address book.
+     *
+     * No extra request: these summaries were fetched to be shown, and their senders are the
+     * people you actually correspond with. Written back to disk so the second run already
+     * knows them.
+     *
+     * Learning from Sent would be better still, because who you write *to* matters more
+     * than who writes to you, and it happens on its own as soon as somebody opens Sent.
+     */
+    fun learnFrom(seen: List<Summary>) {
+        if (seen.isEmpty()) return
+        val byAccount = seen.groupBy { it.account.ifBlank { here?.first.orEmpty() } }
+        var changed = books
+        byAccount.forEach { (key, group) ->
+            if (key.isBlank() || key == ALL_ACCOUNTS) return@forEach
+            var book = changed[key] ?: AddressBook.read(AddressBook.file(key))
+            group.forEach { book = noted(book, it.fromEmail, it.from) }
+            changed = changed + (key to book)
+            runCatching { AddressBook.write(book, AddressBook.file(key)) }
+        }
+        books = changed
+    }
+
     suspend fun reload() {
         val (key, mailbox) = here ?: return
         loading = true
@@ -667,7 +693,9 @@ private fun Reader(
         }
         loading = false
         exhausted = false
+        learnFrom(emails)
     }
+
 
     /*
      * The next page, asked for when the list gets near its own bottom.
@@ -1156,6 +1184,7 @@ private fun Reader(
                     account.jmap.saveDraft(draft, identity, drafts.id, draftId)
                 }
             },
+            book = books[writingAccount()].orEmpty(),
             onSend = { draft ->
                 val key = writingAccount()
                 val account = key?.let(::session)
@@ -1177,6 +1206,12 @@ private fun Reader(
                                 // copy in Drafts is now a duplicate of mail already gone.
                                 draftId?.let { runCatching { account.jmap.destroy(listOf(it)) } }
                             }
+                            // Who you write to counts for more than who writes to you,
+                            // so a sent message is the strongest signal the book gets.
+                            var book = books[key] ?: AddressBook.read(AddressBook.file(key))
+                            draft.recipients.forEach { book = noted(book, it) }
+                            books = books + (key to book)
+                            runCatching { AddressBook.write(book, AddressBook.file(key)) }
                             composing = null
                             draftId = null
                         } catch (e: Exception) {

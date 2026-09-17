@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -195,6 +196,8 @@ internal fun Composer(
     onSave: (suspend (Draft) -> Unit)? = null,
     /** Puts the chosen files on the server and says what to attach. Null when it cannot. */
     onAttach: (suspend (List<Path>) -> List<Attachment>)? = null,
+    /** Addresses to offer while a recipient is being typed. */
+    book: List<Person> = emptyList(),
 ) {
     var draft by remember(initial) { mutableStateOf(initial) }
     // The selection has to live here, not be derived from the string, or every formatting
@@ -370,12 +373,12 @@ internal fun Composer(
             HorizontalDivider()
 
             Field(label = "To", action = if (showCc) null else ("Cc" to { showCc = true })) {
-                Entry(draft.to, sending, firstField) { draft = draft.copy(to = it) }
+                Entry(draft.to, sending, firstField, book) { draft = draft.copy(to = it) }
             }
             HorizontalDivider()
 
             if (showCc) {
-                Field(label = "Cc") { Entry(draft.cc, sending) { draft = draft.copy(cc = it) } }
+                Field(label = "Cc") { Entry(draft.cc, sending, book = book) { draft = draft.copy(cc = it) } }
                 HorizontalDivider()
             }
 
@@ -542,17 +545,76 @@ private fun Entry(
     value: String,
     disabled: Boolean,
     focusRequester: FocusRequester? = null,
+    /** Who to offer while typing. Empty for a field that is not a recipient field. */
+    book: List<Person> = emptyList(),
     onChange: (String) -> Unit,
 ) {
-    BasicTextField(
-        value = value,
-        onValueChange = onChange,
-        enabled = !disabled,
-        singleLine = true,
-        textStyle = LocalTextStyle.current.copy(color = MaterialTheme.colorScheme.onSurface),
-        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-        modifier = (focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier).fillMaxWidth(),
-    )
+    // Dismissed stays true until the field changes again, so Esc closes the list and
+    // carries on typing rather than having it reappear on the next keystroke.
+    var dismissed by remember { mutableStateOf(false) }
+    val offers = if (book.isEmpty() || dismissed) emptyList() else suggest(typedRecipient(value), book)
+
+    fun choose(person: Person) {
+        dismissed = true
+        onChange(completeRecipient(value, person.email))
+    }
+
+    Box {
+        BasicTextField(
+            value = value,
+            onValueChange = {
+                dismissed = false
+                onChange(it)
+            },
+            enabled = !disabled,
+            singleLine = true,
+            textStyle = LocalTextStyle.current.copy(color = MaterialTheme.colorScheme.onSurface),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            modifier = (focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
+                .fillMaxWidth()
+                .onPreviewKeyEvent { event ->
+                    // Enter takes the first offer, which is what the ranking is for. Esc
+                    // puts the list away. Both only while there is a list: a field that
+                    // swallows Esc with nothing open is a field you cannot get out of.
+                    when {
+                        offers.isEmpty() || event.type != KeyEventType.KeyDown -> false
+                        event.key == Key.Enter || event.key == Key.Tab -> {
+                            choose(offers.first())
+                            true
+                        }
+                        event.key == Key.Escape -> {
+                            dismissed = true
+                            true
+                        }
+                        else -> false
+                    }
+                },
+        )
+        DropdownMenu(
+            expanded = offers.isNotEmpty(),
+            onDismissRequest = { dismissed = true },
+            // Never takes the focus, or every keystroke would move it out of the field.
+            properties = PopupProperties(focusable = false),
+        ) {
+            offers.forEach { person ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            if (person.name.isNotBlank()) {
+                                Text(person.name, style = MaterialTheme.typography.bodyMedium)
+                            }
+                            Text(
+                                person.email,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline,
+                            )
+                        }
+                    },
+                    onClick = { choose(person) },
+                )
+            }
+        }
+    }
 }
 
 /**
