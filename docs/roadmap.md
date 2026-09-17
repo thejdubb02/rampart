@@ -96,18 +96,37 @@ admin console, and everything else in tiers 3, 5 and 6. They are real and they a
 
 ## Where we actually are
 
-Rampart 0.1.50. Reading: mailboxes, threaded conversations, a unified inbox across
-accounts, HTML drawn as blocks without a browser engine, pictures in the flow, remote
-images held per sender, links confirmed, a word above anything that cannot prove who sent
-it, one-click unsubscribe, view source and save as `.eml`. Acting: star, tag, archive,
-spam, trash, batch or one at a time, all undoable. Writing: reply, reply-all, forward,
-attachments, drafts that save themselves, an HTML signature per identity held on the
-server. Around it: search, keyboard shortcuts with the list on `?`, a vacation responder,
-push over the JMAP WebSocket, eighteen themes, self-updating, passwords in the operating
-system's credential store.
+**The four daily-driver items are done**, 2026-09-17, in one run:
 
-That is a real mail client for one server. The rest of this file is the distance between
-that and a mail client anybody can use.
+1. **Writing with formatting in it.** Bold, italic, links, bulleted and numbered lists, and
+   an inline picture, on a toolbar and on Ctrl+B, Ctrl+I, Ctrl+K. The text part loses the
+   markers, the picture goes out as a cid attachment, and a `javascript:` URL never becomes
+   a link.
+2. **A list that behaves like one.** Right-click menu, hover actions where the date sits,
+   five sort orders, a mark-as-read delay, and the next page loaded a screenful before the
+   bottom rather than stopping at a hundred.
+3. **Recipient autocomplete**, built from your own mail rather than a contacts server,
+   because that is the source every account has.
+4. **Folder management.** Create, rename, nest, move, delete, with the sidebar showing the
+   tree, plus archive by year or by month.
+
+Before that: mailboxes, threaded conversations, a unified inbox across accounts, HTML drawn
+as blocks without a browser engine, pictures in the flow, remote images held per sender,
+links confirmed, a word above anything that cannot prove who sent it, one-click
+unsubscribe, view source and save as `.eml`. Star, tag, archive, spam, trash, batch or one
+at a time, all undoable. Reply, reply-all, forward, attachments, drafts that save
+themselves, an HTML signature per identity held on the server. Search, keyboard shortcuts
+with the list on `?`, a vacation responder, the command palette on Ctrl+K, push over the
+JMAP WebSocket, eighteen themes, self-updating, passwords in the operating system's
+credential store.
+
+**What that adds up to: a client a working day can be spent in, against one server.** The
+rest of this file is the distance between that and a client anybody can install. The
+nearest piece of it is item 7, IMAP and SMTP, which is what "anybody" turns on.
+
+One thing the tests cannot answer and a real send can: whether a formatted message arrives
+looking the same in Bulwark, Gmail and Outlook. Until that is checked, the composer is
+done rather than proven.
 
 ---
 
