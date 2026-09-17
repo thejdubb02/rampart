@@ -62,3 +62,22 @@ Clear it first, then re-run:
 
 The version is the commit count either way, so it keeps climbing between
 releases and a released version is simply the count at the moment it went out.
+
+## The board is the status, and it is kept current as we go
+
+**Kaneo, workspace Willhite Strategy Group, project RAM** (`kaneo.willhitestrategy.org`).
+Justin reads it to see where things are and what is coming, so a card that is out of date
+is worse than no card: it is a wrong answer to the question he opened it to ask.
+
+So, in the same change as the work, never as a tidy-up afterwards:
+
+- Starting something moves its card to **In Progress**.
+- Finishing it moves the card to **Done**, and the description gains one line: the
+  version it shipped in and the date.
+- Anything he throws out in passing gets a card at **no-priority** with the date, and
+  `docs/roadmap.md` gets the same line under "Ideas". Logged, not built.
+- Something found mid-work that is real but not now gets its own card rather than a
+  mention in a commit message nobody will search for.
+
+The next ten in `docs/roadmap.md` and the cards are the same ten. When they disagree the
+file is the one to fix, because a card is easy to drag and an argument is not.
