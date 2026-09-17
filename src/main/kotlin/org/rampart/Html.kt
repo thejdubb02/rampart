@@ -36,8 +36,11 @@ data class Rendered(
  * which also drops every attribute we have not listed, so `onclick` and friends cannot survive.
  * `a[href]` is restricted to ftp/http/https/mailto, which is what kills `javascript:`.
  */
-private val SAFELIST: Safelist = Safelist.basic()
+internal val SAFELIST: Safelist = Safelist.basic()
     .addTags("h1", "h2", "h3", "h4", "h5", "h6", "div", "table", "thead", "tbody", "tr", "td", "th", "hr", "center")
+    // Kept so a picture can be drawn at something like its intended size. They are numbers
+    // that end up as a width, never anything that is executed.
+    .addAttributes("img", "width", "height")
 
 /** A block ends the line it is on. The tight ones get one newline, the rest get a blank line. */
 private val TIGHT = setOf("div", "li", "tr", "td", "th", "dd", "dt", "center")
@@ -110,7 +113,7 @@ private fun link(url: String, color: Color, onLink: (String) -> Unit) = LinkAnno
  * Walks the cleaned tree once, appending as it goes. Blank lines are owed rather than written,
  * so a stack of empty `div`s collapses instead of leaving a page of whitespace.
  */
-private class Walker(
+internal class Walker(
     private val linkColor: Color,
     private val quoteColor: Color,
     private val onLink: (String) -> Unit,
