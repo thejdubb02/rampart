@@ -37,3 +37,13 @@ jobs:
           signing_key: ${{ secrets.SIGNING_KEY }}
           agree_to_license: 1
           extra_flags: -Kapp.site.github.oauth-token=${{ secrets.GITHUB_TOKEN }}
+
+      # Conveyor publishes the release as a list of files and nothing else, and the file
+      # that looks most like the thing to click is the .msix. Double-clicking it opens
+      # Windows' App Installer, which cannot install a package whose signer it does not
+      # trust yet, and whose Cancel button then does nothing. So the notes say what to run
+      # instead. The version is the commit count, the same as build.gradle.kts computes it.
+      - name: Say how to install it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "0.1.$(git rev-list --count HEAD)" --notes-file docs/release-notes.md

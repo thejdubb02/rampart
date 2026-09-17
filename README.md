@@ -9,9 +9,34 @@ aliases, your vacation responder, your app passwords or your server's own settin
 So every IMAP client, however good, leaves nine tenths of a modern mail server
 invisible and sends you to a browser for the rest.
 
+## Install it
+
+On Windows, paste this into PowerShell:
+
+```powershell
+irm https://github.com/thejdubb02/rampart/releases/latest/download/install.ps1 | iex
+```
+
+It trusts our signing certificate, installs Rampart and starts it. One admin prompt, the
+first time on each machine, and every update after that is silent.
+
+Do not double-click the `.msix` file. Rampart is signed with our own key rather than a
+certificate from a public authority, and Windows will not install a package whose signer
+it does not know yet, so App Installer opens, cannot finish, and its Cancel button does
+nothing. A real code signing certificate removes that step and costs a few hundred dollars
+a year, which is worth it when Rampart is something other people install.
+
+On Linux, take the `.deb` from the
+[latest release](https://github.com/thejdubb02/rampart/releases/latest).
+
+macOS is not built yet: an unnotarised build is worse than none, and notarising needs a
+paid Apple account.
+
 ## Status
 
-Early. Nothing to install yet.
+Early, but in daily use. Reading, searching, writing, replying and sending work, with
+several accounts at once. The account and server screens described below are not built
+yet.
 
 ## What it will do
 
