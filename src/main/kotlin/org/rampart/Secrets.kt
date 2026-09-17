@@ -91,6 +91,25 @@ object Secrets {
         }
     }.getOrNull()
 
+    /**
+     * The key the local copy of this account's mail is encrypted with.
+     *
+     * Made the first time it is asked for and kept in the same place as the password, which
+     * is the operating system's own store. Returns null where there is nowhere safe to keep
+     * it, and the caller then runs without a local store: a key written beside the file it
+     * encrypts protects nothing, so that is the right answer rather than a fallback.
+     *
+     * 256 bits of randomness rendered as hex, so it is a password nobody has to type and
+     * nothing in a URL or a file has to escape.
+     */
+    fun mailKey(account: SavedAccount): String? {
+        if (!available()) return null
+        val key = SavedAccount("${'$'}{account.name} (local mail)", account.server, "db:${'$'}{account.email}")
+        load(key)?.let { return it }
+        val made = java.security.SecureRandom().generateSeed(32).joinToString("") { "%02x".format(it) }
+        return if (store(key, made) == null) made else null
+    }
+
     fun forget(account: SavedAccount) {
         runCatching {
             val id = id(account)

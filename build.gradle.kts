@@ -30,6 +30,11 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     // Parses and sanitises message HTML. Hostile input, so this is not hand rolled.
     implementation("org.jsoup:jsoup:1.21.1")
+    // SQLite with FTS5 for the local store, and with encryption, which the stock xerial
+    // driver does not have. This is that driver plus SQLCipher, so encrypting the file is
+    // a pragma on the connection rather than a project of its own.
+    implementation("io.github.willena:sqlite-jdbc:3.50.1.0")
+
     // Reaches Windows DPAPI, so a remembered password is encrypted by the operating
     // system against the logged in user rather than by anything we wrote.
     implementation("net.java.dev.jna:jna-platform:5.17.0")
