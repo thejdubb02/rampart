@@ -50,12 +50,39 @@ mail, and never round-trip somebody else's HTML through an editor that will mang
 
 ### 2.2 Filters and rules
 
-**Need.** Stalwart advertises `urn:ietf:params:jmap:sieve` ("Stalwart v1.0.0"), so this
-is available to us. Bulwark has a visual builder over a raw editor, and rules written in
-other clients survive the round trip.
+**Need.** Rules run on the server, so they work with Rampart closed, which is the whole
+point of having them.
 
-Rules are how a mailbox stays usable without anyone tending it, and Justin's runs on
-inbound leads. This is the gap with the most leverage.
+**The format is not ours, and that was worth finding out before writing any of it.** A real
+script read off the server shows Bulwark keeps its own rule model as JSON in a comment at
+the top and generates the Sieve underneath:
+
+    /* @metadata:begin
+    {"version":1,"rules":[ ... ]}
+    @metadata:end */
+
+    require ["fileinto"];
+
+    # Rule: DMARC
+    if header :contains "From" "..." { fileinto "Deleted Items"; }
+
+Inventing a second format beside it would have meant each client silently destroying the
+other's rules, on the same mailbox, for the same person. Rampart reads and writes that one,
+so a rule made in either opens in the other.
+
+Two things that follow, and both are in `Sieve.kt`:
+
+- A rule whose JSON holds a field, comparator or action this build does not show is kept
+  exactly as it arrived and marked not understood, rather than re-encoded as the nearest
+  thing we do know. It shows in the list and is edited in the raw editor.
+- Anything in the script beyond the rules the metadata accounts for is preserved verbatim
+  and written back underneath. On this mailbox that is a hand written block of delivery
+  probes, and losing it would have stopped the monitoring on a live mail server silently,
+  the first time somebody saved a filter.
+
+A script with no metadata block was not written by anyone's builder, so Rampart claims none
+of it and offers the raw editor only. Parsing hand written Sieve into a builder is exactly
+where a round trip loses a condition.
 
 ### 2.3 IMAP, alongside JMAP
 

@@ -135,6 +135,8 @@ class Jmap private constructor(
     val accountId: String,
     private val downloadUrl: String,
     private val uploadUrl: String,
+    /** Every capability URI this server declared, for asking before calling. */
+    private val capabilities: Set<String> = emptySet(),
     /** Where the server takes a WebSocket for push. Blank when it does not offer one. */
     private val pushUrl: String,
     /** What the server will accept in one upload, in bytes. Zero when it did not say. */
@@ -176,6 +178,9 @@ class Jmap private constructor(
                 ?.get("maxSizeUpload")?.jsonPrimitive?.longOrNull ?: 0L
             val pushUrl = (session["capabilities"]?.jsonObject?.get(WEBSOCKET)?.jsonObject
                 ?.get("url") as? JsonPrimitive)?.contentOrNull.orEmpty()
+            // Kept so a feature can ask whether this server has it rather than calling and
+            // reading the refusal. A server without Sieve should not be offered filters.
+            val capabilities = session["capabilities"]?.jsonObject?.keys.orEmpty().toSet()
             return Jmap(
                 credential = credential,
                 apiUrl = session["apiUrl"].require("apiUrl"),
@@ -184,6 +189,7 @@ class Jmap private constructor(
                 uploadUrl = uploadUrl,
                 pushUrl = pushUrl,
                 maxUpload = maxUpload,
+                capabilities = capabilities,
             )
         }
 
@@ -646,6 +652,90 @@ class Jmap private constructor(
      * still being written, so pressing Send is not a wait proportional to the attachment.
      * The file is streamed rather than read into memory.
      */
+    /** A Sieve script on the server. Only one is active at a time. */
+    data class SieveInfo(val id: String, val name: String, val active: Boolean, val blobId: String)
+
+    /** Whether this server takes Sieve at all, so the UI can say so rather than fail. */
+    fun hasSieve(): Boolean = capabilities.any { it.endsWith(":sieve") }
+
+    fun sieveScripts(): List<SieveInfo> = call(
+        invoke("SieveScript/get", "s") { put("ids", JsonNull) },
+    )[0].list().map {
+        val o = it.jsonObject
+        SieveInfo(
+            id = o["id"].require("id"),
+            name = o["name"]?.str() ?: "(no name)",
+            active = (o["isActive"] as? JsonPrimitive)?.content == "true",
+            blobId = o["blobId"]?.str().orEmpty(),
+        )
+    }
+
+    /** The script's text. Empty when the server gave it no blob, which means no script yet. */
+    fun sieveText(script: SieveInfo): String {
+        if (script.blobId.isBlank() || downloadUrl.isBlank()) return ""
+        val url = downloadUrl
+            .replace("{accountId}", pct(accountId))
+            .replace("{blobId}", pct(script.blobId))
+            .replace("{type}", pct("application/sieve"))
+            .replace("{name}", pct(script.name))
+        val response = http.send(
+            HttpRequest.newBuilder(URI.create(url)).header("Authorization", credential).GET().build(),
+            HttpResponse.BodyHandlers.ofString(),
+        )
+        if (response.statusCode() !in 200..299) return ""
+        return response.body()
+    }
+
+    /**
+     * Writes a script and makes it the active one.
+     *
+     * The text goes up as a blob first, because that is how JMAP moves anything with a body,
+     * and the script then points at it. Activating in the same call rather than a second one
+     * means a refused script never becomes the active script.
+     */
+    fun saveSieve(name: String, text: String, existing: SieveInfo? = null) {
+        if (uploadUrl.isBlank()) throw JmapError("This server did not say where to upload files.")
+        val upload = http.send(
+            HttpRequest.newBuilder(URI.create(uploadUrl.replace("{accountId}", pct(accountId))))
+                .header("Authorization", credential)
+                .header("Content-Type", "application/sieve")
+                .POST(HttpRequest.BodyPublishers.ofString(text))
+                .build(),
+            HttpResponse.BodyHandlers.ofString(),
+        )
+        if (upload.statusCode() !in 200..299) {
+            throw JmapError("The server would not take the filter script (HTTP ${upload.statusCode()}).")
+        }
+        val blobId = json.parseToJsonElement(upload.body()).jsonObject["blobId"].require("blobId")
+
+        val response = call(
+            invoke("SieveScript/set", "w") {
+                if (existing == null) {
+                    putJsonObject("create") {
+                        putJsonObject("new") {
+                            put("name", name)
+                            put("blobId", blobId)
+                        }
+                    }
+                    put("onSuccessActivateScript", "#new")
+                } else {
+                    putJsonObject("update") {
+                        putJsonObject(existing.id) { put("blobId", blobId) }
+                    }
+                    put("onSuccessActivateScript", existing.id)
+                }
+            },
+        )[0][1].jsonObject
+        val field = if (existing == null) "notCreated" else "notUpdated"
+        val ok = if (existing == null) {
+            response["created"]?.jsonObject?.containsKey("new") == true
+        } else {
+            response["updated"]?.jsonObject?.containsKey(existing.id) == true
+        }
+        // The server checks Sieve for us, and its complaint names the line. Ours would not.
+        if (!ok) throw JmapError(refusal(response, field, "The server rejected these filters"))
+    }
+
     fun upload(file: Path): Attachment {
         if (uploadUrl.isBlank()) throw JmapError("This server did not say where to upload files.")
         val size = Files.size(file)
