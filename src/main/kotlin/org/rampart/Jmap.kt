@@ -41,6 +41,15 @@ private const val VACATION = "urn:ietf:params:jmap:vacationresponse"
 private const val SIEVE = "urn:ietf:params:jmap:sieve"
 private const val CONTACTS = "urn:ietf:params:jmap:contacts"
 
+/**
+ * About where a server stops taking an HTML signature.
+ *
+ * Not advertised anywhere in JMAP, so this is a number to explain a refusal with rather
+ * than one to enforce. Measured against Stalwart 0.16, which accepts 2047 characters and
+ * refuses 2048 with `invalidProperties` and no description.
+ */
+internal const val SIGNATURE_LIMIT = 2048
+
 private val json = Json { ignoreUnknownKeys = true }
 
 private const val WEBSOCKET = "urn:ietf:params:jmap:websocket"
@@ -578,6 +587,20 @@ class Jmap private constructor(
             },
         )[0][1].jsonObject
         if (response["updated"]?.jsonObject?.containsKey(identityId) != true) {
+            // A server that refuses the HTML but takes the text is almost always refusing
+            // it for being long, and "invalidProperties: Field could not be set" says
+            // nothing a person can act on. Stalwart 0.16 stops at 2047 characters, which is
+            // roughly a thousandth of the picture its own client will let you insert.
+            val why = response["notUpdated"]?.jsonObject?.values?.firstOrNull()?.jsonObject
+            val fields = why?.get("properties")?.jsonArray?.map { it.str() }.orEmpty()
+            if ("htmlSignature" in fields && html.length > SIGNATURE_LIMIT) {
+                throw JmapError(
+                    "The server would not store this signature: it is ${html.length} characters " +
+                        "and most cap it near $SIGNATURE_LIMIT. A picture carried inside the " +
+                        "signature is what pushes it over, every time. Link to one on the web " +
+                        "instead of adding it here.",
+                )
+            }
             throw JmapError(refusal(response, "notUpdated", "The server would not store the signature"))
         }
     }

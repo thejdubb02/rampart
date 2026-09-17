@@ -94,6 +94,19 @@ internal fun SignatureEditor(
         )
     }
 
+    val tooLong = value.text.length > SIGNATURE_LIMIT
+    Text(
+        if (tooLong) {
+            "${value.text.length} characters. Most servers stop near $SIGNATURE_LIMIT and will " +
+                "refuse to save this. A picture added with Image is what does it."
+        } else {
+            "${value.text.length} characters"
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = if (tooLong) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline,
+        modifier = Modifier.padding(top = 6.dp),
+    )
+
     Text(
         "Preview",
         style = MaterialTheme.typography.labelMedium,
@@ -118,10 +131,12 @@ internal fun SignatureEditor(
                 HtmlBody(rendered, emptyMap(), emptyMap())
                 if (rendered.blockedImages > 0) {
                     Text(
-                        "A picture from the web will not show for most people, and marks them as " +
-                            "having opened the mail. Use Image to put one in the message itself.",
+                        "A picture from the web is held back until the reader asks for it, and " +
+                            "asking tells you the mail was opened. It is still the only way to " +
+                            "put a logo in a signature: one carried inside is far past what a " +
+                            "mail server will store.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
+                        color = MaterialTheme.colorScheme.outline,
                         modifier = Modifier.padding(top = 6.dp),
                     )
                 }

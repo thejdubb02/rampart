@@ -141,6 +141,13 @@ two are the local store, which is what makes search instant and offline possible
 everything in tiers 3 and 4, and then IMAP and SMTP, which is what "anybody" actually turns
 on.
 
+**A logo in a signature has to be hosted, not carried.** Stalwart stores at most 2047
+characters in `htmlSignature` and refuses 2048 with `invalidProperties` and no description.
+A 56 pixel logo as base64 is about ten thousand, so the picture Rampart's own signature
+editor will let you insert (capped at 96 KB) is roughly a thousand times what the server
+will keep. The cap is not advertised anywhere in JMAP, so Rampart shows the length as you
+type and explains the refusal rather than pretending to know every server's limit.
+
 A signature picture now goes out as a cid attachment rather than base64. It was stored on
 the identity as finished HTML and nothing rewrote it on the way out, so a logo added in the
 signature editor looked right here and arrived broken in Gmail and Outlook, which both
