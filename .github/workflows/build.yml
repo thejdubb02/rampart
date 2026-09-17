@@ -57,6 +57,15 @@ jobs:
       # Windows' App Installer, which cannot install a package whose signer it does not
       # trust yet, and whose Cancel button then does nothing. So the notes say what to run
       # instead. The version is the commit count, the same as build.gradle.kts computes it.
+      # Published over the one Conveyor generates, which has no
+      # -ForceTargetApplicationShutdown and so cannot install while Rampart is running.
+      # Re-running the install line to update is the commonest way to hit that.
+      - name: Replace the installer with ours
+        if: inputs.release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "0.1.$(git rev-list --count HEAD)" deploy/install.ps1 --clobber
+
       - name: Say how to install it
         if: inputs.release
         env:
