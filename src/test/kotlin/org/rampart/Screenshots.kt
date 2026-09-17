@@ -50,10 +50,12 @@ class Screenshots {
         // A ported theme, and the one thing about it that cannot be checked by reading the
         // palette: whether the character in the corner is faint enough to read mail over.
         shoot("reader-themed", 1400, 900, withArt) { Panes() }
-        shoot("settings", 1400, 900, withArt) {
+        // Taller than any real window on purpose: the pane scrolls, and a screenshot that
+        // stops at the fold is how a section nobody has looked at ships.
+        shoot("settings", 1400, 1900, withArt) {
             SettingsPane(
                 accounts = ACCOUNTS,
-                signatureFor = { "" },
+                signatureFor = { "Justin Willhite\nWillhite Strategy Group\nwillhitestrategy.com" },
                 onSignature = { _, _ -> },
                 update = "0.1.25",
                 notifyOnArrival = true,

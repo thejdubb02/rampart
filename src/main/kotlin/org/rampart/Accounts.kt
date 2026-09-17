@@ -30,6 +30,10 @@ data class SavedAccount(val name: String, val server: String, val email: String)
 
 object Accounts {
     fun file(): Path {
+        // Tests set this so a test run cannot rewrite the settings of whoever is running
+        // it. Nothing in the app sets it, so the real path is the only one that ships.
+        System.getProperty("rampart.config.dir")?.takeIf { it.isNotBlank() }
+            ?.let { return Path.of(it, "accounts.json") }
         val home = System.getProperty("user.home")
         val base = System.getenv("APPDATA")?.takeIf { it.isNotBlank() }?.let { Path.of(it, "Rampart") }
             ?: System.getenv("XDG_CONFIG_HOME")?.takeIf { it.isNotBlank() }?.let { Path.of(it, "rampart") }

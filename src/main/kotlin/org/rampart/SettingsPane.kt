@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -31,9 +32,14 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -52,6 +58,8 @@ import androidx.compose.foundation.Image
 @Composable
 internal fun SettingsPane(
     accounts: List<AccountMailboxes>,
+    signatureFor: (String) -> String,
+    onSignature: (String, String) -> Unit,
     update: String?,
     notifyOnArrival: Boolean,
     onNotifyOnArrival: (Boolean) -> Unit,
@@ -140,6 +148,40 @@ internal fun SettingsPane(
                 }
                 Spacer(Modifier.height(6.dp))
                 OutlinedButton(onClick = onAddAccount) { Text("Add account") }
+
+                Spacer(Modifier.height(30.dp))
+                Section("Signatures", "One per sending address, so a work reply does not go out under a personal sign-off.")
+                accounts.forEach { account ->
+                    var text by remember(account.email) { mutableStateOf(signatureFor(account.email)) }
+                    Text(
+                        account.email,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(bottom = 6.dp),
+                    )
+                    // Built rather than borrowed: Material's outlined field has a minimum
+                    // height of its own, and a 90dp box is the size a sign-off actually needs.
+                    Box(
+                        Modifier.fillMaxWidth().height(90.dp)
+                            .clip(MaterialTheme.shapes.small)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
+                            .padding(horizontal = 11.dp, vertical = 8.dp),
+                    ) {
+                        BasicTextField(
+                            value = text,
+                            onValueChange = {
+                                text = it
+                                onSignature(account.email, it)
+                            },
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                color = MaterialTheme.colorScheme.onSurface,
+                            ),
+                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
+                }
 
                 Spacer(Modifier.height(30.dp))
                 Section("Version", "Rampart updates itself in the background and asks before restarting.")

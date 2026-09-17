@@ -2,6 +2,7 @@ package org.rampart
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
@@ -229,7 +230,7 @@ class Jmap private constructor(
             },
         )
         val sizes = responses[2].list().associate {
-            it.jsonObject["id"].require("id") to (it.jsonObject["emailIds"]?.jsonArray?.size ?: 1)
+            it.jsonObject["id"].require("id") to ((it.jsonObject["emailIds"] as? JsonArray)?.size ?: 1)
         }
         return responses[1].list().map { element ->
             val summary = jsonToSummary(element.jsonObject)
@@ -246,7 +247,7 @@ class Jmap private constructor(
     fun thread(threadId: String): List<Summary> {
         if (threadId.isBlank()) return emptyList()
         val ids = call(invoke("Thread/get", "t") { putJsonArray("ids") { add(threadId) } })[0]
-            .list().firstOrNull()?.jsonObject?.get("emailIds")?.jsonArray?.mapNotNull { it.str() }
+            .list().firstOrNull()?.jsonObject?.get("emailIds")?.let { it as? JsonArray }?.mapNotNull { it.str() }
             .orEmpty()
         if (ids.size <= 1) return emptyList()
         val found = call(
@@ -277,9 +278,16 @@ class Jmap private constructor(
         val values = email["bodyValues"]?.jsonObject ?: JsonObject(emptyMap())
         fun join(part: String, wantedType: String? = null): String? =
             bodyText(email[part] as? JsonArray, values, wantedType)
-        fun ids(field: String) = email[field]?.jsonArray?.mapNotNull { it.str() }.orEmpty()
-        fun addresses(field: String) = email[field]?.jsonArray
-            ?.mapNotNull { it.jsonObject["email"]?.str() }.orEmpty()
+        /*
+         * `as? JsonArray` rather than `.jsonArray`, and the difference is not stylistic. A
+         * header a message does not have comes back as JSON null rather than being left
+         * out, and JsonNull is a value, so the null-safe call does not skip it and
+         * `.jsonArray` throws. A message with no Cc, or no References, could not be opened
+         * at all: "Element class JsonNull is not a JsonArray", on screen, instead of the
+         * message.
+         */
+        fun ids(field: String) = stringsIn(email[field])
+        fun addresses(field: String) = addressesIn(email[field])
         return Body(
             html = join("htmlBody", wantedType = "text/html"),
             text = join("textBody"),
@@ -662,10 +670,10 @@ private val emailGetProperties =
 
 private fun jsonToSummary(o: JsonObject): Summary = Summary(
     id = o["id"].require("id"),
-    from = o["from"]?.jsonArray?.firstOrNull()?.jsonObject?.let { a ->
+    from = (o["from"] as? JsonArray)?.firstOrNull()?.jsonObject?.let { a ->
         a["name"]?.str()?.ifBlank { null } ?: a["email"]?.str()
     } ?: "(no sender)",
-    fromEmail = o["from"]?.jsonArray?.firstOrNull()?.jsonObject?.get("email")?.str().orEmpty(),
+    fromEmail = (o["from"] as? JsonArray)?.firstOrNull()?.jsonObject?.get("email")?.str().orEmpty(),
     subject = o["subject"]?.str()?.ifBlank { null } ?: "(no subject)",
     receivedAt = o["receivedAt"]?.str() ?: "",
     preview = o["preview"]?.str()?.trim() ?: "",
@@ -680,7 +688,7 @@ private fun kotlinx.serialization.json.JsonElement?.require(name: String): Strin
     this?.str() ?: throw JmapError("The server's reply has no $name.")
 
 private fun JsonArray.list(): List<kotlinx.serialization.json.JsonElement> =
-    this[1].jsonObject["list"]?.jsonArray ?: emptyList()
+    this[1].jsonObject["list"] as? JsonArray ?: emptyList()
 
 /** The subtype is only a hint, and the sender chose it, so it is reduced to letters and digits. */
 private fun nameFromType(type: String): String {
@@ -753,3 +761,19 @@ internal fun bodyText(parts: JsonArray?, values: JsonObject, wantedType: String?
     }
     ?.joinToString("\n")
     ?.ifBlank { null }
+
+/**
+ * The strings in a header that holds a list of them, or none.
+ *
+ * `as? JsonArray` rather than `.jsonArray`, and the difference is not stylistic. A header a
+ * message does not have comes back as JSON null rather than being left out, and JsonNull is
+ * a value, so a null-safe call does not skip it and `.jsonArray` throws. Every message in
+ * this mailbox answers null for Cc, so every one of them stopped opening: "Element class
+ * JsonNull is not a JsonArray", on screen, where the message should have been.
+ */
+internal fun stringsIn(element: JsonElement?): List<String> =
+    (element as? JsonArray)?.mapNotNull { it.str() }.orEmpty()
+
+/** The addresses in a To or Cc header, or none. Same trap as [stringsIn]. */
+internal fun addressesIn(element: JsonElement?): List<String> =
+    (element as? JsonArray)?.mapNotNull { (it as? JsonObject)?.get("email")?.str() }.orEmpty()

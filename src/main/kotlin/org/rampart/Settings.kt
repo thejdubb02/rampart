@@ -10,6 +10,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import kotlin.io.path.createDirectories
 import kotlin.io.path.exists
 import kotlin.io.path.readText
@@ -40,7 +42,12 @@ object Settings {
             val updated = read().toMutableMap().apply(change)
             val path = file()
             path.parent?.createDirectories()
-            path.writeText(Json.encodeToString(JsonObject.serializer(), JsonObject(updated)))
+            // Written beside the file and moved over it, so an interrupted write cannot
+            // leave half a file behind. Signatures save on every keystroke, which makes
+            // being caught mid-write a great deal likelier than it was.
+            val temp = path.resolveSibling("settings.json.new")
+            temp.writeText(Json.encodeToString(JsonObject.serializer(), JsonObject(updated)))
+            Files.move(temp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
         }
     }
 
