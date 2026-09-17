@@ -291,30 +291,57 @@ class Jmap private constructor(
      * itself moves it out of Drafts and into Sent and drops the draft keyword, which is
      * why that move cannot be left half done by us losing the connection.
      */
+    /**
+     * The message itself, as JMAP wants it. Shared by sending and saving, because a draft
+     * that differs from what is eventually sent is a bug waiting for the day someone sends
+     * one without reopening it.
+     */
+    private fun JsonObjectBuilder.emailObject(draft: Draft, identity: Identity, draftsMailboxId: String) {
+        putJsonObject("mailboxIds") { put(draftsMailboxId, true) }
+        putJsonObject("keywords") { put("\$draft", true) }
+        putJsonArray("from") {
+            add(buildJsonObject { put("name", identity.name); put("email", identity.email) })
+        }
+        addresses("to", draft.to)
+        addresses("cc", draft.cc)
+        put("subject", draft.subject)
+        // Without both of these a reply arrives as a new conversation in every client that
+        // threads, which is most of them.
+        draft.inReplyTo?.let {
+            putJsonArray("header:In-Reply-To:asMessageIds") { add(it) }
+        }
+        if (draft.references.isNotEmpty()) {
+            putJsonArray("header:References:asMessageIds") { draft.references.forEach { add(it) } }
+        }
+        putJsonObject("bodyStructure") { put("partId", "b"); put("type", "text/plain") }
+        putJsonObject("bodyValues") { putJsonObject("b") { put("value", draft.body) } }
+    }
+
+    /**
+     * Writes the draft to the Drafts folder and returns the id it was stored under.
+     *
+     * [replacing] is the id of the previous save, and it is destroyed in the same request
+     * that creates the new one. A JMAP message is immutable apart from its keywords and
+     * which mailboxes it is in, so editing a draft means replacing it, and doing both in
+     * one call is what stops a dropped connection leaving two copies of the same draft.
+     * Create is processed before destroy, so the new one exists before the old one goes.
+     */
+    fun saveDraft(draft: Draft, identity: Identity, draftsMailboxId: String, replacing: String?): String {
+        val response = call(
+            invoke("Email/set", "d") {
+                putJsonObject("create") { putJsonObject("m") { emailObject(draft, identity, draftsMailboxId) } }
+                if (replacing != null) putJsonArray("destroy") { add(replacing) }
+            },
+        )[0][1].jsonObject
+        return response["created"]?.jsonObject?.get("m")?.jsonObject?.get("id")?.str()
+            ?: throw JmapError(refusal(response, "notCreated", "The server would not store the draft"))
+    }
+
     fun send(draft: Draft, identity: Identity, draftsMailboxId: String, sentMailboxId: String?) {
         val responses = call(
             invoke("Email/set", "e") {
                 putJsonObject("create") {
-                    putJsonObject("m") {
-                        putJsonObject("mailboxIds") { put(draftsMailboxId, true) }
-                        putJsonObject("keywords") { put("\$draft", true) }
-                        putJsonArray("from") {
-                            add(buildJsonObject { put("name", identity.name); put("email", identity.email) })
-                        }
-                        addresses("to", draft.to)
-                        addresses("cc", draft.cc)
-                        put("subject", draft.subject)
-                        // Without both of these a reply arrives as a new conversation in
-                        // every client that threads, which is most of them.
-                        draft.inReplyTo?.let {
-                            putJsonArray("header:In-Reply-To:asMessageIds") { add(it) }
-                        }
-                        if (draft.references.isNotEmpty()) {
-                            putJsonArray("header:References:asMessageIds") { draft.references.forEach { add(it) } }
-                        }
-                        putJsonObject("bodyStructure") { put("partId", "b"); put("type", "text/plain") }
-                        putJsonObject("bodyValues") { putJsonObject("b") { put("value", draft.body) } }
-                    }
+                    putJsonObject("m") { emailObject(draft, identity, draftsMailboxId) }
                 }
             },
             invoke("EmailSubmission/set", "s") {

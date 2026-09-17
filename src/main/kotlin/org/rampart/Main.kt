@@ -393,6 +393,9 @@ private fun Reader(
     val scope = rememberCoroutineScope()
     var identities by remember { mutableStateOf<Map<String, List<Identity>>>(emptyMap()) }
     var composing by remember { mutableStateOf<Draft?>(null) }
+    // Where the autosaved copy of what is being written currently lives, so the next save
+    // replaces it rather than adding another, and sending or discarding can clear it away.
+    var draftId by remember { mutableStateOf<String?>(null) }
     var sending by remember { mutableStateOf(false) }
     var sendError by remember { mutableStateOf<String?>(null) }
     var update by remember { mutableStateOf<String?>(null) }
@@ -508,6 +511,17 @@ private fun Reader(
         saved = null
         body = io { session(key).jmap.body(message.id) }
         attachments = io { session(key).jmap.attachments(message.id) } ?: emptyList()
+
+        // A draft is not something to read. Clicking one puts it back in the composer,
+        // under the id it is already saved at, so carrying on writing replaces that copy
+        // instead of leaving the old one behind.
+        if (here?.second?.role == "drafts" && !showingResults) {
+            draftId = message.id
+            sendError = null
+            composing = draftOf(message, body, identities[key].orEmpty().firstOrNull()?.email.orEmpty())
+            return@LaunchedEffect
+        }
+
         if (!message.seen) {
             io { session(key).jmap.markSeen(message.id) }
             emails = emails.map { if (it.id == message.id) it.copy(seen = true) else it }
@@ -577,7 +591,31 @@ private fun Reader(
             initial = composer,
             sending = sending,
             error = sendError,
-            onDiscard = { composing = null; sendError = null },
+            onDiscard = {
+                // What was autosaved goes with it. Discard has to mean discarded, or the
+                // Drafts folder fills with messages somebody decided against.
+                val key = here?.first
+                val going = draftId
+                if (key != null && going != null) {
+                    scope.launch { io { session(key).jmap.destroy(listOf(going)) } }
+                }
+                composing = null
+                draftId = null
+                sendError = null
+            },
+            onSave = { draft ->
+                val key = here?.first
+                val account = key?.let(::session)
+                val drafts = mailboxes[key].orEmpty().firstOrNull { it.role == "drafts" }
+                val identity = identities[key].orEmpty().firstOrNull { it.email.equals(draft.from, true) }
+                    ?: identities[key].orEmpty().firstOrNull()
+                if (account == null || drafts == null || identity == null) {
+                    throw JmapError("There is nowhere to save this: the account has no Drafts folder.")
+                }
+                draftId = withContext(Dispatchers.IO) {
+                    account.jmap.saveDraft(draft, identity, drafts.id, draftId)
+                }
+            },
             onSend = { draft ->
                 val key = here?.first
                 val account = key?.let(::session)
@@ -595,8 +633,12 @@ private fun Reader(
                         try {
                             withContext(Dispatchers.IO) {
                                 account.jmap.send(draft, identity, drafts.id, boxes.firstOrNull { it.role == "sent" }?.id)
+                                // The sent message is its own copy in Sent, so the working
+                                // copy in Drafts is now a duplicate of mail already gone.
+                                draftId?.let { runCatching { account.jmap.destroy(listOf(it)) } }
                             }
                             composing = null
+                            draftId = null
                         } catch (e: Exception) {
                             sendError = e.message ?: e.toString()
                         } finally {

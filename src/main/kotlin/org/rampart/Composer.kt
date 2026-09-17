@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 
 /**
  * A message on its way out, in the terms the writer used: addresses as they typed them,
@@ -168,11 +169,37 @@ internal fun Composer(
     error: String?,
     onDiscard: () -> Unit,
     onSend: (Draft) -> Unit,
+    /** Writes the draft to the server. Null while there is nowhere to write it. */
+    onSave: (suspend (Draft) -> Unit)? = null,
 ) {
     var draft by remember(initial) { mutableStateOf(initial) }
     var showCc by remember(initial) { mutableStateOf(initial.cc.isNotEmpty()) }
     var pickingIdentity by remember { mutableStateOf(false) }
+    var saveState by remember(initial) { mutableStateOf("") }
     val firstField = remember { FocusRequester() }
+
+    /*
+     * Saving as you type, with the pause built out of the effect rather than a timer: a
+     * keystroke changes `draft`, which cancels the effect mid-delay and starts it again, so
+     * only a real pause reaches the server. Typing a paragraph is one save, not two hundred.
+     *
+     * Nothing is written until something has been typed. Opening a reply and closing it
+     * again should leave no trace, and an untouched draft in the folder is exactly the kind
+     * of litter that makes people stop trusting a Drafts folder.
+     */
+    LaunchedEffect(draft) {
+        if (onSave == null || draft == initial) return@LaunchedEffect
+        delay(1200)
+        saveState = "Saving"
+        saveState = try {
+            onSave(draft)
+            "Saved"
+        } catch (e: Exception) {
+            // Said plainly and left on screen. A draft that silently failed to save is the
+            // one thing worse than no autosave at all.
+            "Not saved: ${e.message ?: "the server refused it"}"
+        }
+    }
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
         Column(Modifier.fillMaxSize()) {
@@ -186,6 +213,14 @@ internal fun Composer(
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (saveState.isNotEmpty()) {
+                        Text(
+                            saveState,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (saveState.startsWith("Not saved")) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.outline,
+                        )
+                    }
                     TextButton(onClick = onDiscard, enabled = !sending) { Text("Discard") }
                     Button(
                         onClick = { onSend(draft) },
@@ -308,3 +343,21 @@ private fun Entry(
         modifier = (focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier).fillMaxWidth(),
     )
 }
+
+/**
+ * A draft from the Drafts folder, put back the way it was written.
+ *
+ * The body is taken as text, because that is what the composer writes: a draft saved by
+ * another client as HTML comes back as its text, which is a fair trade against silently
+ * dropping the markup on the next save.
+ */
+internal fun draftOf(summary: Summary, body: Body?, from: String): Draft = Draft(
+    from = from,
+    to = body?.to.orEmpty().joinToString(", "),
+    cc = body?.cc.orEmpty().joinToString(", "),
+    subject = summary.subject,
+    body = plainTextOf(body),
+    inReplyTo = null,
+    references = body?.references.orEmpty(),
+    replying = false,
+)
