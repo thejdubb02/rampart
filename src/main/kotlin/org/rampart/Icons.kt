@@ -57,6 +57,10 @@ internal object RampartIcons {
             "M10.4 11a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2",
     )
     val Check = icon("Check", "m3.6 9.4 3.6 3.6L14.4 5.6")
+    val Refresh = icon(
+        "Refresh",
+        "M15.2 9a6.2 6.2 0 1 1-1.9-4.5 M15.4 2.6v3.6h-3.6",
+    )
     val Back = icon("Back", "M15 9H3.6M8 3.6 2.6 9l5.4 5.4")
     val Collapse = icon("Collapse", "m10.5 4-5 5 5 5")
     val Expand = icon("Expand", "m7 4 5 5-5 5")

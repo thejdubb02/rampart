@@ -416,6 +416,7 @@ private fun Reader(
     var body by remember { mutableStateOf<Body?>(null) }
     var attachments by remember { mutableStateOf<List<Attachment>>(emptyList()) }
     var thread by remember { mutableStateOf<List<Summary>>(emptyList()) }
+    var bodyError by remember { mutableStateOf<String?>(null) }
     var saved by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
@@ -516,13 +517,23 @@ private fun Reader(
                 // an arrival.
                 withContext(Dispatchers.IO) { runCatching { open.jmap.mailboxes() }.getOrNull() }
                     ?.let { mailboxes = mailboxes + (open.key to it) }
-                if (here?.first == open.key && here?.second?.id == inbox.id && !showingResults) reload()
+                // Anything this account changed can be in the folder on screen, not only in
+                // its inbox: mail read or filed in another client moves the open folder too.
+                if (here?.first == open.key && !showingResults) reload()
                 if (notifyOnArrival) arrivalText(found.fresh)?.let { (title, body) -> notify(title, body) }
             }
             // Until every account has been looked at once there is nothing to compare
             // against, so those first rounds come quickly rather than a minute apart.
-            delay(if (states.size == sessions.size) 60_000 else 10_000)
+            delay(if (states.size == sessions.size) 30_000 else 5_000)
         }
+    }
+
+    /** Folder counts and the open folder, brought up to date now rather than at the next poll. */
+    suspend fun refreshNow() {
+        val key = here?.first ?: return
+        withContext(Dispatchers.IO) { runCatching { session(key).jmap.mailboxes() }.getOrNull() }
+            ?.let { mailboxes = mailboxes + (key to it) }
+        reload()
     }
 
     LaunchedEffect(here) {
@@ -537,12 +548,21 @@ private fun Reader(
         val message = selected ?: return@LaunchedEffect
         val key = here?.first ?: return@LaunchedEffect
         body = null
+        bodyError = null
         attachments = emptyList()
         saved = null
         // Cleared only when this is a different conversation, so moving between messages in
         // the same thread does not make the list of them flicker away and come back.
         if (thread.none { it.id == message.id }) thread = emptyList()
-        body = io { session(key).jmap.body(message.id) }
+        // Kept apart from the shared error bar. A message that will not open has to say so
+        // where the message would have been: a spinner that never stops is indistinguishable
+        // from one that is still going, and it was being shown for a failure.
+        body = try {
+            withContext(Dispatchers.IO) { session(key).jmap.body(message.id) }
+        } catch (e: Exception) {
+            bodyError = e.message ?: e.toString()
+            null
+        }
         attachments = io { session(key).jmap.attachments(message.id) } ?: emptyList()
         if (thread.isEmpty()) thread = io { session(key).jmap.thread(message.threadId) } ?: emptyList()
 
@@ -605,6 +625,7 @@ private fun Reader(
         return when (event.key) {
             Key.J, Key.DirectionDown -> step(1)
             Key.K, Key.DirectionUp -> step(-1)
+            Key.F5 -> { scope.launch { refreshNow() }; true }
             Key.C -> { sendError = null; composing = Draft(from = identities[here?.first].orEmpty().firstOrNull()?.email.orEmpty()); true }
             Key.R -> { selected?.let { m -> composing = replyTo(m, body, identities[here?.first].orEmpty().firstOrNull()?.email.orEmpty()) }; true }
             Key.F -> { selected?.let { m -> composing = forwardOf(m, body, identities[here?.first].orEmpty().firstOrNull()?.email.orEmpty()) }; true }
@@ -791,6 +812,7 @@ private fun Reader(
                 selected = selected,
                 loading = loading,
                 title = here?.second?.name.orEmpty(),
+                onRefresh = { scope.launch { refreshNow() } },
                 onSelect = { selected = it },
             )
             VerticalDivider()
@@ -813,6 +835,7 @@ private fun Reader(
                     composing = forwardOf(message, body, from)
                 },
                 onLink = { confirm = it },
+                bodyError = bodyError,
                 thread = thread,
                 onPick = { selected = it },
                 actions = actions,
@@ -1152,6 +1175,7 @@ internal fun MessageList(
     selected: Summary?,
     loading: Boolean,
     title: String = "",
+    onRefresh: () -> Unit = {},
     onSelect: (Summary) -> Unit,
 ) {
     Column(
@@ -1163,13 +1187,26 @@ internal fun MessageList(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(title, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
-            val unread = emails.count { !it.seen }
-            if (unread > 0) {
-                Text(
-                    "$unread unread",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline,
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                val unread = emails.count { !it.seen }
+                if (unread > 0) {
+                    Text(
+                        "$unread unread",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+                Spacer(Modifier.width(6.dp))
+                // Rampart looks for new mail on its own, but waiting up to a minute to find
+                // out whether something arrived is not the same as being able to ask.
+                IconButton(onClick = onRefresh, enabled = !loading, modifier = Modifier.size(26.dp)) {
+                    Icon(
+                        RampartIcons.Refresh,
+                        contentDescription = "Check for new mail",
+                        tint = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
             }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -1282,6 +1319,8 @@ internal fun Message(
     body: Body?,
     onReply: (all: Boolean) -> Unit = {},
     replyAll: Boolean = false,
+    /** Why the message would not open, when it would not. */
+    bodyError: String? = null,
     /** The whole conversation, oldest first, including [summary]. Empty when there is none. */
     thread: List<Summary> = emptyList(),
     onPick: (Summary) -> Unit = {},
@@ -1389,7 +1428,15 @@ internal fun Message(
 
                     if (rendered == null) {
                         Spacer(Modifier.height(20.dp))
-                        if (body == null) CircularProgressIndicator() else Text("This message has no readable body.")
+                        when {
+                            bodyError != null -> Text(
+                                "This message would not open. $bodyError",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            body == null -> CircularProgressIndicator()
+                            else -> Text("This message has no readable body.")
+                        }
                     } else {
                     if (rendered.blockedImages > 0) {
                         Spacer(Modifier.height(16.dp))

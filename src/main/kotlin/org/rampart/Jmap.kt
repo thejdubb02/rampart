@@ -264,15 +264,13 @@ class Jmap private constructor(
             ?: throw JmapError("That message is not on the server any more.")
 
         val values = email["bodyValues"]?.jsonObject ?: JsonObject(emptyMap())
-        fun join(part: String): String? = email[part]?.jsonArray
-            ?.mapNotNull { values[it.jsonObject["partId"]?.str() ?: return@mapNotNull null]?.jsonObject?.get("value")?.str() }
-            ?.joinToString("\n")
-            ?.ifBlank { null }
+        fun join(part: String, wantedType: String? = null): String? =
+            bodyText(email[part] as? JsonArray, values, wantedType)
         fun ids(field: String) = email[field]?.jsonArray?.mapNotNull { it.str() }.orEmpty()
         fun addresses(field: String) = email[field]?.jsonArray
             ?.mapNotNull { it.jsonObject["email"]?.str() }.orEmpty()
         return Body(
-            html = join("htmlBody"),
+            html = join("htmlBody", wantedType = "text/html"),
             text = join("textBody"),
             messageId = ids("messageId"),
             references = ids("references"),
@@ -688,3 +686,21 @@ internal fun plainNetworkError(e: Throwable, server: String): String {
             ?: "Could not reach $server."
     }
 }
+
+/**
+ * The text of the parts the server listed, or null when there are none worth showing.
+ *
+ * [wantedType] is the point of this existing. A message with no HTML in it is still listed
+ * under htmlBody, as the same text/plain part that is in textBody, because that is the best
+ * HTML representation the server has. Taking it at its word ran every plain-text message
+ * through the HTML parser, which quietly ate anything in angle brackets: a DMARC report's
+ * "Report-ID: <secureserver.net!1789516800>" came out with the id missing.
+ */
+internal fun bodyText(parts: JsonArray?, values: JsonObject, wantedType: String?): String? = parts
+    ?.filter { wantedType == null || it.jsonObject["type"]?.str() == wantedType }
+    ?.mapNotNull { part ->
+        val id = part.jsonObject["partId"]?.str() ?: return@mapNotNull null
+        values[id]?.jsonObject?.get("value")?.str()
+    }
+    ?.joinToString("\n")
+    ?.ifBlank { null }
