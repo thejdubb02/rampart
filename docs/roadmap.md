@@ -41,17 +41,29 @@ Done as of 2026-09-17. Everything below this line is now the work.
 
 ### Tier 2, the rest of mail
 
+Done as of 2026-09-17:
+
 - Multi-select and batch actions, with undo
-- Sieve rules, a visual builder over a raw editor, and the vacation responder
-- Tags, with colour and nesting
+- Unsubscribe via `List-Unsubscribe`, one-click where the sender offers it
+- SPF, DKIM, DMARC and spam-score display, shown only when it is worth saying
+- Tags, as JMAP keywords, so they are the same tags the webmail shows
+- Raw source view and `.eml` export
+- Keyboard shortcuts, with the list itself on `?`
+- The vacation responder
+- Push over the JMAP WebSocket, with the poll kept underneath it
+
+Still to do:
+
+- Sieve rules, a visual builder over a raw editor
+- Nested tags
 - Unified inbox across accounts
 - Read receipts, both directions
-- Unsubscribe via `List-Unsubscribe`
-- SPF, DKIM, DMARC and spam-score display on a message
-- Raw source view, `.eml` import and export
-- Scheduled send, and an undo-send window
-- Keyboard shortcuts throughout
+- `.eml` import
 - Templates
+- Scheduled send, and an undo-send window. **Not possible against this server**:
+  it advertises `urn:ietf:params:jmap:submission` with no `maxDelayedSend`, which
+  per RFC 8621 means zero, so a future `sendAt` is refused. An undo-send window
+  held in the client is the only half of this that can be built today.
 
 ### Tier 3, the user's own account (Stalwart)
 
