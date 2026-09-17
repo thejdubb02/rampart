@@ -42,30 +42,31 @@ class AuthenticityTest {
 
     @Test
     fun testAuthenticityDkimFail() {
-        // Dkim failure.
+        // A DKIM failure is only worth saying when DMARC did not pass in spite of it.
         val auth = authenticityOf(
-            "mx.example.org; spf=pass; dkim=fail; dmarc=pass",
+            "mx.example.org; spf=pass; dkim=fail; dmarc=none",
             "No, score=2.0 required=5.0"
         )
-        assertEquals(Check.PASS, auth.spf)
         assertEquals(Check.FAIL, auth.dkim)
-        assertEquals(Check.PASS, auth.dmarc)
         assertEquals("This message was changed on the way here, or is not from that sender.", auth.summary)
         assertTrue(auth.worthShowing)
     }
 
     @Test
     fun testAuthenticitySpfFail() {
-        // Spf failure.
+        // Forwarded mail fails SPF as a matter of course, so this only speaks up where
+        // DMARC did not already settle the question.
         val auth = authenticityOf(
-            "mx.example.org; spf=fail; dkim=pass; dmarc=pass",
+            "mx.example.org; spf=fail; dkim=none; dmarc=none",
             "No, score=2.0 required=5.0"
         )
         assertEquals(Check.FAIL, auth.spf)
-        assertEquals(Check.PASS, auth.dkim)
-        assertEquals(Check.PASS, auth.dmarc)
         assertEquals("This reached us through a server that sender does not normally use.", auth.summary)
         assertTrue(auth.worthShowing)
+
+        // The same failure under a DMARC pass says nothing, because the message really is
+        // from that domain and it was only forwarded.
+        assertFalse(authenticityOf("mx.example.org; spf=fail; dkim=pass; dmarc=pass", null).worthShowing)
     }
 
     /**
@@ -119,7 +120,9 @@ class AuthenticityTest {
         assertEquals(Check.FAIL, auth.dkim)
         assertEquals(Check.MISSING, auth.dmarc)
         assertEquals(7.5, auth.spamScore)
-        assertEquals("This message was changed on the way here, or is not from that sender.", auth.summary)
+        // Spam is said before anything else: a message can be from exactly who it claims
+        // and still be spam, and that is the more useful thing to tell somebody.
+        assertEquals("The server thinks this is spam.", auth.summary)
         assertTrue(auth.worthShowing)
     }
 
@@ -127,12 +130,12 @@ class AuthenticityTest {
     fun testAuthenticityLineFolding() {
         // Line folding.
         val auth = authenticityOf(
-            "mx.example.org;\r\n\tspf=pass;\r\n dkim=fail;\r\n\tdmarc=pass",
+            "mx.example.org;\r\n\tspf=pass;\r\n dkim=fail;\r\n\tdmarc=none",
             "No,\r\n\tscore=-3.5 required=5.0"
         )
         assertEquals(Check.PASS, auth.spf)
         assertEquals(Check.FAIL, auth.dkim)
-        assertEquals(Check.PASS, auth.dmarc)
+        assertEquals(Check.MISSING, auth.dmarc)
         assertEquals(-3.5, auth.spamScore)
         assertEquals("This message was changed on the way here, or is not from that sender.", auth.summary)
         assertTrue(auth.worthShowing)
@@ -140,23 +143,23 @@ class AuthenticityTest {
 
     @Test
     fun testAuthenticityMultipleHeaders() {
-        // A forwarder appends its own results below ours. Ours are the ones that count.
+        // A forwarder appends its own results below ours. Ours are the ones that count,
+        // in both directions: its pass cannot vouch and its failure cannot condemn.
         val auth = authenticityOf(
-            "mx.example.org; spf=pass; dkim=fail; dmarc=pass\nmx.forwarder.org; spf=fail; dkim=pass; dmarc=fail",
+            "mx.example.org; spf=pass; dkim=pass; dmarc=pass\nmx.forwarder.org; spf=fail; dkim=fail; dmarc=fail",
             null
         )
         assertEquals(Check.PASS, auth.spf)
-        assertEquals(Check.FAIL, auth.dkim)
+        assertEquals(Check.PASS, auth.dkim)
         assertEquals(Check.PASS, auth.dmarc)
-        assertEquals("This message was changed on the way here, or is not from that sender.", auth.summary)
-        assertTrue(auth.worthShowing)
+        assertFalse(auth.worthShowing)
     }
 
     @Test
     fun testAuthenticityFirstDefiniteResultWithNonDefiniteFirst() {
-        // neutral is not an answer, so the definite one further down is the answer.
+        // neutral is not an answer, so the definite one further along the line is.
         val auth = authenticityOf(
-            "mx.example.org; spf=neutral\nmx.example.org; spf=fail",
+            "mx.example.org; spf=neutral; spf=fail; dmarc=none",
             null
         )
         assertEquals(Check.FAIL, auth.spf)
@@ -182,5 +185,47 @@ class AuthenticityTest {
         assertEquals(null, auth2.spamScore)
         assertEquals("Nothing here proves who sent this.", auth2.summary)
         assertTrue(auth2.worthShowing)
+    }
+
+    @Test
+    fun `a broken second signature does not condemn a message DMARC passed`() {
+        // A real message from a client, and the false red banner that prompted all this.
+        // One signature was broken by a relay, the other verified, and DMARC passed on it.
+        val header = "mail.willhitestrategy.org; dkim=fail (verification failed) " +
+            "header.d=netorgft4894676.onmicrosoft.com header.s=selector2; " +
+            "spf=pass (domain of matt@example.com designates 205.220.189.236 as permitted sender) " +
+            "smtp.mailfrom=matt@example.com; iprev=pass; dmarc=pass header.from=example.com"
+        val checked = authenticityOf(header, "No")
+        assertFalse(checked.worthShowing, "a DMARC pass should say nothing at all")
+    }
+
+    @Test
+    fun `a pass anywhere on the line beats a failure written before it`() {
+        val header = "mx.example.org; dkim=fail header.d=relay.example.net; " +
+            "dkim=pass header.d=example.com; dmarc=pass header.from=example.com"
+        assertEquals(Check.PASS, authenticityOf(header, null).dkim)
+    }
+
+    @Test
+    fun `a forwarder further down cannot vouch for what our own server could not`() {
+        // Our line first, the forwarder's second. Only ours is read.
+        val header = "mail.willhitestrategy.org; dkim=none; spf=none; dmarc=fail header.from=bank.example\n" +
+            "relay.example.net; dkim=pass header.d=relay.example.net; dmarc=pass"
+        val checked = authenticityOf(header, null)
+        assertEquals(Check.FAIL, checked.dmarc)
+        assertTrue(checked.worthShowing)
+        assertEquals("This did not come from the address it says it did.", checked.summary)
+    }
+
+    @Test
+    fun `a DMARC failure still shows, which is the whole point of the badge`() {
+        val checked = authenticityOf("mx.example.org; spf=pass; dmarc=fail header.from=bank.example", null)
+        assertTrue(checked.worthShowing)
+    }
+
+    @Test
+    fun `with no DMARC at all a plain SPF failure is still worth saying`() {
+        val checked = authenticityOf("mx.example.org; spf=fail smtp.mailfrom=someone@example.com", null)
+        assertTrue(checked.worthShowing)
     }
 }

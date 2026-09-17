@@ -21,7 +21,14 @@ internal data class Authenticity(
 internal fun authenticityOf(authenticationResults: String?, spamStatus: String?): Authenticity {
     // A header folded across lines would otherwise hide a result in the middle of a
     // keyword, and a result nobody finds reads as one that was never there.
-    val unfoldedAuth = authenticationResults?.replace(Regex("\\r?\\n[ \\t]+"), " ") ?: ""
+    val unfolded = authenticationResults?.replace(Regex("\\r?\\n[ \\t]+"), " ") ?: ""
+    /*
+     * Only our own server's line is read. Every hop prepends its own Authentication-Results
+     * and the topmost is ours, so a forwarder further down cannot vouch for a message our
+     * server could not verify, and, just as importantly, a relay's own broken signature
+     * further down cannot condemn one our server was happy with.
+     */
+    val unfoldedAuth = unfolded.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
     val unfoldedSpam = spamStatus?.replace(Regex("\\r?\\n[ \\t]+"), " ") ?: ""
 
     val spfRegex = Regex("(?i)\\bspf\\s*=\\s*([a-zA-Z]+)")
@@ -45,7 +52,21 @@ internal fun authenticityOf(authenticationResults: String?, spamStatus: String?)
      * whether anything actually failed, not whether every mechanism scored.
      */
     val vouched = dmarc == Check.PASS || dkim == Check.PASS
-    val failed = spf == Check.FAIL || dkim == Check.FAIL || dmarc == Check.FAIL
+    /*
+     * DMARC is the verdict when there is one, and nothing overrules it.
+     *
+     * It is the only check that speaks for the address in the From line, which is the only
+     * address a reader ever sees, and it passes on either SPF or DKIM lining up with that
+     * domain. So a dkim=fail next to a dmarc=pass is an ordinary thing: a message can carry
+     * several signatures, a relay breaks one of them, and the other one is what DMARC
+     * passed on. Reading that as forgery put a red banner on legitimate mail from a client,
+     * which is the exact failure this badge exists to avoid: a warning nobody believes.
+     */
+    val failed = when (dmarc) {
+        Check.PASS -> false
+        Check.FAIL -> true
+        Check.MISSING -> spf == Check.FAIL || dkim == Check.FAIL
+    }
     /*
      * No Authentication-Results at all means our server never saw this message arrive,
      * which is true of everything in Sent and Drafts. Measured on a real mailbox, treating
@@ -56,6 +77,13 @@ internal fun authenticityOf(authenticationResults: String?, spamStatus: String?)
     val worthShowing = checked && (failed || !vouched || (spamScore != null && spamScore >= 5.0))
 
     val summary = when {
+        // Above the DMARC line, because a message can be from exactly who it says and
+        // still be spam, and that is the more useful thing to say about it.
+        spamScore != null && spamScore >= 5.0 -> "The server thinks this is spam."
+
+        // Before every failure line, so the words can never contradict the verdict above.
+        dmarc == Check.PASS -> "Checks passed."
+
         // DMARC first, because it is the one that speaks for the address in the From line,
         // which is the only address a reader ever sees.
         dmarc == Check.FAIL -> "This did not come from the address it says it did."
@@ -66,8 +94,6 @@ internal fun authenticityOf(authenticationResults: String?, spamStatus: String?)
         // forwarded, because the forwarder is not a server the sender listed, so calling
         // this forgery would cry wolf on every message from a mailing list.
         spf == Check.FAIL -> "This reached us through a server that sender does not normally use."
-
-        spamScore != null && spamScore >= 5.0 -> "The server thinks this is spam."
 
         // Missing is not failure. A sender who never set any of this up has not done
         // anything wrong, and saying they failed would be a lie about them. But if nothing
@@ -88,17 +114,23 @@ internal fun authenticityOf(authenticationResults: String?, spamStatus: String?)
 }
 
 /**
- * The first definite result wins. Every hop prepends its own Authentication-Results, so
- * the topmost is the one our own server wrote, and a forwarder appending a flattering
- * copy of its own further down cannot overrule it.
+ * A pass anywhere on the line beats a failure anywhere on it.
  */
 private fun parseMechanism(text: String, regex: Regex): Check {
+    var failed = false
     for (match in regex.findAll(text)) {
-        val value = match.groupValues[1].lowercase()
-        if (value == "pass") return Check.PASS
-        if (value == "fail") return Check.FAIL
+        when (match.groupValues[1].lowercase()) {
+            // One pass is enough, wherever it appears on the line. A message is allowed to
+            // carry several DKIM signatures and to be checked against several SPF records
+            // (the HELO and the envelope sender are both checked, and they often disagree),
+            // and the standards say one that verifies is a pass. Taking whichever came
+            // first in the string instead meant the order the server happened to write them
+            // in decided whether a message looked forged.
+            "pass" -> return Check.PASS
+            "fail" -> failed = true
+        }
     }
-    return Check.MISSING
+    return if (failed) Check.FAIL else Check.MISSING
 }
 
 /** A score that will not parse is no score, rather than a zero that reads as a clean bill. */

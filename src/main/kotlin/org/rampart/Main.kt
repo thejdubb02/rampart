@@ -564,7 +564,7 @@ private fun Reader(
      */
     fun sourceFolder(key: String): String? =
         if (!unified()) here?.second?.id
-        else mailboxes[key].orEmpty().firstOrNull { it.role == "inbox" }?.id
+        else folderFor("inbox", mailboxes[key].orEmpty())?.id
 
     /** Settings are always about one real account, never about the merged row. */
     fun settingsAccount(): String? =
@@ -573,7 +573,7 @@ private fun Reader(
     /** The inbox of every signed in account, as one list. */
     suspend fun everyInbox(): List<Summary> = merged(
         sessions.associate { open ->
-            val inbox = mailboxes[open.key]?.firstOrNull { it.role == "inbox" }
+            val inbox = folderFor("inbox", mailboxes[open.key].orEmpty())
             open.key to (
                 inbox?.let {
                     runCatching {
@@ -633,7 +633,7 @@ private fun Reader(
             withContext(Dispatchers.IO) { runCatching { open.jmap.identities() }.getOrNull() }
                 ?.let { identities = identities + (open.key to it) }
             if (here == null) {
-                val inbox = found.firstOrNull { it.role == "inbox" } ?: found.firstOrNull()
+                val inbox = folderFor("inbox", found) ?: found.firstOrNull()
                 if (inbox != null) here = open.key to inbox
             }
             // Only once every account is in, or it would land on one account's inbox and
@@ -678,7 +678,7 @@ private fun Reader(
         val seen = mutableMapOf<String, Set<String>>()
         while (true) {
             for (open in sessions) {
-                val inbox = mailboxes[open.key]?.firstOrNull { it.role == "inbox" } ?: continue
+                val inbox = folderFor("inbox", mailboxes[open.key].orEmpty()) ?: continue
                 val found = withContext(Dispatchers.IO) {
                     runCatching {
                         val state = open.jmap.mailState() ?: return@runCatching null
@@ -834,13 +834,20 @@ private fun Reader(
         if (key == null || message == null) return@run MessageActions()
         val boxes = mailboxes[key].orEmpty()
         fun moveTo(role: String): (() -> Unit)? {
-            val target = boxes.firstOrNull { it.role == role } ?: return null
+            val target = folderFor(role, boxes) ?: return null
+            val from = sourceFolder(key)
             return {
                 scope.launch {
                     if (io { session(key).jmap.move(listOf(message.id), target.id) } != null) {
                         emails = emails.filterNot { it.id == message.id }
                         selected = null
                         body = null
+                        // One message can be taken back the same way a batch can. Filing
+                        // the wrong thing is a click, and having to go and find it again
+                        // is the part that makes people slow and careful about a button.
+                        undo = from?.let {
+                            Undoable(listOf(Move(key, listOf(message.id), it)), pastTense(role))
+                        }
                     }
                 }
                 Unit
@@ -966,7 +973,7 @@ private fun Reader(
             onSave = { draft ->
                 val key = writingAccount()
                 val account = key?.let(::session)
-                val drafts = mailboxes[key].orEmpty().firstOrNull { it.role == "drafts" }
+                val drafts = folderFor("drafts", mailboxes[key].orEmpty())
                 val identity = identities[key].orEmpty().firstOrNull { it.email.equals(draft.from, true) }
                     ?: identities[key].orEmpty().firstOrNull()
                 if (account == null || drafts == null || identity == null) {
@@ -980,7 +987,7 @@ private fun Reader(
                 val key = writingAccount()
                 val account = key?.let(::session)
                 val boxes = mailboxes[key].orEmpty()
-                val drafts = boxes.firstOrNull { it.role == "drafts" }
+                val drafts = folderFor("drafts", boxes)
                 val identity = identities[key].orEmpty().firstOrNull { it.email.equals(draft.from, true) }
                     ?: identities[key].orEmpty().firstOrNull()
                 when {
@@ -992,7 +999,7 @@ private fun Reader(
                         sendError = null
                         try {
                             withContext(Dispatchers.IO) {
-                                account.jmap.send(draft, identity, drafts.id, boxes.firstOrNull { it.role == "sent" }?.id)
+                                account.jmap.send(draft, identity, drafts.id, folderFor("sent", boxes)?.id)
                                 // The sent message is its own copy in Sent, so the working
                                 // copy in Drafts is now a duplicate of mail already gone.
                                 draftId?.let { runCatching { account.jmap.destroy(listOf(it)) } }
@@ -1025,7 +1032,7 @@ private fun Reader(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "${last.count} messages ${last.what}.",
+                    movedNotice(last.count, last.what),
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.weight(1f),
                 )
@@ -1198,7 +1205,7 @@ private fun Reader(
                             .mapNotNull { (key, group) ->
                                 key ?: return@mapNotNull null
                                 val from = sourceFolder(key)
-                                val target = mailboxes[key].orEmpty().firstOrNull { it.role == role }
+                                val target = folderFor(role, mailboxes[key].orEmpty())
                                 if (from == null || target == null) null
                                 else Triple(key, Move(key, group.map { it.id }, from), target.id)
                             }
@@ -1451,7 +1458,7 @@ internal fun Sidebar(
             if (accounts.size > 1) {
                 item(key = "all-inboxes") {
                     val unread = accounts.sumOf { a ->
-                        a.mailboxes.firstOrNull { it.role == "inbox" }?.unread ?: 0
+                        folderFor("inbox", a.mailboxes)?.unread ?: 0
                     }
                     FolderRow(
                         mailbox = allInboxes(unread),
