@@ -27,7 +27,7 @@ So the split is clean, and it is the shape of this project:
 
 ### Tier 1, a mail client you can live in
 
-Nothing below this line matters until these are done.
+Done as of 2026-09-17. Everything below this line is now the work.
 
 - Compose, reply, reply-all, forward, with correct `In-Reply-To` and `References`
 - Drafts that save as you type, and reopen
@@ -88,9 +88,16 @@ client is finished (`docs/architecture.md`), and themes, which shipped.
 
 ## Where we actually are
 
-Reading mail: mailboxes, message list, one message at a time, HTML drawn without a
-browser engine, links confirmed, images blocked. Several accounts at once. Threaded conversations. New mail arrives on its own, with a
-desktop notification. Writing, replying, reply all, forwarding, attachments, and drafts
-that save as you type. Eighteen themes, ported from Clique, picked on a settings screen.
-Passwords in the OS credential store. That is most of a reader and none of Tier 1's
-writing half.
+Tier 1 is finished. Reading mail: mailboxes, conversations, HTML drawn without a browser
+engine, links confirmed, pictures from the web held back until the reader allows that
+sender, pictures the message carries drawn, a word above anything that cannot prove who
+sent it, and one click off a mailing list where the sender said how. Several messages
+picked out at once, filed together, and put back. Several accounts at once, with new mail
+arriving on its own and a desktop notification when it does.
+
+Writing: replies, reply all, forwards, attachments, drafts that save as you type, and a
+signature per sending address that is HTML, can hold a picture, and lives on the server so
+the webmail uses the same one.
+
+Eighteen themes ported from Clique, picked on a settings screen. Passwords in the operating
+system's own credential store.

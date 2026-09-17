@@ -65,6 +65,7 @@ internal object RampartIcons {
     val Back = icon("Back", "M15 9H3.6M8 3.6 2.6 9l5.4 5.4")
     val Collapse = icon("Collapse", "m10.5 4-5 5 5 5")
     val Expand = icon("Expand", "m7 4 5 5-5 5")
+    val More = icon("More", "M9 4.2v.1M9 9v.1M9 13.8v.1")
 
     /**
      * Roles are the standard JMAP ones. Anything else is somebody's own folder and gets the

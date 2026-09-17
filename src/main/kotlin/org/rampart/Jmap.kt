@@ -56,6 +56,8 @@ data class Summary(
     val seen: Boolean,
     /** Starred. `$flagged` is what every other mail client calls a star too. */
     val flagged: Boolean = false,
+    /** Every keyword on the message, protocol ones included. See [tagsOf]. */
+    val keywords: Set<String> = emptySet(),
     /** The conversation this belongs to. Empty on a server that does not thread. */
     val threadId: String = "",
     /** How many messages are in that conversation, counting this one. */
@@ -351,6 +353,28 @@ class Jmap private constructor(
         if (response.statusCode() != 200) return null
         val bytes = response.body()
         return if (bytes.size > limit) null else bytes
+    }
+
+    /**
+     * The message exactly as it arrived, headers and all.
+     *
+     * Every Email has a blob of its own whole self, which is what "view source" and saving
+     * a .eml both need. Capped, because this is going into a window rather than onto disk.
+     */
+    fun raw(emailId: String, limit: Long = 4L * 1024 * 1024): String? {
+        val email = call(
+            invoke("Email/get", "r") {
+                putJsonArray("ids") { add(emailId) }
+                putJsonArray("properties") { add("blobId"); add("size") }
+            },
+        )[0].list().firstOrNull()?.jsonObject ?: return null
+        val blobId = email["blobId"]?.str()?.ifBlank { null } ?: return null
+        val size = email["size"]?.jsonPrimitive?.longOrNull ?: 0L
+        val bytes = blob(
+            Attachment(blobId = blobId, name = "message.eml", type = "message/rfc822", size = size),
+            limit,
+        ) ?: return null
+        return String(bytes, Charsets.UTF_8)
     }
 
     fun attachments(emailId: String): List<Attachment> {
@@ -742,6 +766,7 @@ private fun jsonToSummary(o: JsonObject): Summary = Summary(
     preview = o["preview"]?.str()?.trim() ?: "",
     seen = o["keywords"]?.jsonObject?.containsKey("\$seen") == true,
     flagged = o["keywords"]?.jsonObject?.containsKey("\$flagged") == true,
+    keywords = o["keywords"]?.jsonObject?.keys.orEmpty(),
     threadId = o["threadId"]?.str().orEmpty(),
 )
 

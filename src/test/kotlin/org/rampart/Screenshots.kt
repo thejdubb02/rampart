@@ -47,6 +47,15 @@ class Screenshots {
         shoot("reader", 1400, 900) { Panes() }
         shoot("reader-dark", 1400, 900, dark) { Panes() }
         shoot("sidebar-collapsed", 1400, 900, dark) { Panes(collapsed = true) }
+        shoot("source", 900, 700, dark) {
+            Message(
+                summary = MESSAGES[1],
+                body = null,
+                source = SAMPLE_RAW,
+                actions = MessageActions(archive = {}, junk = {}, trash = {}, star = {}),
+                onLink = {},
+            )
+        }
         // A ported theme, and the one thing about it that cannot be checked by reading the
         // palette: whether the character in the corner is faint enough to read mail over.
         shoot("reader-themed", 1400, 900, withArt) { Panes() }
@@ -123,7 +132,7 @@ class Screenshots {
             MessageList(MESSAGES, MESSAGES[1], loading = false, title = "Inbox") { _, _, _ -> }
             VerticalDivider()
             Message(
-                summary = MESSAGES[1],
+                summary = MESSAGES[1].copy(keywords = setOf("\$seen", "invoices", "groundworks")),
                 body = Body(
                     SAMPLE_HTML,
                     null,
@@ -178,11 +187,12 @@ private val MESSAGES = listOf(
     // A conversation rather than a single message, so the count on the row gets drawn.
     Summary("b", "Dana Whitfield", "dana@example.org", "Re: the quote for the Tuesday job", "2026-09-15T17:40:00Z",
         "That works for us. Tuesday morning is fine, and the crew will be there by eight.", true,
-        threadId = "t1", threadSize = 3),
+        keywords = setOf("\$seen", "groundworks", "invoices"), threadId = "t1", threadSize = 3),
     Summary("c", "Companies House", "companies@example.org", "Confirmation statement filed", "2026-09-15T11:02:00Z",
         "We have accepted your confirmation statement. No further action is needed.", true, flagged = true),
     Summary("d", "Hetzner", "hetzner@example.org", "Invoice 2026-4471", "2026-09-14T06:00:00Z",
-        "Your invoice for September is attached and has been paid by direct debit.", true),
+        "Your invoice for September is attached and has been paid by direct debit.", true,
+        keywords = setOf("\$seen", "invoices")),
     Summary("e", "Alex Moreno", "alex@example.org", "Photos from the site visit", "2026-09-13T20:15:00Z",
         "Eight shots of the rear elevation, and one of the damp patch we talked about.", true),
 )
@@ -202,4 +212,25 @@ and the difference is about four percent.</p>
 <p>Best,<br>Dana</p>
 <table><tr><td>Dana Whitfield</td></tr><tr><td>Whitfield Groundworks</td></tr></table>
 </body></html>
+""".trimIndent()
+
+/** Enough of a real message to see that headers and body are told apart. */
+private val SAMPLE_RAW = """
+Return-Path: <dana@example.org>
+Received: from mx.example.org (mx.example.org [203.0.113.24])
+ by mail.example.org with ESMTPS id 4c2f9a
+ for <you@example.com>; Tue, 15 Sep 2026 17:40:02 +0000
+From: Dana Whitfield <dana@example.org>
+To: You <you@example.com>
+Subject: Re: the quote for the Tuesday job
+Date: Tue, 15 Sep 2026 17:39:58 +0000
+Message-ID: <a41f0c8e-2b77-4d31-9a0c-16f2e1b4d0aa@example.org>
+Content-Type: text/plain; charset=utf-8
+
+Hi,
+
+That works for us. Tuesday morning is fine, and the crew will be there by
+eight. If the gate is locked, the key safe code is the same as last time.
+
+Dana
 """.trimIndent()

@@ -38,6 +38,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.layout.offset
 import androidx.compose.material3.FilledIconButton
@@ -75,6 +77,7 @@ import org.jetbrains.skia.Image
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.loadSvgPainter
 import androidx.compose.ui.res.useResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -413,7 +416,9 @@ private fun Reader(
     var update by remember { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf("") }
     var showingResults by remember { mutableStateOf(false) }
-    var searchFocused by remember { mutableStateOf(false) }
+    // Any text field, not just search: a bare letter is a shortcut only when nothing
+    // is being typed into. Tagging a message shares this for the same reason.
+    var typing by remember { mutableStateOf(false) }
     var collapsed by remember { mutableStateOf(Settings.sidebarCollapsed()) }
     var settingsOpen by remember { mutableStateOf(false) }
     var signatureError by remember { mutableStateOf<String?>(null) }
@@ -433,6 +438,7 @@ private fun Reader(
     var inlineImages by remember { mutableStateOf<Map<String, ImageBitmap>>(emptyMap()) }
     var remoteImages by remember { mutableStateOf<List<ImageBitmap>>(emptyList()) }
     var unsubscribed by remember { mutableStateOf<String?>(null) }
+    var source by remember { mutableStateOf<String?>(null) }
     var picked by remember { mutableStateOf<Set<String>>(emptySet()) }
     var anchor by remember { mutableStateOf<String?>(null) }
     var undo by remember { mutableStateOf<Undoable?>(null) }
@@ -572,6 +578,7 @@ private fun Reader(
         inlineImages = emptyMap()
         remoteImages = emptyList()
         unsubscribed = null
+        source = null
         attachments = emptyList()
         saved = null
         // Cleared only when this is a different conversation, so moving between messages in
@@ -674,11 +681,11 @@ private fun Reader(
      */
     fun shortcut(event: androidx.compose.ui.input.key.KeyEvent): Boolean {
         if (event.type != KeyEventType.KeyDown) return false
-        if (event.key == Key.Slash && !searchFocused) {
+        if (event.key == Key.Slash && !typing) {
             searchField.requestFocus()
             return true
         }
-        if (searchFocused) return false
+        if (typing) return false
         val at = emails.indexOfFirst { it.id == selected?.id }
         fun step(delta: Int): Boolean {
             if (emails.isEmpty()) return true
@@ -854,7 +861,7 @@ private fun Reader(
         SearchBar(
             query = query,
             focusRequester = searchField,
-            onFocusChanged = { searchFocused = it },
+            onFocusChanged = { typing = it },
             onQueryChange = { query = it },
             onSearch = {
                 settingsOpen = false
@@ -1061,6 +1068,52 @@ private fun Reader(
                 actions = actions,
                 attachments = attachments,
                 savedTo = saved,
+                source = source,
+                onSource = {
+                    val message = selected
+                    val key = here?.first
+                    when {
+                        source != null -> source = null
+                        message != null && key != null -> {
+                            source = "Fetching the original..."
+                            scope.launch {
+                                source = io { session(key).jmap.raw(message.id) }
+                                    ?: "The server would not hand over the original of this message."
+                            }
+                        }
+                    }
+                },
+                onSaveSource = {
+                    val message = selected
+                    val text = source
+                    if (message != null && text != null) {
+                        scope.launch {
+                            saved = io {
+                                val path = downloadsFolder().resolve(emlName(message.subject, message.receivedAt))
+                                java.nio.file.Files.writeString(path, text)
+                                path
+                            }?.toString()
+                        }
+                    }
+                },
+                onTag = { keyword, on ->
+                    val message = selected
+                    val key = here?.first
+                    if (message != null && key != null) {
+                        // Same bargain as the star: it moves now, and moves back if the
+                        // server says no. Nobody waits on a round trip to see a label.
+                        fun put(value: Boolean) {
+                            val keywords = if (value) message.keywords + keyword else message.keywords - keyword
+                            emails = emails.map { if (it.id == message.id) it.copy(keywords = keywords) else it }
+                            selected = selected?.copy(keywords = keywords)
+                        }
+                        put(on)
+                        scope.launch {
+                            if (io { session(key).jmap.setKeyword(listOf(message.id), keyword, on) } == null) put(!on)
+                        }
+                    }
+                },
+                onTyping = { typing = it },
                 onDownload = { attachment ->
                     val key = here?.first
                     if (key != null) {
@@ -1538,6 +1591,12 @@ private fun MessageRow(
                             .padding(horizontal = 6.dp, vertical = 1.dp),
                     )
                 }
+                // Dots rather than chips: a label is worth seeing at a glance, and four of
+                // them spelt out would push the subject off the row it belongs to.
+                tagsOf(message.keywords).take(4).forEach { tag ->
+                    Spacer(Modifier.width(4.dp))
+                    Box(Modifier.size(7.dp).clip(CircleShape).background(Color(tag.color)))
+                }
             }
             if (message.preview.isNotBlank()) {
                 Spacer(Modifier.height(2.dp))
@@ -1578,6 +1637,13 @@ internal fun Message(
     /** What happened to an unsubscribe that was pressed, when one was. */
     unsubscribed: String? = null,
     onUnsubscribe: (Unsubscribe) -> Unit = {},
+    /** The message as it arrived, while somebody is looking at it. */
+    source: String? = null,
+    onSource: () -> Unit = {},
+    onSaveSource: () -> Unit = {},
+    onTag: (keyword: String, on: Boolean) -> Unit = { _, _ -> },
+    /** True while a field in here has focus, so a bare letter is not read as a shortcut. */
+    onTyping: (Boolean) -> Unit = {},
     /** The whole conversation, oldest first, including [summary]. Empty when there is none. */
     thread: List<Summary> = emptyList(),
     onPick: (Summary) -> Unit = {},
@@ -1641,16 +1707,71 @@ internal fun Message(
                 actions.archive?.let { OutlinedButton(onClick = it) { Text("Archive") } }
                 actions.junk?.let { OutlinedButton(onClick = it) { Text("Spam") } }
                 actions.trash?.let { OutlinedButton(onClick = it) { Text("Delete") } }
-                // Only when the sender said how. Every client that offers Unsubscribe on
-                // mail that has no List-Unsubscribe is really offering to send a reply
-                // saying "unsubscribe" to somebody who is not reading replies.
-                unsubscribeFrom(body?.listUnsubscribe, body?.listUnsubscribePost)?.let { off ->
-                    OutlinedButton(onClick = { onUnsubscribe(off) }) {
-                        Text(if (off.oneClick) "Unsubscribe" else "Unsubscribe...")
+                // Everything past Delete is something people reach for occasionally, and a
+                // row of eight buttons runs off the edge of the pane at any sensible width.
+                var more by remember(summary.id) { mutableStateOf(false) }
+                Box {
+                    IconButton(onClick = { more = true }, modifier = Modifier.size(34.dp)) {
+                        Icon(RampartIcons.More, contentDescription = "More", modifier = Modifier.size(17.dp))
+                    }
+                    DropdownMenu(more, onDismissRequest = { more = false }) {
+                        DropdownMenuItem(
+                            text = { Text(if (source == null) "View source" else "Back to the message") },
+                            onClick = { more = false; onSource() },
+                        )
+                        // Only when the sender said how. Every client that offers Unsubscribe
+                        // on mail that has no List-Unsubscribe is really offering to send a
+                        // reply saying "unsubscribe" to somebody who is not reading replies.
+                        unsubscribeFrom(body?.listUnsubscribe, body?.listUnsubscribePost)?.let { off ->
+                            DropdownMenuItem(
+                                text = { Text(if (off.oneClick) "Unsubscribe" else "Unsubscribe...") },
+                                onClick = { more = false; onUnsubscribe(off) },
+                            )
+                        }
                     }
                 }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+            if (source != null) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        savedTo?.let { "Saved to $it" } ?: "As it arrived, headers and all.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = onSaveSource) { Text("Save as .eml") }
+                }
+                val mono = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
+                SelectionContainer {
+                    Column(
+                        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                            .padding(horizontal = 20.dp, vertical = 8.dp),
+                    ) {
+                        headersOf(source).forEach { (name, value) ->
+                            Row(Modifier.padding(bottom = 2.dp)) {
+                                Text(
+                                    name,
+                                    style = mono,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.outline,
+                                    modifier = Modifier.width(150.dp),
+                                )
+                                Text(value, style = mono, modifier = Modifier.weight(1f))
+                            }
+                        }
+                        Spacer(Modifier.height(14.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        Spacer(Modifier.height(14.dp))
+                        Text(bodyOf(source), style = mono)
+                    }
+                }
+                return@Column
+            }
 
             Column(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState())
@@ -1726,6 +1847,72 @@ internal fun Message(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.outline,
                         )
+                    }
+                    val tags = remember(summary.keywords) { tagsOf(summary.keywords) }
+                    var adding by remember(summary.id) { mutableStateOf<String?>(null) }
+                    Spacer(Modifier.height(12.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        tags.forEach { tag ->
+                            Row(
+                                Modifier.clip(CircleShape).background(Color(tag.color))
+                                    .clickable { onTag(tag.keyword, false) }
+                                    .padding(start = 9.dp, end = 7.dp, top = 3.dp, bottom = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    tag.label,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = Color.White,
+                                )
+                                Spacer(Modifier.width(5.dp))
+                                // The whole chip removes the tag; the cross is there to say so.
+                                Text("\u00d7", style = MaterialTheme.typography.labelMedium, color = Color.White)
+                            }
+                        }
+                        val typed = adding
+                        if (typed == null) {
+                            Text(
+                                "Add tag",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.clip(CircleShape).clickable { adding = "" }
+                                    .padding(horizontal = 9.dp, vertical = 3.dp),
+                            )
+                        } else {
+                            val focus = remember { FocusRequester() }
+                            LaunchedEffect(Unit) { focus.requestFocus() }
+                            fun commit() {
+                                validKeyword(typed)?.let { onTag(it, true) }
+                                adding = null
+                            }
+                            BasicTextField(
+                                value = typed,
+                                onValueChange = { adding = it },
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.labelMedium.copy(
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                ),
+                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                modifier = Modifier.width(140.dp).focusRequester(focus)
+                                    .onFocusChanged { onTyping(it.isFocused) }
+                                    .onPreviewKeyEvent { event ->
+                                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                                        when (event.key) {
+                                            Key.Enter, Key.NumPadEnter -> { commit(); true }
+                                            Key.Escape -> { adding = null; true }
+                                            else -> false
+                                        }
+                                    }
+                                    .background(
+                                        MaterialTheme.colorScheme.surfaceVariant,
+                                        MaterialTheme.shapes.small,
+                                    )
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                            )
+                        }
                     }
                     Spacer(Modifier.height(18.dp))
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
