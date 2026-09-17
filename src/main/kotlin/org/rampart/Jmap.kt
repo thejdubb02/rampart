@@ -53,6 +53,10 @@ data class Summary(
     val receivedAt: String,
     val preview: String,
     val seen: Boolean,
+    /** The conversation this belongs to. Empty on a server that does not thread. */
+    val threadId: String = "",
+    /** How many messages are in that conversation, counting this one. */
+    val threadSize: Int = 1,
 )
 
 /** An address this account is allowed to send as. */
@@ -169,10 +173,19 @@ class Jmap private constructor(
     fun mailState(): String? =
         call(invoke("Email/get", "s") { putJsonArray("ids") {} })[0][1].jsonObject["state"]?.str()
 
+    /**
+     * One row per conversation, newest first.
+     *
+     * Three calls in one round trip, chained by back reference so no ids come through us:
+     * the query collapses each thread to its newest message, the get fills those in, and
+     * Thread/get counts what is behind each one. Without that third call the list would
+     * quietly hide the rest of a conversation with nothing on screen to say so.
+     */
     fun emails(mailboxId: String, limit: Int = 100): List<Summary> {
         val responses = call(
             invoke("Email/query", "q") {
                 putJsonObject("filter") { put("inMailbox", mailboxId) }
+                put("collapseThreads", true)
                 putJsonArray("sort") {
                     add(buildJsonObject { put("property", "receivedAt"); put("isAscending", false) })
                 }
@@ -185,8 +198,41 @@ class Jmap private constructor(
                     emailGetProperties.forEach { add(it) }
                 }
             },
+            invoke("Thread/get", "t") {
+                putJsonObject("#ids") {
+                    put("resultOf", "g"); put("name", "Email/get"); put("path", "/list/*/threadId")
+                }
+            },
         )
-        return responses[1].list().map { jsonToSummary(it.jsonObject) }
+        val sizes = responses[2].list().associate {
+            it.jsonObject["id"].require("id") to (it.jsonObject["emailIds"]?.jsonArray?.size ?: 1)
+        }
+        return responses[1].list().map { element ->
+            val summary = jsonToSummary(element.jsonObject)
+            summary.copy(threadSize = sizes[summary.threadId] ?: 1)
+        }
+    }
+
+    /**
+     * Every message in a conversation, oldest first.
+     *
+     * Thread/get already returns the ids in date order, which was checked against the
+     * server rather than taken from the specification, so they are not sorted again here.
+     */
+    fun thread(threadId: String): List<Summary> {
+        if (threadId.isBlank()) return emptyList()
+        val ids = call(invoke("Thread/get", "t") { putJsonArray("ids") { add(threadId) } })[0]
+            .list().firstOrNull()?.jsonObject?.get("emailIds")?.jsonArray?.mapNotNull { it.str() }
+            .orEmpty()
+        if (ids.size <= 1) return emptyList()
+        val found = call(
+            invoke("Email/get", "g") {
+                putJsonArray("ids") { ids.forEach { add(it) } }
+                putJsonArray("properties") { emailGetProperties.forEach { add(it) } }
+            },
+        )[0].list().associate { it.jsonObject["id"].require("id") to jsonToSummary(it.jsonObject) }
+        // Email/get may answer in any order; the thread's own order is the one that matters.
+        return ids.mapNotNull { found[it] }
     }
 
     fun body(id: String): Body {
@@ -495,7 +541,8 @@ class Jmap private constructor(
     }
 }
 
-private val emailGetProperties = listOf("id", "from", "subject", "receivedAt", "preview", "keywords")
+private val emailGetProperties =
+    listOf("id", "threadId", "from", "subject", "receivedAt", "preview", "keywords")
 
 private fun jsonToSummary(o: JsonObject): Summary = Summary(
     id = o["id"].require("id"),
@@ -507,6 +554,7 @@ private fun jsonToSummary(o: JsonObject): Summary = Summary(
     receivedAt = o["receivedAt"]?.str() ?: "",
     preview = o["preview"]?.str()?.trim() ?: "",
     seen = o["keywords"]?.jsonObject?.containsKey("\$seen") == true,
+    threadId = o["threadId"]?.str().orEmpty(),
 )
 
 private fun kotlinx.serialization.json.JsonElement.str(): String? = jsonPrimitive.contentOrNull

@@ -103,6 +103,11 @@ class Screenshots {
                 summary = MESSAGES[1],
                 body = Body(SAMPLE_HTML, null),
                 replyAll = true,
+                thread = listOf(
+                    MESSAGES[4].copy(threadId = "t1"),
+                    MESSAGES[1],
+                    MESSAGES[3].copy(threadId = "t1"),
+                ),
                 actions = MessageActions(archive = {}, junk = {}, trash = {}),
                 attachments = listOf(
                     Attachment("b1", "Revised quote September.pdf", "application/pdf", 214_512),
@@ -137,8 +142,10 @@ private val ACCOUNTS = listOf(
 private val MESSAGES = listOf(
     Summary("a", "Stalwart", "stalwart@example.org", "Your certificate renews in 7 days", "2026-09-16T09:12:00Z",
         "The certificate for mail.example.org will be renewed automatically on 23 September.", false),
+    // A conversation rather than a single message, so the count on the row gets drawn.
     Summary("b", "Dana Whitfield", "dana@example.org", "Re: the quote for the Tuesday job", "2026-09-15T17:40:00Z",
-        "That works for us. Tuesday morning is fine, and the crew will be there by eight.", true),
+        "That works for us. Tuesday morning is fine, and the crew will be there by eight.", true,
+        threadId = "t1", threadSize = 3),
     Summary("c", "Companies House", "companies@example.org", "Confirmation statement filed", "2026-09-15T11:02:00Z",
         "We have accepted your confirmation statement. No further action is needed.", true),
     Summary("d", "Hetzner", "hetzner@example.org", "Invoice 2026-4471", "2026-09-14T06:00:00Z",

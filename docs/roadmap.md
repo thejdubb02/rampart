@@ -89,6 +89,8 @@ client is finished (`docs/architecture.md`), and themes, which shipped.
 ## Where we actually are
 
 Reading mail: mailboxes, message list, one message at a time, HTML drawn without a
-browser engine, links confirmed, images blocked. Several accounts at once. Eighteen themes,
-ported from Clique, picked on a settings screen. Passwords in the OS credential store. That is most of a reader and none of Tier 1's
+browser engine, links confirmed, images blocked. Several accounts at once. Threaded conversations. New mail arrives on its own, with a
+desktop notification. Writing, replying, reply all, forwarding, attachments, and drafts
+that save as you type. Eighteen themes, ported from Clique, picked on a settings screen.
+Passwords in the OS credential store. That is most of a reader and none of Tier 1's
 writing half.

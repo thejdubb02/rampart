@@ -413,6 +413,7 @@ private fun Reader(
     var selected by remember { mutableStateOf<Summary?>(null) }
     var body by remember { mutableStateOf<Body?>(null) }
     var attachments by remember { mutableStateOf<List<Attachment>>(emptyList()) }
+    var thread by remember { mutableStateOf<List<Summary>>(emptyList()) }
     var saved by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
@@ -509,8 +510,12 @@ private fun Reader(
         body = null
         attachments = emptyList()
         saved = null
+        // Cleared only when this is a different conversation, so moving between messages in
+        // the same thread does not make the list of them flicker away and come back.
+        if (thread.none { it.id == message.id }) thread = emptyList()
         body = io { session(key).jmap.body(message.id) }
         attachments = io { session(key).jmap.attachments(message.id) } ?: emptyList()
+        if (thread.isEmpty()) thread = io { session(key).jmap.thread(message.threadId) } ?: emptyList()
 
         // A draft is not something to read. Clicking one puts it back in the composer,
         // under the id it is already saved at, so carrying on writing replaces that copy
@@ -761,6 +766,8 @@ private fun Reader(
                     composing = forwardOf(message, body, from)
                 },
                 onLink = { confirm = it },
+                thread = thread,
+                onPick = { selected = it },
                 actions = actions,
                 attachments = attachments,
                 savedTo = saved,
@@ -1177,14 +1184,29 @@ private fun MessageRow(message: Summary, selected: Boolean, onClick: () -> Unit)
                 )
             }
             Spacer(Modifier.height(3.dp))
-            Text(
-                message.subject,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = if (message.seen) FontWeight.Normal else FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(start = 13.dp),
-            )
+            Row(Modifier.padding(start = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    message.subject,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (message.seen) FontWeight.Normal else FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                // The row stands for the whole conversation, so it has to say how much of
+                // one is behind it. Without this the list silently hides the other replies.
+                if (message.threadSize > 1) {
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        message.threadSize.toString(),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier
+                            .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
+                            .padding(horizontal = 6.dp, vertical = 1.dp),
+                    )
+                }
+            }
             if (message.preview.isNotBlank()) {
                 Spacer(Modifier.height(2.dp))
                 Text(
@@ -1213,6 +1235,9 @@ internal fun Message(
     body: Body?,
     onReply: (all: Boolean) -> Unit = {},
     replyAll: Boolean = false,
+    /** The whole conversation, oldest first, including [summary]. Empty when there is none. */
+    thread: List<Summary> = emptyList(),
+    onPick: (Summary) -> Unit = {},
     onForward: () -> Unit = {},
     actions: MessageActions = MessageActions(),
     attachments: List<Attachment> = emptyList(),
@@ -1273,8 +1298,18 @@ internal fun Message(
                 // Capped, because a paragraph set across a whole desktop window is a line
                 // length nobody can follow back to the start of.
                 Column(Modifier.widthIn(max = 660.dp).fillMaxWidth()) {
+                    // The subject heads the conversation rather than the message: in a
+                    // thread every message carries the same one with more Re: in front.
                     Text(summary.subject, style = MaterialTheme.typography.titleLarge)
                     Spacer(Modifier.height(14.dp))
+
+                    // The rest of the conversation sits around this message in date order,
+                    // one line each. Reading the thread is then scrolling, not going back
+                    // to the list and finding the next one by hand.
+                    val (earlier, later) = conversationAround(thread, summary)
+                    earlier.forEach { ThreadRow(it) { onPick(it) } }
+                    if (earlier.isNotEmpty()) Spacer(Modifier.height(12.dp))
+
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Avatar(summary.from, summary.fromEmail.ifBlank { summary.from }, 34.dp)
                         Spacer(Modifier.width(11.dp))
@@ -1308,8 +1343,7 @@ internal fun Message(
                     if (rendered == null) {
                         Spacer(Modifier.height(20.dp))
                         if (body == null) CircularProgressIndicator() else Text("This message has no readable body.")
-                        return@Column
-                    }
+                    } else {
                     if (rendered.blockedImages > 0) {
                         Spacer(Modifier.height(16.dp))
                         Row(
@@ -1329,6 +1363,7 @@ internal fun Message(
                     }
                     Spacer(Modifier.height(20.dp))
                     SelectionContainer { Text(rendered.text, style = MaterialTheme.typography.bodyLarge) }
+                    }
 
                     if (attachments.isNotEmpty()) {
                         Spacer(Modifier.height(24.dp))
@@ -1366,6 +1401,10 @@ internal fun Message(
                             )
                         }
                     }
+                    if (later.isNotEmpty()) {
+                        Spacer(Modifier.height(20.dp))
+                        later.forEach { ThreadRow(it) { onPick(it) } }
+                    }
                     Spacer(Modifier.height(40.dp))
                 }
             }
@@ -1399,3 +1438,56 @@ internal fun downloadsFolder(): java.nio.file.Path {
 
 internal fun String.asLocalTime(): String =
     runCatching { WHEN.format(Instant.parse(this)) }.getOrDefault(this)
+
+/**
+ * One message in a conversation that is not the one being read: who, when, and the first
+ * line of it. Clicking it opens that message where this one is.
+ */
+@Composable
+private fun ThreadRow(message: Summary, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(MaterialTheme.shapes.small)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Avatar(message.from, message.fromEmail.ifBlank { message.from }, 24.dp)
+        Spacer(Modifier.width(9.dp))
+        Text(
+            message.from,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = if (message.seen) FontWeight.Normal else FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            message.preview,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            message.receivedAt.asLocalTime(),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline,
+        )
+    }
+}
+
+/**
+ * A conversation split into what came before the message being read and what came after.
+ *
+ * A thread that does not contain that message is stale, from the one that was open a
+ * moment ago, and is dropped: putting somebody else's conversation around this message
+ * would be worse than showing no conversation at all.
+ */
+internal fun conversationAround(thread: List<Summary>, open: Summary): Pair<List<Summary>, List<Summary>> {
+    val at = thread.indexOfFirst { it.id == open.id }
+    if (at < 0) return emptyList<Summary>() to emptyList()
+    return thread.take(at) to thread.drop(at + 1)
+}
