@@ -518,6 +518,9 @@ private fun Reader(
     var order by remember { mutableStateOf(Settings.order()) }
     // Who you write to, per account, read once and kept up to date as mail goes past.
     var books by remember { mutableStateOf<Map<String, List<Person>>>(emptyMap()) }
+    // A folder operation waiting on a name, or on a yes.
+    var folderAsk by remember { mutableStateOf<FolderAsk?>(null) }
+    var folderError by remember { mutableStateOf<String?>(null) }
     var loadingMore by remember { mutableStateOf(false) }
     // Set when a page comes back short, so the bottom of a folder is not re-queried forever.
     var exhausted by remember { mutableStateOf(false) }
@@ -903,6 +906,11 @@ private fun Reader(
         }
     }
 
+    /** Re-reads one account's folders, so the sidebar shows what the server now has. */
+    suspend fun refreshFolders(key: String) {
+        io { session(key).jmap.mailboxes() }?.let { mailboxes = mailboxes + (key to it) }
+    }
+
     /*
      * Filing one message, wherever the click came from: the button above the open message
      * and the right-click menu on a row are the same operation and must behave the same
@@ -917,7 +925,24 @@ private fun Reader(
         val from = sourceFolder(key)
         return {
             scope.launch {
-                if (io { session(key).jmap.move(listOf(message.id), target.id) } != null) {
+                /*
+                 * Archiving by year or month puts it in a subfolder of Archive, made on the
+                 * first message of a new period and never otherwise. A folder with fifteen
+                 * years of mail in it is a folder nobody opens.
+                 *
+                 * If making it fails the message still goes to Archive itself. Refusing to
+                 * archive because a subfolder could not be created would be the wrong way
+                 * round: the filing is the point, the tidiness is not.
+                 */
+                val bucket = if (role == "archive") archiveBucket(message.receivedAt, Settings.archiveBy()) else null
+                val into = bucket?.let { name ->
+                    val existing = mailboxes[key].orEmpty()
+                        .firstOrNull { it.parentId == target.id && it.name == name }
+                    existing?.id ?: io { session(key).jmap.createMailbox(name, target.id) }
+                        ?.also { refreshFolders(key) }
+                } ?: target.id
+
+                if (io { session(key).jmap.move(listOf(message.id), into) } != null) {
                     emails = emails.filterNot { it.id == message.id }
                     if (selected?.id == message.id) {
                         selected = null
@@ -968,6 +993,40 @@ private fun Reader(
      * body held in state belongs to whatever is open, which on a right-click is usually
      * something else. Quoting the wrong message is worse than a moment's wait.
      */
+    /*
+     * Carries out a folder job once the question attached to it has been answered.
+     *
+     * Every one of these re-reads the account's folders rather than editing the list here.
+     * A sidebar built from what we think we did drifts from the server the first time a
+     * rename is refused, and a folder tree that is subtly wrong is worse than a slow one.
+     */
+    fun doFolderJob(ask: FolderAsk, answer: String) {
+        scope.launch {
+            folderError = try {
+                withContext(Dispatchers.IO) {
+                    val jmap = session(ask.account).jmap
+                    when (ask.job) {
+                        FolderJob.CreateInside -> jmap.createMailbox(answer, ask.mailbox?.id)
+                        FolderJob.Rename -> jmap.updateMailbox(ask.mailbox!!.id, name = answer)
+                        FolderJob.ToTop -> jmap.updateMailbox(ask.mailbox!!.id, reparent = true)
+                        FolderJob.Delete -> jmap.destroyMailbox(ask.mailbox!!.id)
+                    }
+                }
+                null
+            } catch (e: Exception) {
+                e.message ?: "The server would not do that."
+            }
+            refreshFolders(ask.account)
+            // A folder that was open and is now gone leaves the list pointing at nothing.
+            if (ask.job == FolderJob.Delete && here?.second?.id == ask.mailbox?.id) {
+                here = mailboxes[ask.account].orEmpty().firstOrNull { it.role == "inbox" }
+                    ?.let { ask.account to it }
+                reload()
+            }
+            folderAsk = null
+        }
+    }
+
     val rowActions = RowActions(
         reply = { message, all ->
             val key = accountOf(message)
@@ -1065,6 +1124,12 @@ private fun Reader(
             "go-archive" -> goTo("archive")
             "go-sent" -> goTo("sent")
             "go-drafts" -> goTo("drafts")
+            // A top level folder, on whichever account is showing. The same dialog the
+            // right-click menu opens, with nothing to sit inside.
+            "new-folder" -> {
+                val key = here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key
+                if (key != null) folderAsk = FolderAsk(key, null, FolderJob.CreateInside)
+            }
             "settings" -> settingsOpen = true
             "shortcuts" -> showShortcuts = true
         }
@@ -1296,6 +1361,7 @@ private fun Reader(
                 onAddAccount = onAddAccount,
                 collapsed = collapsed,
                 onToggleCollapsed = { collapsed = !collapsed; Settings.setSidebarCollapsed(collapsed) },
+                folderMenu = { key, box, job -> folderAsk = FolderAsk(key, box, job) },
                 onSelect = { key, mailbox -> here = key to mailbox },
                 onWrite = {
                     val from = identities[writingAccount()].orEmpty().firstOrNull()?.email
@@ -1304,6 +1370,14 @@ private fun Reader(
                     composing = Draft(from = from)
                 },
             )
+            folderAsk?.let { ask ->
+                FolderDialog(
+                    ask = ask,
+                    error = folderError,
+                    onClose = { folderAsk = null; folderError = null },
+                    onConfirm = { answer -> doFolderJob(ask, answer) },
+                )
+            }
             VerticalDivider()
             if (settingsOpen) {
                 SettingsPane(
@@ -1621,6 +1695,17 @@ private fun Reader(
     }
 }
 
+/**
+ * A folder job waiting on an answer.
+ *
+ * [mailbox] is null only for a new top level folder, which is the one job with nothing to
+ * act on. Everything else names the folder it was invoked from.
+ */
+internal data class FolderAsk(val account: String, val mailbox: Mailbox?, val job: FolderJob)
+
+/** What a right-click on a folder asked for. Answered by whoever owns the sidebar. */
+internal enum class FolderJob { CreateInside, Rename, ToTop, Delete }
+
 @Composable
 internal fun Sidebar(
     accounts: List<AccountMailboxes>,
@@ -1631,6 +1716,8 @@ internal fun Sidebar(
     onSettings: () -> Unit,
     onAddAccount: () -> Unit,
     onWrite: () -> Unit,
+    /** What a right-click on a folder can ask for. Null hides the menu entirely. */
+    folderMenu: ((String, Mailbox, FolderJob) -> Unit)? = null,
     onSelect: (String, Mailbox) -> Unit,
 ) {
     Column(
@@ -1706,12 +1793,14 @@ internal fun Sidebar(
                         }
                     }
                 }
-                items(account.mailboxes, key = { "${account.key}/${it.id}" }) { box ->
+                items(nested(account.mailboxes), key = { "${account.key}/${it.mailbox.id}" }) { row ->
                     FolderRow(
-                        mailbox = box,
+                        mailbox = row.mailbox,
+                        depth = row.depth,
                         collapsed = collapsed,
-                        selected = here?.first == account.key && here.second.id == box.id,
-                        onClick = { onSelect(account.key, box) },
+                        selected = here?.first == account.key && here.second.id == row.mailbox.id,
+                        onClick = { onSelect(account.key, row.mailbox) },
+                        onManage = folderMenu?.let { manage -> { what -> manage(account.key, row.mailbox, what) } },
                     )
                 }
             }
@@ -1818,18 +1907,127 @@ internal fun shortAccountName(name: String, email: String): String {
     return if (local.equals("admin", ignoreCase = true) && host.isNotBlank()) host else local.ifBlank { email }
 }
 
+/**
+ * Asks for whatever a folder job needs before it runs.
+ *
+ * Two shapes rather than two dialogs: the naming jobs want a name, and the rest want a yes.
+ * A delete says what is about to go rather than asking "are you sure", which is a question
+ * nobody reads.
+ */
 @Composable
-private fun FolderRow(mailbox: Mailbox, collapsed: Boolean, selected: Boolean, onClick: () -> Unit) {
+private fun FolderDialog(
+    ask: FolderAsk,
+    error: String?,
+    onClose: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    val needsName = ask.job == FolderJob.CreateInside || ask.job == FolderJob.Rename
+    var name by remember(ask) { mutableStateOf(if (ask.job == FolderJob.Rename) ask.mailbox?.name.orEmpty() else "") }
+    var busy by remember(ask) { mutableStateOf(false) }
+    val title = when (ask.job) {
+        FolderJob.CreateInside -> ask.mailbox?.let { "New folder inside ${it.name}" } ?: "New folder"
+        FolderJob.Rename -> "Rename ${ask.mailbox?.name.orEmpty()}"
+        FolderJob.ToTop -> "Move ${ask.mailbox?.name.orEmpty()} to the top level"
+        FolderJob.Delete -> "Delete ${ask.mailbox?.name.orEmpty()}"
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!busy) onClose() },
+        title = { Text(title) },
+        text = {
+            Column {
+                when {
+                    needsName -> OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        enabled = !busy,
+                        singleLine = true,
+                        label = { Text("Name") },
+                    )
+                    ask.job == FolderJob.Delete -> Text(
+                        // The count is what makes this a decision rather than a reflex.
+                        if ((ask.mailbox?.unread ?: 0) > 0) {
+                            "It has ${ask.mailbox?.unread} unread. The server will refuse if " +
+                                "there is anything in it, and nothing is deleted if it does."
+                        } else {
+                            "The server will refuse if there is anything in it, and nothing " +
+                                "is deleted if it does."
+                        },
+                    )
+                    else -> Text("It will sit alongside your other top level folders.")
+                }
+                error?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { busy = true; onConfirm(name.trim()) },
+                enabled = !busy && (!needsName || name.isNotBlank()),
+            ) { Text(if (ask.job == FolderJob.Delete) "Delete" else "Save") }
+        },
+        dismissButton = { TextButton(onClick = onClose, enabled = !busy) { Text("Cancel") } },
+    )
+}
+
+@Composable
+@OptIn(ExperimentalComposeUiApi::class)
+private fun FolderRow(
+    mailbox: Mailbox,
+    collapsed: Boolean,
+    selected: Boolean,
+    depth: Int = 0,
+    /** What the right-click menu can do, or null where folders cannot be managed. */
+    onManage: ((FolderJob) -> Unit)? = null,
+    onClick: () -> Unit,
+) {
     val tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+    var menu by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier.fillMaxWidth().height(32.dp)
             .clip(MaterialTheme.shapes.small)
             .background(if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
             .clickable(onClick = onClick)
-            .padding(horizontal = if (collapsed) 0.dp else 10.dp),
+            .onPointerEvent(PointerEventType.Press) { event ->
+                if (event.button == PointerButton.Secondary && onManage != null) menu = true
+            }
+            // Collapsed the sidebar is icons only, so there is no room to show depth and
+            // indenting would push them off their own column.
+            .padding(start = if (collapsed) 0.dp else 10.dp + (depth * 12).dp)
+            .padding(end = if (collapsed) 0.dp else 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = if (collapsed) Arrangement.Center else Arrangement.Start,
     ) {
+        onManage?.let { manage ->
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(
+                    text = { Text("New folder inside") },
+                    onClick = { menu = false; manage(FolderJob.CreateInside) },
+                )
+                // A folder the server gave a role to is one the client should not offer to
+                // rename or delete: the role is what Archive and Trash are found by, and a
+                // renamed one still has it while looking like somebody's own folder.
+                if (!isProtected(mailbox)) {
+                    DropdownMenuItem(
+                        text = { Text("Rename") },
+                        onClick = { menu = false; manage(FolderJob.Rename) },
+                    )
+                    if (mailbox.parentId != null) {
+                        DropdownMenuItem(
+                            text = { Text("Move to the top level") },
+                            onClick = { menu = false; manage(FolderJob.ToTop) },
+                        )
+                    }
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text("Delete") },
+                        onClick = { menu = false; manage(FolderJob.Delete) },
+                    )
+                }
+            }
+        }
         Box(contentAlignment = Alignment.Center) {
             Icon(
                 RampartIcons.forRole(mailbox.role),

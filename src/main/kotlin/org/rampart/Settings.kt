@@ -88,6 +88,16 @@ object Settings {
     fun setMarkReadDelay(value: Long) = write { put("markReadDelay", JsonPrimitive(value)) }
 
     /**
+     * Where Archive puts things: "" the Archive folder itself, "year", or "month".
+     *
+     * A folder with fifteen years of mail in it is a folder nobody opens. The subfolder is
+     * made on the first message of a new year or month and never otherwise.
+     */
+    fun archiveBy(): String = read()["archiveBy"]?.jsonPrimitive?.contentOrNull.orEmpty()
+
+    fun setArchiveBy(value: String) = write { put("archiveBy", JsonPrimitive(value)) }
+
+    /**
      * Senders whose pictures may be fetched from the web. Domains, not addresses: see
      * [imageSenderKey].
      */

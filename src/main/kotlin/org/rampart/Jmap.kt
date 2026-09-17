@@ -50,7 +50,14 @@ private val http: HttpClient = HttpClient.newBuilder()
     .connectTimeout(Duration.ofSeconds(15))
     .build()
 
-data class Mailbox(val id: String, val name: String, val role: String?, val unread: Int)
+data class Mailbox(
+    val id: String,
+    val name: String,
+    val role: String?,
+    val unread: Int,
+    /** The folder this one sits inside, or null at the top level. */
+    val parentId: String? = null,
+)
 
 data class Summary(
     val id: String,
@@ -219,6 +226,7 @@ class Jmap private constructor(
                 name = o["name"]?.str() ?: "(no name)",
                 role = o["role"]?.str(),
                 unread = o["unreadEmails"]?.jsonPrimitive?.intOrNull ?: 0,
+                parentId = o["parentId"]?.str(),
             )
         }.sortedWith(compareBy({ if (it.role == "inbox") 0 else 1 }, { it.name.lowercase() }))
     }
@@ -726,6 +734,69 @@ class Jmap private constructor(
         val type = problem?.get("type")?.str()
         val description = problem?.get("description")?.str()
         return listOfNotNull(prefix, description ?: type).joinToString(": ") + "."
+    }
+
+    /**
+     * Makes a folder, and hands back its id.
+     *
+     * [parentId] null puts it at the top level. The server owns the id, so a folder is not
+     * usable until this returns: creating one and guessing where it went is how the sidebar
+     * ends up showing something the server does not have.
+     */
+    fun createMailbox(name: String, parentId: String? = null): String {
+        val response = call(
+            invoke("Mailbox/set", "c") {
+                putJsonObject("create") {
+                    putJsonObject("new") {
+                        put("name", name)
+                        put("parentId", parentId?.let { JsonPrimitive(it) } ?: JsonNull)
+                    }
+                }
+            },
+        )[0][1].jsonObject
+        return response["created"]?.jsonObject?.get("new")?.jsonObject?.get("id")?.str()
+            ?: throw JmapError(refusal(response, "notCreated", "That folder could not be created"))
+    }
+
+    /**
+     * Renames a folder, moves it under another one, or both.
+     *
+     * A null [parentId] with [reparent] false means "leave it where it is"; with it true it
+     * means "move it to the top level". Two different things that would otherwise be the
+     * same argument, which is how a rename quietly moves a folder to the root.
+     */
+    fun updateMailbox(id: String, name: String? = null, parentId: String? = null, reparent: Boolean = false) {
+        val response = call(
+            invoke("Mailbox/set", "u") {
+                putJsonObject("update") {
+                    putJsonObject(id) {
+                        name?.let { put("name", it) }
+                        if (reparent) put("parentId", parentId?.let { JsonPrimitive(it) } ?: JsonNull)
+                    }
+                }
+            },
+        )[0][1].jsonObject
+        if (response["updated"]?.jsonObject?.containsKey(id) != true) {
+            throw JmapError(refusal(response, "notUpdated", "That folder could not be changed"))
+        }
+    }
+
+    /**
+     * Deletes a folder.
+     *
+     * [withMail] false is the safe default and the server refuses if anything is in it,
+     * which is the answer we want: the caller can then say how many messages there are and
+     * ask, rather than deleting somebody's mail because they clicked Delete on a folder.
+     */
+    fun destroyMailbox(id: String, withMail: Boolean = false) {
+        val response = call(
+            invoke("Mailbox/set", "d") {
+                putJsonArray("destroy") { add(id) }
+                put("onDestroyRemoveEmails", withMail)
+            },
+        )[0][1].jsonObject
+        val gone = (response["destroyed"] as? JsonArray)?.any { it.str() == id } == true
+        if (!gone) throw JmapError(refusal(response, "notDestroyed", "That folder could not be deleted"))
     }
 
     fun markSeen(id: String) {

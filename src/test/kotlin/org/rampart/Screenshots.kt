@@ -127,6 +127,7 @@ class Screenshots {
         // palette: whether the character in the corner is faint enough to read mail over.
         shoot("reader-themed", 1400, 900, withArt) { Panes() }
         shoot("settings", 1200, 900, withArt) { SettingsScreen("accounts") }
+        shoot("settings-reading", 1200, 900) { SettingsScreen("reading") }
         shoot("composer", 1000, 640) {
             Composer(
                 identities = listOf("you@example.org", "billing@example.org"),

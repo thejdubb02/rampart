@@ -128,8 +128,10 @@ internal fun SettingsPane(
 private val SettingsPages: List<Triple<String, String, String>> = listOf(
     Triple("accounts", "Accounts", "General"),
     Triple("notifications", "Notifications", "General"),
-    Triple("reading", "Reading", "Mail"),
     Triple("themes", "Themes", "Appearance"),
+    // Kept with the other Mail pages. The nav groups in list order, so a page filed out of
+    // sequence makes its heading appear twice.
+    Triple("reading", "Reading and archiving", "Mail"),
     Triple("identities", "Identities and signatures", "Mail"),
     Triple("away", "Away reply", "Mail"),
     Triple("about", "About", "Rampart"),
@@ -221,6 +223,33 @@ private fun ReadingPage() {
             RadioButton(selected = delay == value, onClick = {
                 delay = value
                 Settings.setMarkReadDelay(value)
+            })
+            Spacer(Modifier.width(8.dp))
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+
+    Spacer(Modifier.height(18.dp))
+    Section(
+        "Archiving",
+        "A folder with fifteen years of mail in it is a folder nobody opens.",
+    )
+    var archiveBy by remember { mutableStateOf(Settings.archiveBy()) }
+    listOf(
+        "" to "Straight into Archive",
+        "year" to "Into Archive, by year",
+        "month" to "Into Archive, by month",
+    ).forEach { (value, label) ->
+        Row(
+            Modifier.fillMaxWidth().clickable {
+                archiveBy = value
+                Settings.setArchiveBy(value)
+            }.padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(selected = archiveBy == value, onClick = {
+                archiveBy = value
+                Settings.setArchiveBy(value)
             })
             Spacer(Modifier.width(8.dp))
             Text(label, style = MaterialTheme.typography.bodyMedium)
