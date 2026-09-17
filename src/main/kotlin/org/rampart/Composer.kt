@@ -89,6 +89,14 @@ data class Draft(
      * because a header was missing would be a lie about what they are doing.
      */
     val replying: Boolean = false,
+    /**
+     * Whether to ask the reader's client to confirm they opened it (RFC 8098).
+     *
+     * A request, not a tracker. Every client is free to ignore it and most people's does,
+     * which is the honest version of the same question a tracking pixel asks without
+     * asking. Off unless it is turned on for this message.
+     */
+    val receipt: Boolean = false,
 ) {
     val recipients: List<String> get() = (to.split(',') + cc.split(',')).map { it.trim() }.filter { it.isNotEmpty() }
 }
@@ -334,6 +342,9 @@ internal fun Composer(
                             enabled = !sending && !attaching,
                         ) { Text(if (attaching) "Attaching" else "Attach") }
                     }
+                    TextButton(onClick = { draft = draft.copy(receipt = !draft.receipt) }) {
+                        Text(if (draft.receipt) "Receipt on" else "Receipt")
+                    }
                     // Next to Discard rather than in the corner, because at panel width
                     // a title bar of its own would cost a line of the message.
                     TextButton(onClick = { onFull(!full) }) {
@@ -489,6 +500,38 @@ internal fun Composer(
                                             }
                                         }
                                     }
+                                }
+                            }
+                        }
+                    }
+                    val templates = remember { Templates.read() }
+                    if (templates.isNotEmpty()) {
+                        var picking by remember { mutableStateOf(false) }
+                        Box {
+                            TextButton(onClick = { picking = true }) { Text("Template") }
+                            DropdownMenu(expanded = picking, onDismissRequest = { picking = false }) {
+                                templates.forEach { template ->
+                                    DropdownMenuItem(
+                                        text = { Text(template.name) },
+                                        onClick = {
+                                            picking = false
+                                            val filled = fill(
+                                                template,
+                                                templateValues(draft.to, draft.from, draft.subject, book),
+                                            )
+                                            // Appended rather than substituted, so a
+                                            // template dropped into a half-written reply
+                                            // does not eat what is already there.
+                                            draft = draft.copy(
+                                                subject = draft.subject.ifBlank { filled.subject },
+                                                body = if (draft.body.isBlank()) {
+                                                    filled.body
+                                                } else {
+                                                    filled.body + "\n\n" + draft.body
+                                                },
+                                            )
+                                        },
+                                    )
                                 }
                             }
                         }

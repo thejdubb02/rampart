@@ -128,6 +128,8 @@ data class Body(
     /** Every Authentication-Results header, ours first, as the server stacked them. */
     val authenticationResults: List<String> = emptyList(),
     val spamStatus: String? = null,
+    /** Raw Disposition-Notification-To, if the sender asked to be told it was opened. */
+    val receiptTo: String? = null,
 )
 
 class Jmap private constructor(
@@ -338,6 +340,7 @@ class Jmap private constructor(
                     add("header:List-Unsubscribe-Post:asText")
                     add("header:Authentication-Results:asText:all")
                     add("header:X-Spam-Status:asText")
+                    add("header:" + MDN_HEADER + ":asText")
                 }
                 put("fetchHTMLBodyValues", true)
                 put("fetchTextBodyValues", true)
@@ -370,6 +373,7 @@ class Jmap private constructor(
             listUnsubscribePost = email["header:List-Unsubscribe-Post:asText"]?.str(),
             authenticationResults = stringsIn(email["header:Authentication-Results:asText:all"]),
             spamStatus = email["header:X-Spam-Status:asText"]?.str(),
+            receiptTo = email["header:" + MDN_HEADER + ":asText"]?.str(),
         )
     }
 
@@ -607,6 +611,13 @@ class Jmap private constructor(
         }
         if (draft.references.isNotEmpty()) {
             putJsonArray("header:References:asMessageIds") { draft.references.forEach { add(it) } }
+        }
+        // Addressed to the sender, because a receipt that goes anywhere else is what the
+        // header is abused for and what makes clients refuse it outright.
+        if (draft.receipt) {
+            putJsonArray("header:" + MDN_HEADER + ":asAddresses") {
+                add(buildJsonObject { put("name", identity.name); put("email", identity.email) })
+            }
         }
         // textBody rather than bodyStructure. The server refuses a message that sets both
         // bodyStructure and attachments ("Cannot set both properties on a same request"),

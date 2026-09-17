@@ -103,6 +103,17 @@ object Settings {
     fun setIconPack(value: String) = write { put("iconPack", JsonPrimitive(value)) }
 
     /**
+     * How long a sent message waits before it actually goes, in seconds.
+     *
+     * Five by default, which is long enough to notice the wrong recipient and short enough
+     * that nobody waits for it. Zero turns it off for anyone who finds the pause worse than
+     * the mistake.
+     */
+    fun undoSeconds(): Int = read()["undoSeconds"]?.jsonPrimitive?.intOrNull ?: 5
+
+    fun setUndoSeconds(value: Int) = write { put("undoSeconds", JsonPrimitive(value)) }
+
+    /**
      * Senders whose pictures may be fetched from the web. Domains, not addresses: see
      * [imageSenderKey].
      */

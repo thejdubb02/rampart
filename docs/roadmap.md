@@ -84,7 +84,7 @@ Nothing below line 5 is scheduled; it is only sorted.
 | 5 | **Sieve filters with a builder** (2.2) | How a mailbox stays usable with nobody tending it. Gates the assistant work. | A rule built in the UI files real mail on the server, survives a round trip through Bulwark, and the raw editor shows the same script. |
 | 6 | **Local store** (2.3) | Offline, instant search, and the place everything later keeps its state. Gates tiers 3 and 4. | Reading and searching a folder works with the network off; a refresh asks only for what changed. |
 | 7 | **IMAP and SMTP with OAuth2** (2.7) | The point Rampart stops being a client for one server, and the point anyone else can use it. | A Gmail account and a generic IMAP account both read, send, file and search, with SPECIAL-USE folders found correctly. |
-| 8 | **Templates, read receipts, undo-send, open tracking** (2.8) | Daily-use features with no model anywhere near them, plus the tracking pixel and its companion server. | A template fills placeholders and sends; an MDN is requested and answered; a send can be taken back; a tracked message shows opened, and a scanner fetch does not. |
+| 8 | **Open tracking** (2.8, the rest shipped 2026-09-17) | Daily-use features with no model anywhere near them, plus the tracking pixel and its companion server. | A template fills placeholders and sends; an MDN is requested and answered; a send can be taken back; a tracked message shows opened, and a scanner fetch does not. |
 | 9 | **Mailbox dashboard** (2.11) | Volume, junk, who you talk to, what is waiting on you. Genuinely useful, and explicitly a nice to have. | Sent and received volume, junk share, top senders, unanswered mail and reply times, computed offline. |
 | 10 | **Thread summaries** (tier 4) | The first assistant feature, and the one with nothing to go wrong. | A twenty-message thread summarises in a side pane, off by default, with the packet viewable before it is sent. |
 
@@ -113,6 +113,12 @@ admin console, and everything else in tiers 3, 5 and 6. They are real and they a
 5. **Filters, as Sieve**, in the format Bulwark already writes, so a rule made in either
    opens in the other. Anything a builder did not write is kept verbatim.
 6. **Unread only**, asked of the server rather than filtered out of the page we hold.
+7. **Templates, read receipts and undo-send.** A template fills `{{name}}` style
+   placeholders from the recipient and the address book and drops into the composer without
+   eating what is already written. A receipt is requested with one button and answered with
+   one, as a draft for review rather than a message that sends itself, and a request
+   pointing anywhere other than the sender is ignored. A send waits a chosen number of
+   seconds, with Undo beside the other undo.
 
 Before that: mailboxes, threaded conversations, a unified inbox across accounts, HTML drawn
 as blocks without a browser engine, pictures in the flow, remote images held per sender,

@@ -555,6 +555,9 @@ private fun Reader(
     // Not remembered: a panel is the right default every time, and a message that needed
     // the whole window last week is not a reason to open the next one that way.
     var composeFull by remember { mutableStateOf(false) }
+    // Set while a send is waiting out its window, so the bar can offer to take it back.
+    var undoSend by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var sendCancelled by remember { mutableStateOf(false) }
     // The server's filter script, for the account whose settings are showing.
     var filters by remember { mutableStateOf<Script?>(null) }
     var filterScript by remember { mutableStateOf<Jmap.SieveInfo?>(null) }
@@ -1447,6 +1450,36 @@ private fun Reader(
                     else -> scope.launch {
                         sending = true
                         sendError = null
+                        /*
+                         * The pause before it goes, held here rather than asked of the
+                         * server.
+                         *
+                         * Scheduled send is not possible against this server: it advertises
+                         * submission with no maxDelayedSend, which per RFC 8621 means zero,
+                         * so a future sendAt is refused. Holding it in the client is the
+                         * only version of undo that works, and it is the version every
+                         * webmail actually uses.
+                         *
+                         * Cancelling is a plain flag rather than cancelling the coroutine,
+                         * because the window is the easy part and what matters is that
+                         * nothing after it runs: a cancelled send must not destroy the
+                         * draft it was going to replace.
+                         */
+                        val wait = Settings.undoSeconds()
+                        if (wait > 0) {
+                            undoSend = { sendCancelled = true }
+                            var left = wait
+                            while (left > 0 && !sendCancelled) {
+                                delay(1000)
+                                left--
+                            }
+                            undoSend = null
+                            if (sendCancelled) {
+                                sendCancelled = false
+                                sending = false
+                                return@launch
+                            }
+                        }
                         try {
                             withContext(Dispatchers.IO) {
                                 account.jmap.send(draft, identity, drafts.id, folderFor("sent", boxes)?.id)
@@ -1482,6 +1515,22 @@ private fun Reader(
             .focusable()
             .onPreviewKeyEvent(::shortcut),
     ) {
+        // Offered in the same place as the other undo, because they are the same promise:
+        // the thing you just did can be taken back without going and finding it.
+        undoSend?.let { cancel ->
+            Row(
+                Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(start = 14.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "Sending.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = cancel) { Text("Undo") }
+            }
+        }
         undo?.let { last ->
             Row(
                 Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
@@ -1773,6 +1822,24 @@ private fun Reader(
                 onLink = { confirm = it },
                 remoteImages = remoteImages,
                 unsubscribed = unsubscribed,
+                onReceipt = { to ->
+                    val message = selected ?: return@Message
+                    sendError = null
+                    composing = Draft(
+                        from = identities[writingAccount()].orEmpty().firstOrNull()?.email.orEmpty(),
+                        to = to,
+                        subject = receiptSubject(message.subject),
+                        body = receiptBody(
+                            message.subject,
+                            java.time.ZonedDateTime.now()
+                                .format(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME),
+                            identities[writingAccount()].orEmpty().firstOrNull()?.email.orEmpty(),
+                        ),
+                        inReplyTo = body?.messageId?.firstOrNull(),
+                        references = body?.references.orEmpty() + body?.messageId.orEmpty(),
+                        replying = true,
+                    )
+                },
                 onUnsubscribe = { off ->
                     when {
                         // One-click is the only route that finishes without leaving Rampart,
@@ -2893,6 +2960,8 @@ internal fun Message(
     /** What happened to an unsubscribe that was pressed, when one was. */
     unsubscribed: String? = null,
     onUnsubscribe: (Unsubscribe) -> Unit = {},
+    /** Answer the sender's read-receipt request, as a draft for review. */
+    onReceipt: (String) -> Unit = {},
     /** The message as it arrived, while somebody is looking at it. */
     source: String? = null,
     onSource: () -> Unit = {},
@@ -3216,6 +3285,41 @@ internal fun Message(
                             else -> Text("This message has no readable body.")
                         }
                     } else {
+                    // Asked, never answered on its own. A receipt that sends itself is
+                    // read tracking with the sender's name on it, and the whole reason the
+                    // header is ignored by default everywhere else.
+                    var receiptAnswered by remember(summary.id) { mutableStateOf(false) }
+                    val asked = if (receiptAnswered) {
+                        null
+                    } else {
+                        receiptWanted(
+                            mapOf(MDN_HEADER to body?.receiptTo.orEmpty()),
+                            summary.fromEmail,
+                        )
+                    }
+                    if (asked != null) {
+                        Spacer(Modifier.height(16.dp))
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clip(MaterialTheme.shapes.small)
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "The sender asked to be told when this was opened.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = { receiptAnswered = true }) {
+                                Text("No", style = MaterialTheme.typography.bodySmall)
+                            }
+                            TextButton(onClick = { receiptAnswered = true; onReceipt(asked) }) {
+                                Text("Send a receipt", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
                     if (rendered.blockedImages > 0 && remoteImages.isEmpty()) {
                         Spacer(Modifier.height(16.dp))
                         Row(

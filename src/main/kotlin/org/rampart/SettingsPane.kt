@@ -278,6 +278,30 @@ private fun ReadingPage() {
 
     Spacer(Modifier.height(18.dp))
     Section(
+        "Taking a send back",
+        "A message waits this long before it actually goes, so a wrong recipient can be caught.",
+    )
+    var undo by remember { mutableStateOf(Settings.undoSeconds()) }
+    listOf(0 to "Send straight away", 5 to "Wait 5 seconds", 10 to "Wait 10 seconds", 30 to "Wait 30 seconds")
+        .forEach { (value, label) ->
+            Row(
+                Modifier.fillMaxWidth().clickable {
+                    undo = value
+                    Settings.setUndoSeconds(value)
+                }.padding(vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(selected = undo == value, onClick = {
+                    undo = value
+                    Settings.setUndoSeconds(value)
+                })
+                Spacer(Modifier.width(8.dp))
+                Text(label, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+
+    Spacer(Modifier.height(18.dp))
+    Section(
         "Archiving",
         "A folder with fifteen years of mail in it is a folder nobody opens.",
     )
