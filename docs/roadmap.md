@@ -19,6 +19,12 @@ next.** Section "The next ten" below is that answer, and it is the only ordered 
 matters. Everything after it is the reasoning, kept so the order can be challenged with
 something better rather than with a preference.
 
+The same ten are on the **Rampart board in Kaneo**
+(`kaneo.willhitestrategy.org`, workspace Willhite Strategy Group, project RAM), one card
+each, carrying the same done-when. The board is for tracking what is moving; this file is
+for the reasoning behind the order. When they disagree, this file is wrong and should be
+fixed, because a card is easy to drag and an argument is not.
+
 Three rules for keeping it true:
 
 - **One thing is in progress at a time**, plus whatever is delegated alongside it. A
