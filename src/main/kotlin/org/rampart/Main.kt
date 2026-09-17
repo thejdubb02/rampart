@@ -516,6 +516,9 @@ private fun Reader(
     var installNote by remember { mutableStateOf<String?>(null) }
     var notifyOnArrival by remember { mutableStateOf(Settings.notifyOnArrival()) }
     var order by remember { mutableStateOf(Settings.order()) }
+    // Not remembered between runs on purpose: opening the app into a folder that is hiding
+    // most of itself, with no memory of having asked for that, reads as lost mail.
+    var unreadOnly by remember { mutableStateOf(false) }
     // Who you write to, per account, read once and kept up to date as mail goes past.
     var books by remember { mutableStateOf<Map<String, List<Person>>>(emptyMap()) }
     // A folder operation waiting on a name, or on a yes.
@@ -591,7 +594,7 @@ private fun Reader(
                 inbox?.let {
                     runCatching {
                         if (showingResults && query.isNotBlank()) open.jmap.search(query, it.id)
-                        else open.jmap.emails(it.id)
+                        else open.jmap.emails(it.id, unreadOnly = unreadOnly)
                     }.getOrDefault(emptyList())
                 } ?: emptyList()
                 )
@@ -691,7 +694,7 @@ private fun Reader(
         } else {
             io {
                 if (showingResults && query.isNotBlank()) session(key).jmap.search(query, mailbox.id)
-                else session(key).jmap.emails(mailbox.id)
+                else session(key).jmap.emails(mailbox.id, unreadOnly = unreadOnly)
             } ?: emptyList()
         }
         loading = false
@@ -716,7 +719,7 @@ private fun Reader(
         if (key == ALL_ACCOUNTS || showingResults || loadingMore || exhausted || loading) return
         loadingMore = true
         scope.launch {
-            val page = io { session(key).jmap.emails(mailbox.id, from = emails.size) }.orEmpty()
+            val page = io { session(key).jmap.emails(mailbox.id, from = emails.size, unreadOnly = unreadOnly) }.orEmpty()
             // Ids already on screen are dropped rather than trusted: mail arriving between
             // two pages shifts every position down, and the seam is where it shows up twice.
             val known = emails.map { it.id }.toSet()
@@ -1126,6 +1129,12 @@ private fun Reader(
             "go-drafts" -> goTo("drafts")
             // A top level folder, on whichever account is showing. The same dialog the
             // right-click menu opens, with nothing to sit inside.
+            "unread-only" -> {
+                unreadOnly = !unreadOnly
+                selected = null
+                body = null
+                scope.launch { reload() }
+            }
             "new-folder" -> {
                 val key = here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key
                 if (key != null) folderAsk = FolderAsk(key, null, FolderJob.CreateInside)
@@ -1182,6 +1191,7 @@ private fun Reader(
             Key.K, Key.DirectionUp -> step(-1)
             Key.F5 -> { scope.launch { refreshNow() }; true }
             Key.C -> { sendError = null; composing = Draft(from = identities[writingAccount()].orEmpty().firstOrNull()?.email.orEmpty()); true }
+            Key.U -> { run("unread-only"); true }
             Key.R -> { selected?.let { m -> composing = replyTo(m, body, identities[writingAccount()].orEmpty().firstOrNull()?.email.orEmpty()) }; true }
             Key.F -> { selected?.let { m -> composing = forwardOf(m, body, identities[writingAccount()].orEmpty().firstOrNull()?.email.orEmpty()) }; true }
             Key.A -> {
@@ -1471,6 +1481,13 @@ private fun Reader(
                 order = order,
                 onOrder = { order = it; Settings.setOrder(it) },
                 rowActions = rowActions,
+                unreadOnly = unreadOnly,
+                onUnreadOnly = {
+                    unreadOnly = it
+                    selected = null
+                    body = null
+                    scope.launch { reload() }
+                },
                 loadingMore = loadingMore,
                 onNeedMore = ::loadMore,
                 onSelect = { message, ctrl, shift ->
@@ -2149,6 +2166,9 @@ internal fun MessageList(
     onOrder: (Order) -> Unit = {},
     /** What a right-click or a hover button on a row can do. */
     rowActions: RowActions = RowActions(),
+    /** Showing only what has not been read. Asked of the server, not filtered here. */
+    unreadOnly: Boolean = false,
+    onUnreadOnly: (Boolean) -> Unit = {},
     /** Whether the next page is already on its way, so the foot says so. */
     loadingMore: Boolean = false,
     /** Called when the list gets near its own bottom and wants the next page. */
@@ -2165,12 +2185,23 @@ internal fun MessageList(
         ) {
             Text(title, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // The count doubles as the switch, because a separate button beside a
+                // number that already says "2 unread" is two things saying one thing.
                 val unread = emails.count { !it.seen }
-                if (unread > 0) {
+                if (unread > 0 || unreadOnly) {
                     Text(
-                        "$unread unread",
+                        if (unreadOnly) "Unread only" else "$unread unread",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
+                        fontWeight = if (unreadOnly) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (unreadOnly) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outline,
+                        modifier = Modifier
+                            .clip(MaterialTheme.shapes.small)
+                            .background(
+                                if (unreadOnly) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                            )
+                            .clickable { onUnreadOnly(!unreadOnly) }
+                            .padding(horizontal = 7.dp, vertical = 2.dp),
                     )
                 }
                 Spacer(Modifier.width(6.dp))
@@ -2231,7 +2262,7 @@ internal fun MessageList(
             when {
                 loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                 emails.isEmpty() -> Text(
-                    "Nothing here.",
+                    if (unreadOnly) "Nothing unread here." else "Nothing here.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.outline,
                     modifier = Modifier.align(Alignment.Center),

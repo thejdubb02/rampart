@@ -66,6 +66,16 @@ class Screenshots {
                 onLink = {},
             )
         }
+        shoot("unread-only", 420, 420) {
+            MessageList(
+                MESSAGES.filterNot { it.seen },
+                null,
+                loading = false,
+                title = "Inbox",
+                rowActions = ROW_ACTIONS,
+                unreadOnly = true,
+            ) { _, _, _ -> }
+        }
         shoot("unified", 1400, 900) {
             Row(Modifier.fillMaxSize()) {
                 Sidebar(
@@ -180,11 +190,12 @@ class Screenshots {
             )
             VerticalDivider()
             MessageList(
-                MESSAGES,
-                MESSAGES[1],
+                MESSAGES.filterNot { it.seen },
+                null,
                 loading = false,
                 title = "Inbox",
                 rowActions = ROW_ACTIONS,
+                unreadOnly = true,
             ) { _, _, _ -> }
             VerticalDivider()
             Message(

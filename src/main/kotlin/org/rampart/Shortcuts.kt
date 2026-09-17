@@ -44,6 +44,7 @@ internal data class Shortcut(
 internal val SHORTCUTS: List<Shortcut> = listOf(
     Shortcut("J or Down", "Next message", "Moving around"),
     Shortcut("K or Up", "Previous message", "Moving around"),
+    Shortcut("U", "Show only unread, or everything again", "Moving around"),
     Shortcut("/", "Search", "Moving around"),
     Shortcut("Esc", "Clear the search, or close what is open", "Moving around"),
     Shortcut("F5", "Check for mail now", "Moving around"),

@@ -263,10 +263,16 @@ class Jmap private constructor(
      * messages in it readable: the list asks for the next hundred when it gets near the
      * bottom rather than trying to hold all of them.
      */
-    fun emails(mailboxId: String, limit: Int = 100, from: Int = 0): List<Summary> {
+    fun emails(mailboxId: String, limit: Int = 100, from: Int = 0, unreadOnly: Boolean = false): List<Summary> {
         val responses = call(
             invoke("Email/query", "q") {
-                putJsonObject("filter") { put("inMailbox", mailboxId) }
+                // Filtered on the server, not here. Hiding the read ones out of the page we
+                // happen to hold would show "unread" meaning "unread among the last
+                // hundred", which is a different and much less useful thing.
+                putJsonObject("filter") {
+                    put("inMailbox", mailboxId)
+                    if (unreadOnly) put("notKeyword", "\$seen")
+                }
                 put("collapseThreads", true)
                 putJsonArray("sort") {
                     add(buildJsonObject { put("property", "receivedAt"); put("isAscending", false) })
