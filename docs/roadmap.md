@@ -65,6 +65,18 @@ Still to do:
   per RFC 8621 means zero, so a future `sendAt` is refused. An undo-send window
   held in the client is the only half of this that can be built today.
 
+### Where the detail lives now (2026-09-17)
+
+Two documents carry what used to be a list here:
+
+- **`parity.md`** - everything Bulwark 1.9.2 does, against what Rampart does, with what
+  we are deliberately not building and why. Read it before adding anything to tier 2.
+- **`assistant.md`** - the model features, the loopback API, and MCP. Not built, designed.
+
+Added to tier 2 by those two, in priority order: a rich-text composer, Sieve filters
+with a rule builder, folder management, and **IMAP as a second backend** so Rampart is
+not a client for one server. IMAP is a stated requirement, not an option.
+
 ### Tier 3, the user's own account (Stalwart)
 
 The `x:` data types under the `urn:stalwart:jmap` capability. Gate every one of these on
