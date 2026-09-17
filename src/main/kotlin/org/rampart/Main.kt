@@ -45,6 +45,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -98,6 +99,7 @@ import androidx.compose.ui.window.Notification
 import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.WindowPlacement
+import androidx.compose.ui.window.ApplicationScope
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.isTraySupported
@@ -116,6 +118,67 @@ import java.time.format.DateTimeFormatter
 
 private val WHEN = DateTimeFormatter.ofPattern("d MMM  HH:mm").withZone(ZoneId.systemDefault())
 
+/**
+ * The update, as a card in the corner rather than a bar across the top.
+ *
+ * It used to take the full width above the mail, which is a lot of screen for something
+ * that can wait, and it said "Installing" with nothing moving: an update that takes most of
+ * a minute and shows no sign of working looks like one that has hung. The bar underneath is
+ * indeterminate on purpose. Windows does not report progress on an MSIX install, and a
+ * percentage made up here would be a lie about something people are waiting on.
+ */
+@Composable
+internal fun UpdateCard(
+    version: String,
+    installing: Boolean,
+    note: String?,
+    onRestart: () -> Unit,
+    onLater: () -> Unit,
+) {
+    Box(Modifier.fillMaxSize().padding(18.dp), contentAlignment = Alignment.BottomEnd) {
+        Surface(
+            shape = MaterialTheme.shapes.medium,
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            shadowElevation = 6.dp,
+            modifier = Modifier.width(320.dp),
+        ) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 13.dp)) {
+                Text(
+                    when {
+                        note != null -> note
+                        installing -> "Installing Rampart $version"
+                        else -> "Rampart $version is ready"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    if (installing) "Rampart will close and open again by itself."
+                    else "It installs in about a minute, and Rampart restarts into it.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+                if (installing) {
+                    Spacer(Modifier.height(11.dp))
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                } else {
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TextButton(onClick = onLater) { Text("Later") }
+                        Spacer(Modifier.width(4.dp))
+                        Button(onClick = onRestart) { Text("Restart now") }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /** One signed in mailbox. Several of these is the point; the password is in none of them. */
 internal class Session(val account: SavedAccount, val jmap: Jmap) {
     val key: String get() = "${account.email}@${account.server}"
@@ -129,7 +192,14 @@ internal data class AccountMailboxes(
     val mailboxes: List<Mailbox>,
 )
 
-fun main() = application {
+fun main() {
+    // Before anything is drawn, so a second copy costs a moment rather than a window.
+    if (!SingleInstance.claim()) return
+    application { Rampart() }
+}
+
+@Composable
+private fun ApplicationScope.Rampart() {
     val density = LocalDensity.current
     val icon = remember(density) { useResource("rampart-icon.svg") { loadSvgPainter(it, density) } }
     val saved = remember { Settings.window() }
@@ -199,6 +269,15 @@ fun main() = application {
         // existing install opening light again the first time it runs a build with themes.
         var theme by remember { mutableStateOf(themeFor(Settings.theme(), Settings.dark() ?: followSystem)) }
         LaunchedEffect(theme) { WindowChrome.setDarkTitleBar(window, theme.dark) }
+        LaunchedEffect(Unit) {
+            SingleInstance.bringToFront {
+                javax.swing.SwingUtilities.invokeLater {
+                    windowState.isMinimized = false
+                    window.toFront()
+                    window.requestFocus()
+                }
+            }
+        }
         CompositionLocalProvider(LocalRampartTheme provides theme) {
             MaterialTheme(colorScheme = theme.scheme(), typography = RampartTypography) {
                 Surface(Modifier.fillMaxSize()) {
@@ -488,10 +567,12 @@ private fun Reader(
     LaunchedEffect(installing) {
         if (!installing) return@LaunchedEffect
         delay(3 * 60_000L)
+        // The bar stops with the message, not twenty seconds after it. A progress bar under
+        // the words "that did not install" is the app arguing with itself.
+        installing = false
         installNote = "That did not install. Windows will fetch it in the background instead."
         delay(20_000L)
         installNote = null
-        installing = false
     }
 
     LaunchedEffect(sessions.size) {
@@ -869,37 +950,6 @@ private fun Reader(
             .focusable()
             .onPreviewKeyEvent(::shortcut),
     ) {
-        update?.let { version ->
-            Row(
-                Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = 14.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    installNote ?: "Rampart $version is ready.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                if (!installing) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = {
-                            // The window stays up while Windows fetches the package, which
-                            // can be most of a minute, and Windows closes it at the swap.
-                            // Quitting first would leave nothing on screen during the wait,
-                            // which looks exactly like a button that did nothing.
-                            if (Updates.restartToUpdate()) {
-                                installing = true
-                                installNote = "Installing Rampart $version. This window will close itself."
-                            } else {
-                                // Not a packaged copy. Closing is still the right move:
-                                // Windows installs it on its own, only later.
-                                onQuit()
-                            }
-                        }) { Text("Restart now") }
-                        TextButton(onClick = { update = null }) { Text("Later") }
-                    }
-                }
-            }
-        }
         undo?.let { last ->
             Row(
                 Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
@@ -1218,6 +1268,28 @@ private fun Reader(
                 },
             )
         }
+    }
+
+    update?.let { version ->
+        UpdateCard(
+            version = version,
+            installing = installing,
+            note = installNote,
+            onRestart = {
+                // The window stays up while Windows fetches the package, which can be most
+                // of a minute, and Windows closes it at the swap. Quitting first would leave
+                // nothing on screen during the wait, which looks exactly like a button that
+                // did nothing.
+                if (Updates.restartToUpdate()) {
+                    installing = true
+                } else {
+                    // Not a packaged copy. Closing is still the right move: Windows installs
+                    // it on its own, only later.
+                    onQuit()
+                }
+            },
+            onLater = { update = null },
+        )
     }
 
     if (showShortcuts) ShortcutsOverlay { showShortcuts = false }

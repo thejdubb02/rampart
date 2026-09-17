@@ -48,6 +48,18 @@ class Screenshots {
         shoot("reader", 1400, 900) { Panes() }
         shoot("reader-dark", 1400, 900, dark) { Panes() }
         shoot("sidebar-collapsed", 1400, 900, dark) { Panes(collapsed = true) }
+        shoot("update", 1000, 700, dark) {
+            Box(Modifier.fillMaxSize()) {
+                Panes()
+                UpdateCard("0.1.44", installing = false, note = null, onRestart = {}, onLater = {})
+            }
+        }
+        shoot("update-installing", 1000, 700, dark) {
+            Box(Modifier.fillMaxSize()) {
+                Panes()
+                UpdateCard("0.1.44", installing = true, note = null, onRestart = {}, onLater = {})
+            }
+        }
         shoot("shortcuts", 1000, 800, dark) {
             Box(Modifier.fillMaxSize()) {
                 Panes()
