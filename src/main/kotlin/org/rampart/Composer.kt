@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -28,6 +30,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,6 +41,10 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.awt.FileDialog
+import java.awt.Frame
+import java.nio.file.Path
 
 /**
  * A message on its way out, in the terms the writer used: addresses as they typed them,
@@ -58,6 +65,8 @@ data class Draft(
     val inReplyTo: String? = null,
     /** The thread so far, oldest first, as References is built. */
     val references: List<String> = emptyList(),
+    /** Files already uploaded to the server, ready to be named on the way out. */
+    val attachments: List<Attachment> = emptyList(),
     /**
      * Whether this answers something. Not derived from [inReplyTo]: a message with no
      * Message-ID of its own is still being replied to, and telling the writer otherwise
@@ -171,12 +180,17 @@ internal fun Composer(
     onSend: (Draft) -> Unit,
     /** Writes the draft to the server. Null while there is nowhere to write it. */
     onSave: (suspend (Draft) -> Unit)? = null,
+    /** Puts the chosen files on the server and says what to attach. Null when it cannot. */
+    onAttach: (suspend (List<Path>) -> List<Attachment>)? = null,
 ) {
     var draft by remember(initial) { mutableStateOf(initial) }
     var showCc by remember(initial) { mutableStateOf(initial.cc.isNotEmpty()) }
     var pickingIdentity by remember { mutableStateOf(false) }
     var saveState by remember(initial) { mutableStateOf("") }
+    var attaching by remember(initial) { mutableStateOf(false) }
+    var attachError by remember(initial) { mutableStateOf<String?>(null) }
     val firstField = remember { FocusRequester() }
+    val scope = rememberCoroutineScope()
 
     /*
      * Saving as you type, with the pause built out of the effect rather than a timer: a
@@ -220,6 +234,27 @@ internal fun Composer(
                             color = if (saveState.startsWith("Not saved")) MaterialTheme.colorScheme.error
                             else MaterialTheme.colorScheme.outline,
                         )
+                    }
+                    if (onAttach != null) {
+                        TextButton(
+                            onClick = {
+                                val chosen = pickFiles()
+                                if (chosen.isNotEmpty()) {
+                                    scope.launch {
+                                        attaching = true
+                                        attachError = null
+                                        try {
+                                            draft = draft.copy(attachments = draft.attachments + onAttach(chosen))
+                                        } catch (e: Exception) {
+                                            attachError = e.message ?: "That file could not be attached."
+                                        } finally {
+                                            attaching = false
+                                        }
+                                    }
+                                }
+                            },
+                            enabled = !sending && !attaching,
+                        ) { Text(if (attaching) "Attaching" else "Attach") }
                     }
                     TextButton(onClick = onDiscard, enabled = !sending) { Text("Discard") }
                     Button(
@@ -278,6 +313,47 @@ internal fun Composer(
                 Entry(draft.subject, sending) { draft = draft.copy(subject = it) }
             }
             HorizontalDivider()
+
+            attachError?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+                )
+            }
+            if (draft.attachments.isNotEmpty()) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp)) {
+                    draft.attachments.forEach { file ->
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                safeFileName(file.name),
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                humanSize(file.size),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(
+                                onClick = {
+                                    // The blob stays on the server and expires on its own.
+                                    // Nothing else references it, so there is nothing to clean up.
+                                    draft = draft.copy(attachments = draft.attachments - file)
+                                },
+                                enabled = !sending,
+                            ) { Text("Remove") }
+                        }
+                    }
+                }
+                HorizontalDivider()
+            }
 
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (sending) {
@@ -361,3 +437,19 @@ internal fun draftOf(summary: Summary, body: Body?, from: String): Draft = Draft
     references = body?.references.orEmpty(),
     replying = false,
 )
+
+/**
+ * The operating system's own file picker.
+ *
+ * AWT's rather than a Compose dialog: on Windows this is the real Explorer window, with the
+ * places and recent files someone already knows, and a file picker is the last place to put
+ * something that looks nearly right. It blocks until dismissed, which is what a modal
+ * picker does anyway, and it is called from the click handler on the UI thread for the same
+ * reason.
+ */
+private fun pickFiles(): List<Path> {
+    val dialog = FileDialog(null as Frame?, "Attach files", FileDialog.LOAD)
+    dialog.isMultipleMode = true
+    dialog.isVisible = true
+    return dialog.files.orEmpty().map { it.toPath() }
+}

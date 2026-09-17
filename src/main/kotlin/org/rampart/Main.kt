@@ -429,7 +429,22 @@ private fun Reader(
         null
     }
 
-    LaunchedEffect(Unit) { update = withContext(Dispatchers.IO) { Updates.newerVersion() } }
+    /*
+     * Asked once the window is up, and then every half hour, because a window that stays
+     * open for a day would otherwise never hear about a build published after it started.
+     * Windows fetches the package itself in the background; this is only what puts the
+     * restart button on screen.
+     *
+     * Whatever GitHub calls the latest release is what gets installed, however many builds
+     * have gone out in between. There is no stepping through versions: the update manifest
+     * names one current package and Windows fetches that.
+     */
+    LaunchedEffect(Unit) {
+        while (true) {
+            update = withContext(Dispatchers.IO) { Updates.newerVersion() }
+            delay(30 * 60_000L)
+        }
+    }
 
     LaunchedEffect(sessions.size) {
         sessions.filter { it.key !in mailboxes }.forEach { open ->
@@ -607,6 +622,14 @@ private fun Reader(
                 composing = null
                 draftId = null
                 sendError = null
+            },
+            onAttach = { files ->
+                val key = here?.first
+                val account = key?.let(::session)
+                    ?: throw JmapError("Pick an account before attaching anything.")
+                // One at a time rather than in parallel: a mail server is not a CDN, and
+                // three large files racing each other is how an upload limit gets hit.
+                withContext(Dispatchers.IO) { files.map { account.jmap.upload(it) } }
             },
             onSave = { draft ->
                 val key = here?.first

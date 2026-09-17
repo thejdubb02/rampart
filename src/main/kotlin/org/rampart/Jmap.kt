@@ -11,10 +11,10 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -84,6 +84,9 @@ class Jmap private constructor(
     private val apiUrl: String,
     val accountId: String,
     private val downloadUrl: String,
+    private val uploadUrl: String,
+    /** What the server will accept in one upload, in bytes. Zero when it did not say. */
+    private val maxUpload: Long,
 ) {
     companion object {
         fun connect(server: String, user: String, password: String): Jmap = try {
@@ -116,7 +119,17 @@ class Jmap private constructor(
             // Blobs are fetched from this template later. It has to be kept from the
             // session; nothing else in the protocol names the download endpoint.
             val downloadUrl = (session["downloadUrl"] as? JsonPrimitive)?.contentOrNull.orEmpty()
-            return Jmap(credential, session["apiUrl"].require("apiUrl"), account, downloadUrl)
+            val uploadUrl = (session["uploadUrl"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+            val maxUpload = session["capabilities"]?.jsonObject?.get(CORE)?.jsonObject
+                ?.get("maxSizeUpload")?.jsonPrimitive?.longOrNull ?: 0L
+            return Jmap(
+                credential = credential,
+                apiUrl = session["apiUrl"].require("apiUrl"),
+                accountId = account,
+                downloadUrl = downloadUrl,
+                uploadUrl = uploadUrl,
+                maxUpload = maxUpload,
+            )
         }
 
         /** Accepts a bare host, a base URL, a /jmap/ URL, or the well-known URL itself. */
@@ -369,8 +382,65 @@ class Jmap private constructor(
         if (draft.references.isNotEmpty()) {
             putJsonArray("header:References:asMessageIds") { draft.references.forEach { add(it) } }
         }
-        putJsonObject("bodyStructure") { put("partId", "b"); put("type", "text/plain") }
+        // textBody rather than bodyStructure. The server refuses a message that sets both
+        // bodyStructure and attachments ("Cannot set both properties on a same request"),
+        // and one path that works with and without attachments is better than two that can
+        // drift apart. Checked against the live server both ways.
+        putJsonArray("textBody") { add(buildJsonObject { put("partId", "b"); put("type", "text/plain") }) }
         putJsonObject("bodyValues") { putJsonObject("b") { put("value", draft.body) } }
+        if (draft.attachments.isNotEmpty()) {
+            putJsonArray("attachments") {
+                draft.attachments.forEach { file ->
+                    add(
+                        buildJsonObject {
+                            put("blobId", file.blobId)
+                            put("type", file.type.ifBlank { "application/octet-stream" })
+                            put("name", file.name)
+                            put("disposition", "attachment")
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Puts a file on the server and returns what to attach.
+     *
+     * Uploading is separate from sending on purpose: the bytes go up while the message is
+     * still being written, so pressing Send is not a wait proportional to the attachment.
+     * The file is streamed rather than read into memory.
+     */
+    fun upload(file: Path): Attachment {
+        if (uploadUrl.isBlank()) throw JmapError("This server did not say where to upload files.")
+        val size = Files.size(file)
+        if (maxUpload in 1 until size) {
+            throw JmapError(
+                "${file.fileName} is ${humanSize(size)}, and this server accepts at most " +
+                    "${humanSize(maxUpload)} in one file.",
+            )
+        }
+        val type = runCatching { Files.probeContentType(file) }.getOrNull().orEmpty()
+            .ifBlank { "application/octet-stream" }
+        val response = http.send(
+            HttpRequest.newBuilder(URI.create(uploadUrl.replace("{accountId}", pct(accountId))))
+                .header("Authorization", credential)
+                .header("Content-Type", type)
+                .timeout(Duration.ofMinutes(10))
+                .POST(HttpRequest.BodyPublishers.ofFile(file))
+                .build(),
+            HttpResponse.BodyHandlers.ofString(),
+        )
+        if (response.statusCode() !in 200..299) {
+            throw JmapError("The server would not take ${file.fileName} (HTTP ${response.statusCode()}).")
+        }
+        val blob = json.parseToJsonElement(response.body()).jsonObject
+        return Attachment(
+            blobId = blob["blobId"].require("blobId"),
+            name = file.fileName.toString(),
+            type = blob["type"]?.str()?.ifBlank { null } ?: type,
+            size = blob["size"]?.jsonPrimitive?.longOrNull ?: size,
+        )
     }
 
     /**

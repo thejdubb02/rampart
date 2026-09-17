@@ -64,11 +64,13 @@ class Screenshots {
         shoot("composer", 1000, 640) {
             Composer(
                 identities = listOf("you@example.org", "billing@example.org"),
-                initial = replyTo(MESSAGES[1], Body(null, "Could you confirm the start time?"), "you@example.org"),
+                initial = replyTo(MESSAGES[1], Body(null, "Could you confirm the start time?"), "you@example.org")
+                    .copy(attachments = listOf(Attachment("b1", "Revised quote September.pdf", "application/pdf", 214_512))),
                 sending = false,
                 error = null,
                 onDiscard = {},
                 onSend = {},
+                onAttach = { emptyList() },
             )
         }
     }
