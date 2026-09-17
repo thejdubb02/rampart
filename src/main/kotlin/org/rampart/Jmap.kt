@@ -242,7 +242,14 @@ class Jmap private constructor(
      * Thread/get counts what is behind each one. Without that third call the list would
      * quietly hide the rest of a conversation with nothing on screen to say so.
      */
-    fun emails(mailboxId: String, limit: Int = 100): List<Summary> {
+    /**
+     * A page of a folder, newest first.
+     *
+     * [from] is how many to skip, which is what makes a folder with thirty thousand
+     * messages in it readable: the list asks for the next hundred when it gets near the
+     * bottom rather than trying to hold all of them.
+     */
+    fun emails(mailboxId: String, limit: Int = 100, from: Int = 0): List<Summary> {
         val responses = call(
             invoke("Email/query", "q") {
                 putJsonObject("filter") { put("inMailbox", mailboxId) }
@@ -251,6 +258,7 @@ class Jmap private constructor(
                     add(buildJsonObject { put("property", "receivedAt"); put("isAscending", false) })
                 }
                 put("limit", limit)
+                if (from > 0) put("position", from)
             },
             invoke("Email/get", "g") {
                 // A back reference, so the ids never make the round trip through us.

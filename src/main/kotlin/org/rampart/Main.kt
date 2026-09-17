@@ -30,6 +30,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -514,6 +516,9 @@ private fun Reader(
     var installNote by remember { mutableStateOf<String?>(null) }
     var notifyOnArrival by remember { mutableStateOf(Settings.notifyOnArrival()) }
     var order by remember { mutableStateOf(Settings.order()) }
+    var loadingMore by remember { mutableStateOf(false) }
+    // Set when a page comes back short, so the bottom of a folder is not re-queried forever.
+    var exhausted by remember { mutableStateOf(false) }
     val searchField = remember { FocusRequester() }
     val keyboard = remember { FocusRequester() }
     var mailboxes by remember { mutableStateOf<Map<String, List<Mailbox>>>(emptyMap()) }
@@ -661,6 +666,33 @@ private fun Reader(
             } ?: emptyList()
         }
         loading = false
+        exhausted = false
+    }
+
+    /*
+     * The next page, asked for when the list gets near its own bottom.
+     *
+     * Only a single folder pages. The merged inbox is assembled from several accounts and
+     * sorted here rather than by any one server, so "the next hundred" has no single
+     * meaning across them; it loads its first page and stops, which is what it did before.
+     *
+     * A page that comes back shorter than asked for means the folder has run out, and
+     * `exhausted` stops the list asking again every time somebody scrolls the last row into
+     * view. Without it a short folder re-queries on every frame at the bottom.
+     */
+    fun loadMore() {
+        val (key, mailbox) = here ?: return
+        if (key == ALL_ACCOUNTS || showingResults || loadingMore || exhausted || loading) return
+        loadingMore = true
+        scope.launch {
+            val page = io { session(key).jmap.emails(mailbox.id, from = emails.size) }.orEmpty()
+            // Ids already on screen are dropped rather than trusted: mail arriving between
+            // two pages shifts every position down, and the seam is where it shows up twice.
+            val known = emails.map { it.id }.toSet()
+            emails = emails + page.filterNot { it.id in known }
+            exhausted = page.size < 100
+            loadingMore = false
+        }
     }
 
     /**
@@ -1330,6 +1362,8 @@ private fun Reader(
                 order = order,
                 onOrder = { order = it; Settings.setOrder(it) },
                 rowActions = rowActions,
+                loadingMore = loadingMore,
+                onNeedMore = ::loadMore,
                 onSelect = { message, ctrl, shift ->
                     picked = pickedAfter(emails.map { it.id }, picked, anchor, message.id, ctrl, shift)
                     if (!shift) anchor = message.id
@@ -1882,6 +1916,10 @@ internal fun MessageList(
     onOrder: (Order) -> Unit = {},
     /** What a right-click or a hover button on a row can do. */
     rowActions: RowActions = RowActions(),
+    /** Whether the next page is already on its way, so the foot says so. */
+    loadingMore: Boolean = false,
+    /** Called when the list gets near its own bottom and wants the next page. */
+    onNeedMore: () -> Unit = {},
     onSelect: (Summary, ctrl: Boolean, shift: Boolean) -> Unit,
 ) {
     Column(
@@ -1943,6 +1981,19 @@ internal fun MessageList(
             }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        val scroll = rememberLazyListState()
+        /*
+         * Ask for the next page a screenful early, so the rows are already there by the
+         * time somebody scrolls onto them. Derived rather than read every frame: without
+         * that this recomposes the whole list on every pixel of scrolling.
+         */
+        val wantsMore by remember(emails.size) {
+            derivedStateOf {
+                val last = scroll.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                emails.isNotEmpty() && last >= emails.size - 10
+            }
+        }
+        LaunchedEffect(wantsMore) { if (wantsMore) onNeedMore() }
         Box(Modifier.fillMaxSize()) {
             when {
                 loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
@@ -1952,9 +2003,10 @@ internal fun MessageList(
                     color = MaterialTheme.colorScheme.outline,
                     modifier = Modifier.align(Alignment.Center),
                 )
-                else -> LazyColumn(Modifier.fillMaxSize()) {
+                else -> LazyColumn(Modifier.fillMaxSize(), state = scroll) {
                     // LazyColumn only builds the rows on screen, so a folder with thirty
-                    // thousand messages in it costs the same as one with twenty.
+                    // thousand messages in it costs the same as one with twenty. What that
+                    // folder still needs is the next page, which is what `onNeedMore` is.
                     items(sorted(emails, order), key = { it.id }) { message ->
                         MessageRow(
                             message = message,
@@ -1964,6 +2016,16 @@ internal fun MessageList(
                             onSelect = onSelect,
                         )
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    }
+                    if (loadingMore) {
+                        item {
+                            Box(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+                                CircularProgressIndicator(
+                                    Modifier.align(Alignment.Center).size(18.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                            }
+                        }
                     }
                 }
             }
