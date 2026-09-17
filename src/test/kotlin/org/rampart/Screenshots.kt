@@ -66,6 +66,30 @@ class Screenshots {
                 onLink = {},
             )
         }
+        // Both states of the row at once: the pointer is over every row in the second,
+        // so the two can be laid side by side and nothing should have moved.
+        shoot("paper", 900, 700, dark) {
+            Message(
+                summary = MESSAGES[1],
+                body = Body(SAMPLE_HTML, null),
+                actions = MessageActions(archive = {}, junk = {}, trash = {}, star = {}),
+                paper = true,
+                onLink = {},
+            )
+        }
+        shoot("row-rest", 420, 300) {
+            MessageList(MESSAGES, null, loading = false, title = "Inbox", rowActions = ROW_ACTIONS) { _, _, _ -> }
+        }
+        shoot("row-hover", 420, 300) {
+            MessageList(
+                MESSAGES,
+                null,
+                loading = false,
+                title = "Inbox",
+                rowActions = ROW_ACTIONS,
+                showHover = true,
+            ) { _, _, _ -> }
+        }
         shoot("unread-only", 420, 420) {
             MessageList(
                 MESSAGES.filterNot { it.seen },

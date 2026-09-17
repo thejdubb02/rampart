@@ -48,6 +48,7 @@ import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -532,6 +533,7 @@ private fun Reader(
     // Not remembered between runs on purpose: opening the app into a folder that is hiding
     // most of itself, with no memory of having asked for that, reads as lost mail.
     var unreadOnly by remember { mutableStateOf(false) }
+    var paper by remember { mutableStateOf(false) }
     // The server's filter script, for the account whose settings are showing.
     var filters by remember { mutableStateOf<Script?>(null) }
     var filterScript by remember { mutableStateOf<Jmap.SieveInfo?>(null) }
@@ -873,6 +875,7 @@ private fun Reader(
     LaunchedEffect(selected) {
         val message = selected ?: return@LaunchedEffect
         val key = accountOf(message) ?: return@LaunchedEffect
+        paper = false
         body = null
         bodyError = null
         inlineImages = emptyMap()
@@ -1091,16 +1094,23 @@ private fun Reader(
     suspend fun loadFilters(key: String) {
         filtersError = null
         val jmap = session(key).jmap
-        filtersSupported = io { jmap.hasSieve() } == true
+        // Deliberately not through `io`: that puts a failure in the window's error bar,
+        // and a settings screen that could not read its own data has somewhere of its own
+        // to say so. The bar is for things that happened to the mail.
+        suspend fun <T> quietly(block: () -> T): T? =
+            runCatching { withContext(Dispatchers.IO) { block() } }
+                .onFailure { filtersError = it.message ?: it.toString() }
+                .getOrNull()
+
+        filtersSupported = quietly { jmap.hasSieve() } == true
         if (!filtersSupported) {
             filters = Script(emptyList())
             return
         }
-        val all = io { jmap.sieveScripts() }.orEmpty()
+        val all = quietly { jmap.sieveScripts() }.orEmpty()
         val chosen = all.firstOrNull { it.active } ?: all.firstOrNull { it.name == "rampart" } ?: all.firstOrNull()
         filterScript = chosen
-        filters = Script(emptyList()).takeIf { chosen == null }
-            ?: scriptOf(io { jmap.sieveText(chosen!!) }.orEmpty())
+        filters = if (chosen == null) Script(emptyList()) else scriptOf(quietly { jmap.sieveText(chosen) }.orEmpty())
     }
 
     /*
@@ -1445,11 +1455,28 @@ private fun Reader(
             }
         }
         if (error.isNotBlank()) {
-            Text(
-                error,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-                modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.errorContainer).padding(10.dp),
-            )
+            // Dismissible, because an error that can only be cleared by succeeding at
+            // something else sits there long after it stopped being true, and then it is
+            // read as the state of the app rather than as one thing that went wrong.
+            Row(
+                Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.errorContainer)
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    error,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = { error = "" }, modifier = Modifier.size(24.dp)) {
+                    Icon(
+                        RampartIcons.Close,
+                        contentDescription = "Dismiss",
+                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.size(13.dp),
+                    )
+                }
+            }
         }
         SearchBar(
             query = query,
@@ -1733,6 +1760,10 @@ private fun Reader(
                 savedTo = saved,
                 source = source,
                 onSource = ::toggleSource,
+                paper = paper,
+                // Per message rather than a setting: it is a look at this one, and having
+                // to turn it back off in settings would make it a mode instead.
+                onPaper = { paper = it },
                 onSaveSource = {
                     val message = selected
                     val text = source
@@ -2285,6 +2316,14 @@ internal fun MessageList(
     loadingMore: Boolean = false,
     /** Called when the list gets near its own bottom and wants the next page. */
     onNeedMore: () -> Unit = {},
+    /**
+     * Draws every row as though the pointer were over it.
+     *
+     * Only ever passed by the screenshot tests. A headless scene has no pointer, and the
+     * hover state is where a row's layout is most likely to go wrong, so it has to be
+     * photographable.
+     */
+    showHover: Boolean = false,
     onSelect: (Summary, ctrl: Boolean, shift: Boolean) -> Unit,
 ) {
     Column(
@@ -2329,13 +2368,36 @@ internal fun MessageList(
                     }
                     DropdownMenu(expanded = sorting, onDismissRequest = { sorting = false }) {
                         Order.entries.forEach { option ->
+                            val chosen = option == order
                             DropdownMenuItem(
-                                text = { Text(option.label) },
-                                leadingIcon = {
-                                    // A tick on the one in use rather than a highlighted
-                                    // row, which reads as hover on a menu this short.
-                                    Text(if (option == order) "*" else " ")
+                                text = {
+                                    Text(
+                                        option.label,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = if (chosen) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurface,
+                                    )
                                 },
+                                leadingIcon = {
+                                    // A tick on the one in use, and an empty slot of the
+                                    // same width on the others so the labels line up. An
+                                    // asterisk was standing in for this and read as a typo.
+                                    Box(Modifier.size(14.dp)) {
+                                        if (chosen) {
+                                            Icon(
+                                                RampartIcons.Tick,
+                                                contentDescription = "In use",
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(14.dp),
+                                            )
+                                        }
+                                    }
+                                },
+                                // Material's default row is built for a finger. This is a
+                                // five item menu on a desktop, and at that height it reads
+                                // as a list of pages rather than a set of choices.
+                                modifier = Modifier.height(34.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp),
                                 onClick = {
                                     sorting = false
                                     onOrder(option)
@@ -2389,6 +2451,7 @@ internal fun MessageList(
                             selected = message.id == selected?.id || message.id in picked,
                             accountLabel = accountLabels[message.account],
                             actions = rowActions,
+                            showHover = showHover,
                             onSelect = onSelect,
                         )
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -2416,10 +2479,12 @@ private fun MessageRow(
     selected: Boolean,
     accountLabel: String? = null,
     actions: RowActions = RowActions(),
+    showHover: Boolean = false,
     onSelect: (Summary, ctrl: Boolean, shift: Boolean) -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
-    var hovered by remember { mutableStateOf(false) }
+    var pointerOver by remember { mutableStateOf(false) }
+    val hovered = pointerOver || showHover
 
     Row(
         Modifier.fillMaxWidth()
@@ -2443,8 +2508,8 @@ private fun MessageRow(
                     else -> Unit
                 }
             }
-            .onPointerEvent(PointerEventType.Enter) { hovered = true }
-            .onPointerEvent(PointerEventType.Exit) { hovered = false }
+            .onPointerEvent(PointerEventType.Enter) { pointerOver = true }
+            .onPointerEvent(PointerEventType.Exit) { pointerOver = false }
             .height(IntrinsicSize.Min),
     ) {
         RowMenu(message, actions, menu) { menu = false }
@@ -2493,30 +2558,43 @@ private fun MessageRow(
                     )
                 }
                 Spacer(Modifier.width(8.dp))
-                // The buttons take the date's place rather than sitting beside it, which is
-                // what every list that has these does: appearing next to it would move the
-                // date sideways under the pointer and make the row twitch as you scan it.
-                if (hovered) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        actions.markRead?.let { mark ->
-                            RowButton(
-                                if (message.seen) RampartIcons.Unread else RampartIcons.Read,
-                                if (message.seen) "Mark unread" else "Mark read",
-                            ) { mark(message, !message.seen) }
+                /*
+                 * The buttons take the date's place, in a slot of a fixed size.
+                 *
+                 * Both parts are needed. Swapping one for the other is what every list with
+                 * hover actions does, because buttons appearing beside the date would push
+                 * it sideways under the pointer. The fixed size is what stops the swap
+                 * itself moving anything: three icons are not as wide as "16 Sep 09:12" and
+                 * are taller than it, so without a reserved slot the row jumps both ways as
+                 * the pointer crosses it.
+                 */
+                Box(
+                    Modifier.width(HOVER_SLOT).height(18.dp),
+                    contentAlignment = Alignment.CenterEnd,
+                ) {
+                    if (hovered) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            actions.markRead?.let { mark ->
+                                RowButton(
+                                    if (message.seen) RampartIcons.Unread else RampartIcons.Read,
+                                    if (message.seen) "Mark unread" else "Mark read",
+                                ) { mark(message, !message.seen) }
+                            }
+                            actions.archive?.let { archive ->
+                                RowButton(RampartIcons.Archive, "Archive") { archive(message) }
+                            }
+                            actions.trash?.let { trash ->
+                                RowButton(RampartIcons.Trash, "Delete") { trash(message) }
+                            }
                         }
-                        actions.archive?.let { archive ->
-                            RowButton(RampartIcons.Archive, "Archive") { archive(message) }
-                        }
-                        actions.trash?.let { trash ->
-                            RowButton(RampartIcons.Trash, "Delete") { trash(message) }
-                        }
+                    } else {
+                        Text(
+                            message.receivedAt.asLocalTime(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                            maxLines = 1,
+                        )
                     }
-                } else {
-                    Text(
-                        message.receivedAt.asLocalTime(),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
                 }
             }
             Spacer(Modifier.height(3.dp))
@@ -2575,10 +2653,49 @@ private fun MessageRow(
  * Every member is nullable for the same reason as [MessageActions]: an account with no Junk
  * folder does not get a Junk entry rather than getting one that fails.
  */
+/**
+ * Draws its contents on paper rather than in the theme, when asked.
+ *
+ * A themed reader is the right default: most mail is text, and text should be set in
+ * whatever the person chose to look at all day. It is wrong for the rest. A newsletter or
+ * an invoice was drawn against white by whoever sent it, and on a dark theme its own
+ * colours land on a background nobody tested them against, which is how a logo turns into
+ * a dark rectangle and a pale caption disappears.
+ *
+ * Only the message changes. The window, the list and the sidebar stay as they were, because
+ * the point is to see one message as it was meant to look, not to change the app.
+ */
+@Composable
+private fun Paper(on: Boolean, content: @Composable () -> Unit) {
+    if (!on) {
+        content()
+        return
+    }
+    MaterialTheme(
+        colorScheme = MaterialTheme.colorScheme.copy(
+            background = Color.White,
+            onBackground = Color(0xFF17171B),
+            surface = Color.White,
+            onSurface = Color(0xFF17171B),
+            surfaceVariant = Color(0xFFF4F4F6),
+            onSurfaceVariant = Color(0xFF17171B),
+            outline = Color(0xFF63636E),
+            outlineVariant = Color(0xFFE6E6EB),
+        ),
+        typography = MaterialTheme.typography,
+    ) {
+        Surface(color = Color.White, shape = MaterialTheme.shapes.small) {
+            Box(Modifier.padding(horizontal = 18.dp, vertical = 16.dp)) { content() }
+        }
+    }
+}
+
 /** One of the small buttons that appear on a row under the pointer. */
 @Composable
 private fun RowButton(icon: ImageVector, what: String, onClick: () -> Unit) {
-    IconButton(onClick = onClick, modifier = Modifier.size(22.dp)) {
+    // 18dp rather than Material's default, so three of them fit the slot the date leaves
+    // and the row is the same height whether the pointer is over it or not.
+    IconButton(onClick = onClick, modifier = Modifier.size(18.dp)) {
         Icon(
             icon,
             contentDescription = what,
@@ -2587,6 +2704,14 @@ private fun RowButton(icon: ImageVector, what: String, onClick: () -> Unit) {
         )
     }
 }
+
+/**
+ * The width kept for the date, and for the buttons that replace it.
+ *
+ * Wide enough for the longest date this list shows and for three buttons, so neither state
+ * is cramped and neither is what decides the width.
+ */
+private val HOVER_SLOT = 78.dp
 
 /**
  * The right-click menu on a row.
@@ -2602,7 +2727,9 @@ private fun RowMenu(message: Summary, actions: RowActions, open: Boolean, onClos
         // Closing before acting, so the menu is gone by the time the list under it changes.
         @Composable
         fun entry(label: String, does: () -> Unit) = DropdownMenuItem(
-            text = { Text(label) },
+            text = { Text(label, style = MaterialTheme.typography.bodyMedium) },
+            modifier = Modifier.height(32.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp),
             onClick = {
                 onClose()
                 does()
@@ -2663,6 +2790,9 @@ internal fun Message(
     source: String? = null,
     onSource: () -> Unit = {},
     onSaveSource: () -> Unit = {},
+    /** Drawing this message on paper rather than in the theme. */
+    paper: Boolean = false,
+    onPaper: (Boolean) -> Unit = {},
     onTag: (keyword: String, on: Boolean) -> Unit = { _, _ -> },
     /** True while a field in here has focus, so a bare letter is not read as a shortcut. */
     onTyping: (Boolean) -> Unit = {},
@@ -2744,6 +2874,20 @@ internal fun Message(
                 actions.trash?.let { OutlinedButton(onClick = it) { Text("Delete") } }
                 // Everything past Delete is something people reach for occasionally, and a
                 // row of eight buttons runs off the edge of the pane at any sensible width.
+                /*
+                 * A themed reader is the right default and is wrong for some mail. A
+                 * newsletter or an invoice was drawn against white by whoever sent it, and
+                 * on a dark theme its own colours end up on a background it was never
+                 * tested on. This puts one message back on paper without changing the app.
+                 */
+                IconButton(onClick = { onPaper(!paper) }, modifier = Modifier.size(34.dp)) {
+                    Icon(
+                        RampartIcons.Page,
+                        contentDescription = if (paper) "Back to the theme" else "Show it as the sender drew it",
+                        tint = if (paper) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
                 var more by remember(summary.id) { mutableStateOf(false) }
                 Box {
                     IconButton(onClick = { more = true }, modifier = Modifier.size(34.dp)) {
@@ -2815,6 +2959,7 @@ internal fun Message(
             ) {
                 // Capped, because a paragraph set across a whole desktop window is a line
                 // length nobody can follow back to the start of.
+                Paper(paper) {
                 Column(Modifier.widthIn(max = 660.dp).fillMaxWidth()) {
                     // The subject heads the conversation rather than the message: in a
                     // thread every message carries the same one with more Re: in front.
@@ -3044,6 +3189,7 @@ internal fun Message(
                         later.forEach { ThreadRow(it) { onPick(it) } }
                     }
                     Spacer(Modifier.height(40.dp))
+                }
                 }
             }
         }

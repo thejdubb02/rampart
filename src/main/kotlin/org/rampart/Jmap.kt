@@ -38,6 +38,7 @@ private const val CORE = "urn:ietf:params:jmap:core"
 private const val MAIL = "urn:ietf:params:jmap:mail"
 private const val SUBMISSION = "urn:ietf:params:jmap:submission"
 private const val VACATION = "urn:ietf:params:jmap:vacationresponse"
+private const val SIEVE = "urn:ietf:params:jmap:sieve"
 
 private val json = Json { ignoreUnknownKeys = true }
 
@@ -666,6 +667,7 @@ class Jmap private constructor(
 
     fun sieveScripts(): List<SieveInfo> = call(
         invoke("SieveScript/get", "s") { put("ids", JsonNull) },
+        also = SIEVE,
     )[0].list().map {
         val o = it.jsonObject
         SieveInfo(
@@ -731,6 +733,7 @@ class Jmap private constructor(
                     put("onSuccessActivateScript", existing.id)
                 }
             },
+            also = SIEVE,
         )[0][1].jsonObject
         val field = if (existing == null) "notCreated" else "notUpdated"
         val ok = if (existing == null) {

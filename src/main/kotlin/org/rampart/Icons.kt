@@ -67,6 +67,14 @@ internal object RampartIcons {
     val Expand = icon("Expand", "m7 4 5 5-5 5")
     val More = icon("More", "M9 4.2v.1M9 9v.1M9 13.8v.1")
 
+    val Close = icon("Close", "M4.5 4.5l9 9M13.5 4.5l-9 9")
+
+    /** A tick, for the one option in use. */
+    val Tick = icon("Tick", "M3.5 9.5 7 13l7.5-8")
+
+    /** A page, for showing a message the way its sender drew it. */
+    val Page = icon("Page", "M4 2.6h7l3 3v9.8H4zM11 2.6v3h3")
+
     /** Three rules, longest first, which is what every list reads as "order". */
     val Sort = icon("Sort", "M3 4.5h12M3 9h8M3 13.5h4")
 

@@ -56,6 +56,23 @@ data class Theme(
             onSurfaceVariant = text,
             outline = muted,
             outlineVariant = line,
+            /*
+             * The container roles matter as much as `surface` does, and forgetting them is
+             * why every menu was drawn in Material's own faintly purple dark rather than in
+             * the theme. A DropdownMenu, a dialog and a sheet all take their background from
+             * `surfaceContainer` rather than from `surface`, so a theme that sets only the
+             * latter themes the app and not the things that open on top of it.
+             */
+            surfaceContainerLowest = background,
+            surfaceContainerLow = background,
+            surfaceContainer = surface,
+            surfaceContainerHigh = surfaceVariant,
+            surfaceContainerHighest = surfaceVariant,
+            surfaceBright = surface,
+            surfaceDim = background,
+            inverseSurface = text,
+            inverseOnSurface = background,
+            scrim = Color(0x99000000),
         )
     }
 }
