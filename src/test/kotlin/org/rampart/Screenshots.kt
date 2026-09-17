@@ -120,7 +120,7 @@ class Screenshots {
                 onSelect = { _, _ -> },
             )
             VerticalDivider()
-            MessageList(MESSAGES, MESSAGES[1], loading = false, title = "Inbox") {}
+            MessageList(MESSAGES, MESSAGES[1], loading = false, title = "Inbox") { _, _, _ -> }
             VerticalDivider()
             Message(
                 summary = MESSAGES[1],

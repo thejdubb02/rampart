@@ -4,6 +4,13 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.input.pointer.PointerButton
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.isCtrlPressed
+import androidx.compose.ui.input.pointer.isMetaPressed
+import androidx.compose.ui.input.pointer.isShiftPressed
+import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -426,6 +433,9 @@ private fun Reader(
     var inlineImages by remember { mutableStateOf<Map<String, ImageBitmap>>(emptyMap()) }
     var remoteImages by remember { mutableStateOf<List<ImageBitmap>>(emptyList()) }
     var unsubscribed by remember { mutableStateOf<String?>(null) }
+    var picked by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var anchor by remember { mutableStateOf<String?>(null) }
+    var undo by remember { mutableStateOf<Undoable?>(null) }
     var allowedSenders by remember { mutableStateOf(Settings.imageSenders()) }
     var saved by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
@@ -810,6 +820,30 @@ private fun Reader(
                 }
             }
         }
+        undo?.let { last ->
+            Row(
+                Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(start = 14.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "${last.ids.size} messages ${last.what}.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = {
+                    scope.launch {
+                        if (io { session(last.accountKey).jmap.move(last.ids, last.fromMailboxId) } != null) {
+                            undo = null
+                            refreshNow()
+                        }
+                    }
+                }) { Text("Undo", style = MaterialTheme.typography.bodySmall) }
+                TextButton(onClick = { undo = null }) {
+                    Text("Dismiss", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
         if (error.isNotBlank()) {
             Text(
                 error,
@@ -913,10 +947,52 @@ private fun Reader(
                 selected = selected,
                 loading = loading,
                 title = here?.second?.name.orEmpty(),
+                picked = picked,
                 onRefresh = { scope.launch { refreshNow() } },
-                onSelect = { selected = it },
+                onSelect = { message, ctrl, shift ->
+                    picked = pickedAfter(emails.map { it.id }, picked, anchor, message.id, ctrl, shift)
+                    if (!shift) anchor = message.id
+                    if (!ctrl && !shift) selected = message
+                },
             )
             VerticalDivider()
+            if (picked.size > 1) {
+                Picked(
+                    count = picked.size,
+                    onClear = { picked = emptySet() },
+                    onFile = { role, what ->
+                        val key = here?.first
+                        val here2 = here?.second
+                        val target = mailboxes[key].orEmpty().firstOrNull { it.role == role }
+                        if (key != null && here2 != null && target != null) {
+                            val ids = emails.filter { it.id in picked }.map { it.id }
+                            scope.launch {
+                                if (io { session(key).jmap.move(ids, target.id) } != null) {
+                                    emails = emails.filterNot { it.id in picked }
+                                    picked = emptySet()
+                                    selected = null
+                                    body = null
+                                    undo = Undoable(key, ids, here2.id, what)
+                                }
+                            }
+                        }
+                    },
+                    onRead = {
+                        val key = here?.first
+                        if (key != null) {
+                            val ids = emails.filter { it.id in picked && !it.seen }.map { it.id }
+                            if (ids.isNotEmpty()) {
+                                scope.launch {
+                                    if (io { session(key).jmap.setKeyword(ids, "\$seen", true) } != null) {
+                                        emails = emails.map { if (it.id in ids) it.copy(seen = true) else it }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                )
+                return@Row
+            }
             Message(
                 summary = selected,
                 body = body,
@@ -1319,8 +1395,10 @@ internal fun MessageList(
     selected: Summary?,
     loading: Boolean,
     title: String = "",
+    /** Everything picked out, which is [selected] alone until somebody holds a key down. */
+    picked: Set<String> = emptySet(),
     onRefresh: () -> Unit = {},
-    onSelect: (Summary) -> Unit,
+    onSelect: (Summary, ctrl: Boolean, shift: Boolean) -> Unit,
 ) {
     Column(
         Modifier.width(368.dp).fillMaxHeight().background(MaterialTheme.colorScheme.surface),
@@ -1365,7 +1443,11 @@ internal fun MessageList(
                 )
                 else -> LazyColumn(Modifier.fillMaxSize()) {
                     items(emails, key = { it.id }) { message ->
-                        MessageRow(message, message.id == selected?.id) { onSelect(message) }
+                        MessageRow(
+                            message = message,
+                            selected = message.id == selected?.id || message.id in picked,
+                            onSelect = onSelect,
+                        )
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     }
                 }
@@ -1374,12 +1456,25 @@ internal fun MessageList(
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
-private fun MessageRow(message: Summary, selected: Boolean, onClick: () -> Unit) {
+private fun MessageRow(
+    message: Summary,
+    selected: Boolean,
+    onSelect: (Summary, ctrl: Boolean, shift: Boolean) -> Unit,
+) {
     Row(
         Modifier.fillMaxWidth()
             .background(if (selected) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent)
-            .clickable(onClick = onClick)
+            // The modifier keys have to be read from the press itself. clickable() does not
+            // carry them, and holding control to add a second message to a selection is how
+            // every desktop list has worked for thirty years.
+            .onPointerEvent(PointerEventType.Press) { event ->
+                if (event.button == PointerButton.Primary) {
+                    val keys = event.keyboardModifiers
+                    onSelect(message, keys.isCtrlPressed || keys.isMetaPressed, keys.isShiftPressed)
+                }
+            }
             .height(IntrinsicSize.Min),
     ) {
         // A 2px edge rather than a fully tinted row: it marks the selection without
@@ -1832,4 +1927,74 @@ internal fun conversationAround(thread: List<Summary>, open: Summary): Pair<List
     val at = thread.indexOfFirst { it.id == open.id }
     if (at < 0) return emptyList<Summary>() to emptyList()
     return thread.take(at) to thread.drop(at + 1)
+}
+
+/**
+ * A batch move, and where it came from.
+ *
+ * Kept so it can be put back. Undo for a move is only ever a move in the other direction,
+ * which is the whole reason batch actions are moves and nothing else: filing fifty messages
+ * by accident is recoverable, and a client that makes that unrecoverable is one people
+ * stop using for anything but reading.
+ */
+internal data class Undoable(
+    val accountKey: String,
+    val ids: List<String>,
+    val fromMailboxId: String,
+    /** What to call it on screen, already in the past tense. */
+    val what: String,
+)
+
+/**
+ * What the reading pane shows while more than one message is picked.
+ *
+ * Deliberately only the actions that can be undone. Nothing here sends, replies or deletes
+ * outright: the mistake somebody makes with fifty messages selected is the one they cannot
+ * take back, so the pane offers nothing of that kind.
+ */
+@Composable
+private fun Picked(count: Int, onClear: () -> Unit, onFile: (role: String, what: String) -> Unit, onRead: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
+        verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterVertically),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("$count messages picked", style = MaterialTheme.typography.titleMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { onFile("archive", "archived") }) { Text("Archive") }
+            OutlinedButton(onClick = { onFile("junk", "marked as spam") }) { Text("Spam") }
+            OutlinedButton(onClick = { onFile("trash", "deleted") }) { Text("Delete") }
+            OutlinedButton(onClick = onRead) { Text("Mark read") }
+        }
+        TextButton(onClick = onClear) { Text("Clear", style = MaterialTheme.typography.bodySmall) }
+    }
+}
+
+/**
+ * What is picked out after a click, given what was picked and where the anchor was.
+ *
+ * The rules are the ones every desktop list has had for thirty years, and the reason this
+ * is a function rather than four lines in a lambda is that getting shift wrong quietly
+ * files the wrong fifty messages.
+ *
+ * A plain click picks nothing out: one message is simply the one being read, and drawing a
+ * selection around it would make every single click look like the start of a batch.
+ */
+internal fun pickedAfter(
+    ids: List<String>,
+    picked: Set<String>,
+    anchor: String?,
+    target: String,
+    ctrl: Boolean,
+    shift: Boolean,
+): Set<String> {
+    val from = ids.indexOf(anchor)
+    val to = ids.indexOf(target)
+    return when {
+        shift && from >= 0 && to >= 0 -> ids.subList(minOf(from, to), maxOf(from, to) + 1).toSet()
+        // Shift with nothing to measure from is a plain click, not an empty selection.
+        shift -> emptySet()
+        ctrl -> if (target in picked) picked - target else picked + target
+        else -> emptySet()
+    }
 }
