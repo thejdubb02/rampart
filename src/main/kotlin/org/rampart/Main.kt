@@ -187,6 +187,19 @@ internal fun UpdateCard(
 /** One signed in mailbox. Several of these is the point; the password is in none of them. */
 internal class Session(val account: SavedAccount, val jmap: Jmap) {
     val key: String get() = "${account.email}@${account.server}"
+
+    /**
+     * This account's local copy, or null when there is nowhere safe to keep the key.
+     *
+     * Opened once and lazily: a person who never leaves the inbox should not pay for a file
+     * being created, and a failure to open one is never a reason not to show mail. Rampart
+     * without a local store is Rampart as it was last week, which works.
+     */
+    val store: Store? by lazy {
+        runCatching {
+            Secrets.mailKey(account)?.let { Store.open(Store.file(key), it) }
+        }.getOrNull()
+    }
 }
 
 /** What the sidebar needs to draw an account, with no live connection behind it. */
@@ -692,7 +705,17 @@ private fun Reader(
 
     suspend fun reload() {
         val (key, mailbox) = here ?: return
-        loading = true
+        /*
+         * What is already on disk goes up first, and the server is asked afterwards.
+         *
+         * The spinner is only for a folder we have never seen: showing a blank pane and a
+         * spinner over mail we already hold is the thing a local store exists to stop. A
+         * folder read once opens instantly and corrects itself a moment later.
+         */
+        val cached = if (key == ALL_ACCOUNTS || showingResults) emptyList()
+        else io { session(key).store?.messages(mailbox.id, unreadOnly = unreadOnly) }.orEmpty()
+        if (cached.isNotEmpty()) emails = cached
+        loading = cached.isEmpty()
         emails = if (key == ALL_ACCOUNTS) {
             // One account failing is not the whole list failing, so each is caught inside
             // rather than out here: the others still show.
@@ -701,11 +724,21 @@ private fun Reader(
             io {
                 if (showingResults && query.isNotBlank()) session(key).jmap.search(query, mailbox.id)
                 else session(key).jmap.emails(mailbox.id, unreadOnly = unreadOnly)
-            } ?: emptyList()
+            }
+                // The server is still the authority on search, because it can see mail we
+                // have never fetched. The local copy is the answer when it cannot be
+                // reached, which is the difference between "no results" and "no network".
+                ?: io { session(key).store?.search(query) }.takeIf { showingResults && query.isNotBlank() }
+                ?: emptyList()
         }
         loading = false
         exhausted = false
         learnFrom(emails)
+        // Written back after the server has answered, so the copy is what the server
+        // last said rather than what we guessed it would say.
+        if (key != ALL_ACCOUNTS && !showingResults && emails.isNotEmpty()) {
+            io { session(key).store?.put(mailbox.id, emails) }
+        }
     }
 
 
@@ -854,11 +887,19 @@ private fun Reader(
         // Kept apart from the shared error bar. A message that will not open has to say so
         // where the message would have been: a spinner that never stops is indistinguishable
         // from one that is still going, and it was being shown for a failure.
+        // A message read once opens with no round trip at all, which is most of what
+        // "instant" means in a mail client. Still re-fetched underneath, because a body
+        // can gain a decoded part or lose a broken one between reads.
+        val kept = io { session(key).store?.body(message.id) }
+        if (kept != null) body = kept
         body = try {
             withContext(Dispatchers.IO) { session(key).jmap.body(message.id) }
+                .also { fetched -> io { session(key).store?.putBody(message.id, fetched) } }
         } catch (e: Exception) {
-            bodyError = e.message ?: e.toString()
-            null
+            // Only a failure when there was nothing kept. Offline, with a copy on disk,
+            // is a message that opens rather than an error where the message should be.
+            if (kept == null) bodyError = e.message ?: e.toString()
+            kept
         }
         attachments = io { session(key).jmap.attachments(message.id) } ?: emptyList()
 
@@ -952,6 +993,9 @@ private fun Reader(
                 } ?: target.id
 
                 if (io { session(key).jmap.move(listOf(message.id), into) } != null) {
+                    // Out of the local copy as well, or the folder it left would show it
+                    // again the next time that folder is opened from disk.
+                    io { session(key).store?.forget(listOf(message.id)) }
                     emails = emails.filterNot { it.id == message.id }
                     if (selected?.id == message.id) {
                         selected = null
@@ -1587,6 +1631,9 @@ private fun Reader(
                                 }
                                 if (done.isNotEmpty()) {
                                     val moved = done.flatMap { it.second.ids }.toSet()
+                                    done.forEach { (key, move, _) ->
+                                        runCatching { session(key).store?.forget(move.ids) }
+                                    }
                                     emails = emails.filterNot { it.id in moved }
                                     picked = emptySet()
                                     selected = null
