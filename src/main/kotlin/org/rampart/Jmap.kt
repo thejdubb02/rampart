@@ -145,6 +145,17 @@ class Jmap private constructor(
         }.sortedWith(compareBy({ if (it.role == "inbox") 0 else 1 }, { it.name.lowercase() }))
     }
 
+    /**
+     * A string that changes whenever anything about this account's mail changes.
+     *
+     * Asking for zero messages still returns the type's state, so this is the cheapest
+     * question the protocol has: a few hundred bytes, against the several hundred kilobytes
+     * that re-reading the inbox costs. A check every minute is only reasonable because of
+     * it, and the inbox is read only on the checks where the answer has moved.
+     */
+    fun mailState(): String? =
+        call(invoke("Email/get", "s") { putJsonArray("ids") {} })[0][1].jsonObject["state"]?.str()
+
     fun emails(mailboxId: String, limit: Int = 100): List<Summary> {
         val responses = call(
             invoke("Email/query", "q") {

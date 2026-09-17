@@ -53,6 +53,8 @@ class Screenshots {
             SettingsPane(
                 accounts = ACCOUNTS,
                 update = "0.1.25",
+                notifyOnArrival = true,
+                onNotifyOnArrival = {},
                 onTheme = {},
                 onAddAccount = {},
                 onRestart = {},

@@ -77,11 +77,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.rememberWindowState
 import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.window.Notification
+import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
+import androidx.compose.ui.window.isTraySupported
+import androidx.compose.ui.window.rememberTrayState
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.awt.Desktop
@@ -151,6 +156,18 @@ fun main() = application {
         exitApplication()
     }
 
+    val tray = rememberTrayState()
+    // No tray on this desktop means no notifications, and nothing else changes. Constructing
+    // one anyway logs a warning on every start and still cannot deliver anything.
+    if (isTraySupported) {
+        Tray(
+            icon = icon,
+            state = tray,
+            tooltip = "Rampart",
+            onAction = { windowState.isMinimized = false },
+        )
+    }
+
     Window(
         onCloseRequest = ::quit,
         // The version lives in the sidebar. A title bar is for saying which app this is.
@@ -169,6 +186,9 @@ fun main() = application {
                     App(
                         onTheme = { theme = it; Settings.setTheme(it.key) },
                         onQuit = ::quit,
+                        notify = { title, message ->
+                            tray.sendNotification(Notification(title, message, Notification.Type.Info))
+                        },
                     )
                 }
             }
@@ -177,7 +197,7 @@ fun main() = application {
 }
 
 @Composable
-private fun App(onTheme: (Theme) -> Unit, onQuit: () -> Unit) {
+private fun App(onTheme: (Theme) -> Unit, onQuit: () -> Unit, notify: (String, String) -> Unit) {
     var sessions by remember { mutableStateOf<List<Session>>(emptyList()) }
     var adding by remember { mutableStateOf(false) }
     var restoring by remember { mutableStateOf(true) }
@@ -225,7 +245,7 @@ private fun App(onTheme: (Theme) -> Unit, onQuit: () -> Unit) {
             adding = false
         }
     } else {
-        Reader(sessions, onTheme, onQuit, onAddAccount = { adding = true })
+        Reader(sessions, onTheme, onQuit, notify, onAddAccount = { adding = true })
     }
 }
 
@@ -367,6 +387,7 @@ private fun Reader(
     sessions: List<Session>,
     onTheme: (Theme) -> Unit,
     onQuit: () -> Unit,
+    notify: (String, String) -> Unit,
     onAddAccount: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -380,6 +401,7 @@ private fun Reader(
     var searchFocused by remember { mutableStateOf(false) }
     var collapsed by remember { mutableStateOf(Settings.sidebarCollapsed()) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var notifyOnArrival by remember { mutableStateOf(Settings.notifyOnArrival()) }
     val searchField = remember { FocusRequester() }
     val keyboard = remember { FocusRequester() }
     var mailboxes by remember { mutableStateOf<Map<String, List<Mailbox>>>(emptyMap()) }
@@ -404,6 +426,7 @@ private fun Reader(
     }
 
     LaunchedEffect(Unit) { update = withContext(Dispatchers.IO) { Updates.newerVersion() } }
+
     LaunchedEffect(sessions.size) {
         sessions.filter { it.key !in mailboxes }.forEach { open ->
             val found = io { open.jmap.mailboxes() } ?: emptyList()
@@ -427,6 +450,46 @@ private fun Reader(
             else session(key).jmap.emails(mailbox.id)
         } ?: emptyList()
         loading = false
+    }
+
+    /**
+     * Mail that arrives while Rampart is open turns up on its own.
+     *
+     * Polling rather than JMAP push, because a poll is the same shape against every server
+     * and against IMAP later, and because the check itself is one small request: the inbox
+     * is only re-read on the rounds where the account's mail state has actually moved.
+     *
+     * A round that fails is skipped, not reported. The network dropping for a minute is not
+     * something to put a red bar on screen for, and the next round fixes it.
+     */
+    LaunchedEffect(sessions) {
+        val states = mutableMapOf<String, String>()
+        val seen = mutableMapOf<String, Set<String>>()
+        while (true) {
+            for (open in sessions) {
+                val inbox = mailboxes[open.key]?.firstOrNull { it.role == "inbox" } ?: continue
+                val found = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val state = open.jmap.mailState() ?: return@runCatching null
+                        if (state == states[open.key]) null
+                        else arrivals(state, open.jmap.emails(inbox.id, limit = 30), seen[open.key])
+                    }.getOrNull()
+                } ?: continue
+
+                states[open.key] = found.state
+                seen[open.key] = found.summaries.map { it.id }.toSet()
+                // The unread counts in the sidebar move when mail arrives and when it is
+                // read in another client, so they are refreshed on any change, not just on
+                // an arrival.
+                withContext(Dispatchers.IO) { runCatching { open.jmap.mailboxes() }.getOrNull() }
+                    ?.let { mailboxes = mailboxes + (open.key to it) }
+                if (here?.first == open.key && here?.second?.id == inbox.id && !showingResults) reload()
+                if (notifyOnArrival) arrivalText(found.fresh)?.let { (title, body) -> notify(title, body) }
+            }
+            // Until every account has been looked at once there is nothing to compare
+            // against, so those first rounds come quickly rather than a minute apart.
+            delay(if (states.size == sessions.size) 60_000 else 10_000)
+        }
     }
 
     LaunchedEffect(here) {
@@ -620,6 +683,8 @@ private fun Reader(
                         AccountMailboxes(it.key, it.account.name, it.account.email, mailboxes[it.key].orEmpty())
                     },
                     update = update,
+                    notifyOnArrival = notifyOnArrival,
+                    onNotifyOnArrival = { notifyOnArrival = it; Settings.setNotifyOnArrival(it) },
                     onTheme = onTheme,
                     onAddAccount = onAddAccount,
                     onRestart = { Updates.restartToUpdate(); onQuit() },

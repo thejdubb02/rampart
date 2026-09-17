@@ -27,6 +27,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -37,6 +38,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.isTraySupported
 import androidx.compose.foundation.Image
 
 /**
@@ -51,6 +53,8 @@ import androidx.compose.foundation.Image
 internal fun SettingsPane(
     accounts: List<AccountMailboxes>,
     update: String?,
+    notifyOnArrival: Boolean,
+    onNotifyOnArrival: (Boolean) -> Unit,
     onTheme: (Theme) -> Unit,
     onAddAccount: () -> Unit,
     onRestart: () -> Unit,
@@ -90,6 +94,25 @@ internal fun SettingsPane(
                     items(THEMES, key = { it.key }) { theme ->
                         ThemeCard(theme, selected = theme.key == current.key) { onTheme(theme) }
                     }
+                }
+
+                Spacer(Modifier.height(30.dp))
+                Section("Notifications", "Rampart checks for new mail every minute while it is open.")
+                Row(
+                    Modifier.fillMaxWidth().clickable { onNotifyOnArrival(!notifyOnArrival) }.padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Tell me when mail arrives", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            if (isTraySupported) "One notification per batch, not one per message."
+                            // Worth saying rather than leaving a switch that does nothing.
+                            else "This desktop has no notification area, so nothing will appear.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
+                    }
+                    Switch(checked = notifyOnArrival, onCheckedChange = onNotifyOnArrival, enabled = isTraySupported)
                 }
 
                 Spacer(Modifier.height(30.dp))

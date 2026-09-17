@@ -56,6 +56,11 @@ object Settings {
      */
     fun dark(): Boolean? = read()["dark"]?.jsonPrimitive?.booleanOrNull
 
+    /** On by default: a mail client that does not tell you about mail is a folder browser. */
+    fun notifyOnArrival(): Boolean = read()["notify"]?.jsonPrimitive?.booleanOrNull ?: true
+
+    fun setNotifyOnArrival(value: Boolean) = write { put("notify", JsonPrimitive(value)) }
+
     fun sidebarCollapsed(): Boolean = read()["sidebarCollapsed"]?.jsonPrimitive?.booleanOrNull ?: false
 
     fun setSidebarCollapsed(value: Boolean) =
