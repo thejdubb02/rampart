@@ -1,6 +1,8 @@
 package org.rampart
 
 import jakarta.mail.Flags
+import jakarta.mail.event.MessageCountAdapter
+import jakarta.mail.event.MessageCountEvent
 import jakarta.mail.Folder
 import jakarta.mail.Message
 import jakarta.mail.Multipart
@@ -43,6 +45,7 @@ internal class Imap private constructor(
     val host: String,
     private val user: String,
     private val password: String,
+    private val port: Int,
     private val sendHost: String,
     private val sendPort: Int,
 ) : MailBackend, AutoCloseable {
@@ -80,7 +83,7 @@ internal class Imap private constructor(
             val session = Session.getInstance(properties)
             val store = session.getStore("imap") as IMAPStore
             store.connect(host, port, user, password)
-            return Imap(store, host, user, password, sendHost, sendPort)
+            return Imap(store, host, user, password, port, sendHost, sendPort)
         }
     }
 
@@ -471,10 +474,29 @@ internal class Imap private constructor(
 
     // ---- what this protocol does not have -------------------------------------------
 
-    /** False. IDLE exists and is one connection per folder, which is its own piece of work. */
-    override val hasPush: Boolean get() = false
+    override val hasPush: Boolean get() = runCatching { store.hasCapability("IDLE") }.getOrDefault(false)
 
-    override fun watch(onChange: () -> Unit, onGone: () -> Unit): AutoCloseable? = null
+    /**
+     * IDLE on the inbox, so mail arrives rather than being found on the next poll.
+     *
+     * **On its own connection, because IDLE blocks the one it runs on.** Sharing the store
+     * would mean every folder listing and every message opened waiting behind a command
+     * whose whole purpose is not to return until something happens.
+     *
+     * One folder, not all of them. IDLE is per mailbox and a connection each is how a
+     * client ends up holding fifteen sockets open against somebody's server, which is the
+     * behaviour that gets a client throttled. The inbox is where mail arrives and the poll
+     * underneath still covers the rest.
+     *
+     * Null when the server does not offer IDLE, which is not a fault: the poll is what it
+     * has always been and push is the improvement on it.
+     */
+    override fun watch(onChange: () -> Unit, onGone: () -> Unit): AutoCloseable? {
+        if (!hasPush) return null
+        val inbox = runCatching { mailboxes().firstOrNull { it.role == "inbox" }?.id }.getOrNull() ?: return null
+        val watcher = Idler(host, port, user, password, inbox, onChange, onGone)
+        return watcher.takeIf { it.start() }
+    }
 
     override fun hasSieve(): Boolean = false
 
@@ -929,4 +951,91 @@ internal fun searchTerm(text: String): SearchTerm? {
         OrTerm(arrayOf(SubjectTerm(word), FromStringTerm(word), BodyTerm(word)))
     }
     return if (perWord.size == 1) perWord.first() else AndTerm(perWord.toTypedArray())
+}
+
+/**
+ * One IMAP connection doing nothing but waiting to be told something changed.
+ *
+ * Deliberately its own class rather than a lambda in [Imap.watch]: it owns a socket and a
+ * thread, and the thing that owns those is the thing that has to be able to give them back.
+ */
+private class Idler(
+    private val host: String,
+    private val port: Int,
+    private val user: String,
+    private val password: String,
+    private val mailbox: String,
+    private val onChange: () -> Unit,
+    private val onGone: () -> Unit,
+) : AutoCloseable {
+
+    @Volatile private var running = true
+    private var store: IMAPStore? = null
+    private var folder: IMAPFolder? = null
+    private var thread: Thread? = null
+
+    /** False when the connection could not be made, so the caller reports no push at all. */
+    fun start(): Boolean {
+        val opened = runCatching {
+            val session = Session.getInstance(
+                Properties().apply {
+                    put("mail.store.protocol", "imap")
+                    put("mail.imap.ssl.enable", "true")
+                    put("mail.imap.ssl.checkserveridentity", "true")
+                    put("mail.imap.connectiontimeout", "15000")
+                },
+            )
+            val opened = session.getStore("imap") as IMAPStore
+            opened.connect(host, port, user, password)
+            val selected = opened.getFolder(mailbox) as IMAPFolder
+            selected.open(Folder.READ_ONLY)
+            // **The notification arrives through a listener, not by idle() returning.**
+            // Checked against the live server: without this, idle() sat through a message
+            // actually being delivered and never woke, so push looked connected and did
+            // nothing at all, which is worse than not offering it.
+            selected.addMessageCountListener(
+                object : MessageCountAdapter() {
+                    override fun messagesAdded(event: MessageCountEvent) {
+                        if (running) onChange()
+                    }
+                },
+            )
+            opened to selected
+        }.getOrNull() ?: return false
+        store = opened.first
+        folder = opened.second
+        // A daemon thread, so a failure to stop it cleanly can never be the reason Rampart
+        // will not quit. idle() blocks with no timeout of its own and the stop below is a
+        // poke rather than an interrupt, which is exactly the shape that hangs on exit.
+        thread = Thread({ loop() }, "rampart-imap-idle").apply {
+            isDaemon = true
+            start()
+        }
+        return true
+    }
+
+    private fun loop() {
+        while (running) {
+            // true, so IDLE ends at the first notification and is issued again. Left to run
+            // on, the command has to be broken out of from another thread to be stopped,
+            // and a server drops an IDLE that has been open too long anyway.
+            val waited = runCatching { folder?.idle(true) }
+            if (!running) return
+            if (waited.isFailure) {
+                // The connection went, which is the case push exists to notice. The poll
+                // underneath carries on, so this is a downgrade rather than an outage.
+                onGone()
+                return
+            }
+        }
+    }
+
+    override fun close() {
+        running = false
+        // Any command on the folder ends IDLE, which is the documented way out of it and
+        // the only one that does not leave the server waiting on a socket nobody is reading.
+        runCatching { folder?.messageCount }
+        runCatching { folder?.close(false) }
+        runCatching { store?.close() }
+    }
 }
