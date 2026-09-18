@@ -679,6 +679,9 @@ private fun Reader(
     var collapsed by remember { mutableStateOf(Settings.sidebarCollapsed()) }
     var settingsOpen by remember { mutableStateOf(false) }
     var contactsOpen by remember { mutableStateOf(false) }
+    var dashboardOpen by remember { mutableStateOf(false) }
+    /** Null until it has been counted, which is one pass over the local copy. */
+    var stats by remember { mutableStateOf<MailStats?>(null) }
     // The server's cards, with the JSON each came from, so a save can be built on top
     // of it and leave the properties this build does not draw alone.
     var contacts by remember { mutableStateOf<List<Pair<Contact, JsonObject>>>(emptyList()) }
@@ -1099,6 +1102,31 @@ private fun Reader(
      * Stalwart 0.16 and answers serverUnavailable in every form, so there is no paging to
      * do and nothing to search server side.
      */
+    /*
+     * Counted on opening, and again whenever the list underneath has moved.
+     *
+     * Not on a timer and not in the background: it is a handful of queries over a local
+     * file, so it is cheap when somebody is looking at it and pointless when nobody is.
+     */
+    LaunchedEffect(dashboardOpen, emails, here) {
+        if (!dashboardOpen) return@LaunchedEffect
+        val key = here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key
+            ?: return@LaunchedEffect
+        val boxes = mailboxes[key].orEmpty()
+        val inbox = folderFor("inbox", boxes)?.id ?: return@LaunchedEffect
+        val mine = identities[key].orEmpty().map { it.email }.toSet()
+        stats = withContext(Dispatchers.IO) {
+            runCatching {
+                session(key).store?.stats(
+                    inbox = inbox,
+                    sent = listOfNotNull(folderFor("sent", boxes)?.id),
+                    junk = listOfNotNull(folderFor("junk", boxes)?.id),
+                    mine = mine,
+                )
+            }.getOrNull()
+        }
+    }
+
     LaunchedEffect(contactsOpen, sessions.size) {
         val key = writingAccount() ?: return@LaunchedEffect
         if (contacts.isNotEmpty() && !contactsOpen) return@LaunchedEffect
@@ -1656,7 +1684,8 @@ private fun Reader(
                 if (key != null) folderAsk = FolderAsk(key, null, FolderJob.CreateInside)
             }
             "settings" -> { settingsOpen = true; contactsOpen = false }
-            "contacts" -> { contactsOpen = true; settingsOpen = false }
+            "contacts" -> { contactsOpen = true; settingsOpen = false; dashboardOpen = false }
+            "dashboard" -> { dashboardOpen = true; settingsOpen = false; contactsOpen = false }
             "shortcuts" -> showShortcuts = true
         }
     }
@@ -2003,9 +2032,11 @@ private fun Reader(
                 },
                 dragAt = dragAt,
                 onTagBounds = { key, keyword, bounds -> tagBounds[key to keyword] = bounds },
-                onSettings = { settingsOpen = !settingsOpen; if (settingsOpen) contactsOpen = false },
+                onSettings = { settingsOpen = !settingsOpen; if (settingsOpen) { contactsOpen = false; dashboardOpen = false } },
+                onDashboard = { dashboardOpen = !dashboardOpen; if (dashboardOpen) { contactsOpen = false; settingsOpen = false } },
+                inDashboard = dashboardOpen,
                 inSettings = settingsOpen,
-                onContacts = { contactsOpen = !contactsOpen; if (contactsOpen) settingsOpen = false },
+                onContacts = { contactsOpen = !contactsOpen; if (contactsOpen) { settingsOpen = false; dashboardOpen = false } },
                 inContacts = contactsOpen,
                 onAddAccount = onAddAccount,
                 collapsed = collapsed,
@@ -2028,7 +2059,18 @@ private fun Reader(
                 )
             }
             VerticalDivider()
-            if (contactsOpen) {
+            if (dashboardOpen) {
+                DashboardPane(
+                    stats = stats,
+                    accountName = (here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key)
+                        ?.let { key -> sessions.firstOrNull { it.key == key } }
+                        ?.let { shortAccountName(it.account.name, it.account.email) }.orEmpty(),
+                    onOpen = { message ->
+                        dashboardOpen = false
+                        selected = message
+                    },
+                )
+            } else if (contactsOpen) {
                 ContactsPane(
                     contacts = contacts.map { it.first },
                     loading = contactsLoading,
@@ -2557,9 +2599,11 @@ internal fun Sidebar(
     collapsed: Boolean = false,
     inSettings: Boolean = false,
     inContacts: Boolean = false,
+    inDashboard: Boolean = false,
     onToggleCollapsed: () -> Unit = {},
     onSettings: () -> Unit,
     onContacts: () -> Unit = {},
+    onDashboard: () -> Unit = {},
     onAddAccount: () -> Unit,
     onWrite: () -> Unit,
     /** What a right-click on a folder can ask for. Null hides the menu entirely. */
@@ -2732,6 +2776,15 @@ internal fun Sidebar(
         }
 
         if (collapsed) {
+            IconButton(onClick = onDashboard, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    RampartIcons.Dashboard,
+                    contentDescription = "How your mail is going",
+                    tint = if (inDashboard) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
             IconButton(onClick = onContacts, modifier = Modifier.size(32.dp)) {
                 Icon(
                     RampartIcons.Contacts,
@@ -2765,6 +2818,15 @@ internal fun Sidebar(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 TextButton(onClick = onAddAccount) { Text("Add account", style = MaterialTheme.typography.bodySmall) }
+                IconButton(onClick = onDashboard, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        RampartIcons.Dashboard,
+                        contentDescription = "How your mail is going",
+                        tint = if (inDashboard) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
                 IconButton(onClick = onContacts, modifier = Modifier.size(28.dp)) {
                     Icon(
                         RampartIcons.Contacts,

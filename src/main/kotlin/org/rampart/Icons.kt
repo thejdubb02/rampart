@@ -73,6 +73,7 @@ internal interface IconPack {
     val Read: ImageVector
     val Contacts: ImageVector
     val Search: ImageVector
+    val Dashboard: ImageVector
 
 }
 
@@ -133,6 +134,8 @@ internal object LineIcons : IconPack {
         "M9 3.4a2.7 2.7 0 1 1 0 5.4 2.7 2.7 0 0 1 0-5.4M3.6 15.4a5.4 5.4 0 0 1 10.8 0",
     )
     override val Search = icon("Search", "M8.1 2.6a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11M12.2 12.2 15.6 15.6")
+    // Three bars of different heights, which is what a chart looks like at 16 pixels.
+    override val Dashboard = icon("Dashboard", "M3.4 15V9.6M9 15V3.4M14.6 15v-8")
     override val Back = icon("Back", "M15 9H3.6M8 3.6 2.6 9l5.4 5.4")
     override val Collapse = icon("Collapse", "m10.5 4-5 5 5 5")
     override val Expand = icon("Expand", "m7 4 5 5-5 5")
@@ -200,6 +203,7 @@ internal object HeavyIcons : IconPack by LineIcons {
     override val label = "Heavy"
     override val Inbox by lazy { heavy(LineIcons.Inbox) }
     override val Contacts by lazy { heavy(LineIcons.Contacts) }
+    override val Dashboard by lazy { heavy(LineIcons.Dashboard) }
     override val Search by lazy { heavy(LineIcons.Search) }
     override val Archive by lazy { heavy(LineIcons.Archive) }
     override val Drafts by lazy { heavy(LineIcons.Drafts) }

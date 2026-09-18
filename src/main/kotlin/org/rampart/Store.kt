@@ -253,6 +253,170 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             }
         }
 
+    /**
+     * Everything the dashboard counts, in five queries over the local copy.
+     *
+     * Assembled here rather than by the pane, because these are SQL and the arithmetic on
+     * top of them is in `Dashboard.kt`, where it can be tested without a database.
+     *
+     * [mine] is the addresses that count as you, so a conversation waiting on an answer can
+     * be told from one you already answered. [sent] and [junk] are folder ids rather than
+     * names, because the role is what finds them and the name is whatever the server calls
+     * it in whatever language.
+     */
+    fun stats(
+        inbox: String,
+        sent: List<String>,
+        junk: List<String>,
+        mine: Set<String>,
+        days: Int = 30,
+        now: java.time.Instant = java.time.Instant.now(),
+        zone: java.time.ZoneId = java.time.ZoneId.systemDefault(),
+    ): MailStats {
+        val since = now.minus(java.time.Duration.ofDays(days.toLong())).toString()
+        val arrived = receivedAtIn(listOf(inbox) + junk, since)
+        val junked = receivedAtIn(junk, since)
+        return MailStats(
+            received = byDay(arrived, days, now.atZone(zone).toLocalDate(), zone),
+            sent = byDay(receivedAtIn(sent, since), days, now.atZone(zone).toLocalDate(), zone),
+            junk = junked.size,
+            arrived = arrived.size,
+            topSenders = topSenders(listOf(inbox), since),
+            unread = unreadByAge(unreadIn(inbox), now),
+            waiting = awaiting(inbox, sent, mine),
+            replyMinutes = replyGaps(inbox, sent),
+            kept = count("SELECT COUNT(*) FROM message"),
+        )
+    }
+
+    /** The timestamps of everything in [mailboxes] since [since], which is all a count needs. */
+    private fun receivedAtIn(mailboxes: List<String>, since: String): List<String> {
+        if (mailboxes.isEmpty()) return emptyList()
+        return connection.prepareStatement(
+            "SELECT receivedAt FROM message WHERE mailbox IN (${holders(mailboxes.size)}) AND receivedAt >= ?",
+        ).use { s ->
+            mailboxes.forEachIndexed { at, box -> s.setString(at + 1, box) }
+            s.setString(mailboxes.size + 1, since)
+            s.executeQuery().use { rows -> buildList { while (rows.next()) add(rows.getString(1)) } }
+        }
+    }
+
+    private fun unreadIn(mailbox: String): List<String> =
+        connection.prepareStatement("SELECT receivedAt FROM message WHERE mailbox = ? AND seen = 0").use { s ->
+            s.setString(1, mailbox)
+            s.executeQuery().use { rows -> buildList { while (rows.next()) add(rows.getString(1)) } }
+        }
+
+    /**
+     * Who writes to you most, by address rather than by name.
+     *
+     * The same person sends as "Dana Whitfield" and as "Dana" and as nothing at all; the
+     * address is the only stable part, so the count is on that and the name shown is
+     * whichever one they used most recently.
+     */
+    private fun topSenders(mailboxes: List<String>, since: String, limit: Int = 8): List<Counted> {
+        if (mailboxes.isEmpty()) return emptyList()
+        return connection.prepareStatement(
+            """
+            SELECT senderEmail, COUNT(*) n,
+                   (SELECT sender FROM message m2 WHERE m2.senderEmail = m.senderEmail
+                    ORDER BY m2.receivedAt DESC LIMIT 1) name
+            FROM message m
+            WHERE mailbox IN (${holders(mailboxes.size)}) AND receivedAt >= ? AND senderEmail <> ''
+            GROUP BY senderEmail ORDER BY n DESC LIMIT ?
+            """.trimIndent(),
+        ).use { s ->
+            mailboxes.forEachIndexed { at, box -> s.setString(at + 1, box) }
+            s.setString(mailboxes.size + 1, since)
+            s.setInt(mailboxes.size + 2, limit)
+            s.executeQuery().use { rows ->
+                buildList {
+                    while (rows.next()) {
+                        val email = rows.getString("senderEmail")
+                        add(Counted(rows.getString("name")?.ifBlank { email } ?: email, rows.getInt("n"), email))
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Conversations in the inbox whose last word is somebody else's.
+     *
+     * The one thing on the dashboard that is about something still to do, so it is the one
+     * worth getting right. A thread counts as answered when anything in it sits in Sent, or
+     * when its newest message came from one of your own addresses: replying from a phone
+     * leaves a copy in Sent, replying from a client that does not leaves the thread with
+     * your message newest, and both mean the same thing.
+     */
+    private fun awaiting(inbox: String, sent: List<String>, mine: Set<String>, limit: Int = 12): List<Summary> {
+        val answered = if (sent.isEmpty()) emptySet() else connection.prepareStatement(
+            "SELECT DISTINCT thread FROM message WHERE mailbox IN (${holders(sent.size)}) AND thread <> ''",
+        ).use { s ->
+            sent.forEachIndexed { at, box -> s.setString(at + 1, box) }
+            s.executeQuery().use { rows -> buildSet { while (rows.next()) add(rows.getString(1)) } }
+        }
+        val lowered = mine.map { it.lowercase() }.toSet()
+        return connection.prepareStatement(
+            "SELECT * FROM message WHERE mailbox = ? ORDER BY receivedAt DESC LIMIT 400",
+        ).use { s ->
+            s.setString(1, inbox)
+            s.executeQuery().use { rows ->
+                val newest = LinkedHashMap<String, Summary>()
+                while (rows.next()) {
+                    val message = summaryOf(rows)
+                    // Ordered newest first, so the first of a thread seen here is its newest.
+                    newest.putIfAbsent(message.threadId.ifBlank { message.id }, message)
+                }
+                newest.values
+                    .filter { it.threadId !in answered }
+                    .filter { it.fromEmail.lowercase() !in lowered }
+                    .sortedBy { it.receivedAt }
+                    .take(limit)
+            }
+        }
+    }
+
+    /**
+     * How long each answered conversation waited, in minutes.
+     *
+     * The gap between the newest message that arrived in a thread and the first one sent
+     * after it. A reply sent before the message it answers is a clock disagreement between
+     * two servers, not a negative reply time, so it is dropped rather than shown.
+     */
+    private fun replyGaps(inbox: String, sent: List<String>): List<Long> {
+        if (sent.isEmpty()) return emptyList()
+        val arrived = HashMap<String, String>()
+        connection.prepareStatement(
+            "SELECT thread, MIN(receivedAt) at FROM message WHERE mailbox = ? AND thread <> '' GROUP BY thread",
+        ).use { s ->
+            s.setString(1, inbox)
+            s.executeQuery().use { rows -> while (rows.next()) arrived[rows.getString(1)] = rows.getString(2) }
+        }
+        return connection.prepareStatement(
+            "SELECT thread, MIN(receivedAt) at FROM message WHERE mailbox IN (${holders(sent.size)}) " +
+                "AND thread <> '' GROUP BY thread",
+        ).use { s ->
+            sent.forEachIndexed { at, box -> s.setString(at + 1, box) }
+            s.executeQuery().use { rows ->
+                buildList {
+                    while (rows.next()) {
+                        val came = arrived[rows.getString(1)]?.let(::instantOf) ?: continue
+                        val answered = instantOf(rows.getString(2)) ?: continue
+                        val minutes = java.time.Duration.between(came, answered).toMinutes()
+                        if (minutes >= 0) add(minutes)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun count(sql: String): Int = connection.prepareStatement(sql).use { s ->
+        s.executeQuery().use { rows -> if (rows.next()) rows.getInt(1) else 0 }
+    }
+
+    private fun holders(n: Int) = List(n) { "?" }.joinToString(",")
+
     fun putBody(id: String, body: Body) {
         connection.prepareStatement(
             "INSERT INTO body (id, html, text) VALUES (?,?,?) " +

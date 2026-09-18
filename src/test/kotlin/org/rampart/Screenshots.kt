@@ -118,6 +118,42 @@ class Screenshots {
                 onLink = {},
             )
         }
+        shoot("dashboard", 1100, 1000, dark) {
+            val today = java.time.LocalDate.of(2026, 9, 18)
+            // A month that looks like a month: busier on weekdays, quiet at the weekend.
+            val arrivals = (29 downTo 0).map { back ->
+                val day = today.minusDays(back.toLong())
+                val weekend = day.dayOfWeek.value >= 6
+                DayCount(day, if (weekend) 2 + back % 3 else 9 + (back * 7) % 23)
+            }
+            val answers = arrivals.map { DayCount(it.day, (it.count / 3).coerceAtMost(9)) }
+            DashboardPane(
+                stats = MailStats(
+                    received = arrivals,
+                    sent = answers,
+                    junk = 41,
+                    arrived = arrivals.sumOf { it.count } + 41,
+                    topSenders = listOf(
+                        Counted("Dana Whitfield", 34, "dana@example.org"),
+                        Counted("Alex Moreau", 21, "alex@example.org"),
+                        Counted("Cass Nguyen", 14, "cass@example.org"),
+                        Counted("billing@supplier.example", 9, "billing@supplier.example"),
+                        Counted("Priya Raman", 4, "priya@example.org"),
+                    ),
+                    unread = listOf(
+                        Counted("Today", 12),
+                        Counted("This week", 31),
+                        Counted("This month", 8),
+                        Counted("Older", 63),
+                    ),
+                    waiting = MESSAGES.take(4),
+                    replyMinutes = listOf(45L, 91L, 130L, 240L, 1_400L),
+                    kept = 4_812,
+                ),
+                accountName = "Willhite Strategy",
+                onOpen = {},
+            )
+        }
         shoot("invitation", 900, 620, dark) {
             Message(
                 summary = MESSAGES[1].copy(subject = "Invitation: Quarterly review"),

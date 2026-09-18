@@ -113,6 +113,20 @@ Worth saying: this is the one area where a half-built implementation is worse th
 none. A client that says a message is signed when it has not really checked is a lie
 with consequences.
 
+### 2.10b The mailbox dashboard
+
+**Rampart only.** Not a webmail feature at all, and the first screen here that has no
+counterpart over there. Thirty days of arrivals against answers on one scale, the junk
+share, how fast you reply as a median rather than a mean, who writes to you most, unread
+sorted by how long it has been ignored, and the conversations whose last word is somebody
+else's, oldest first.
+
+**Every number comes out of the local copy**, so it needs no server, no endpoint, no
+setting and no model, and it works on Stalwart, on Gmail, on plain IMAP and offline. It
+also says on screen how many messages it counted, because it describes what has been
+fetched rather than what exists on the server, and a month's figures read off a week's mail
+would be a lie told with a straight face.
+
 ### 2.11 Accounts beyond your own
 
 **Need, low for now.** Shared folders, group and delegated accounts. Relevant the day
@@ -168,13 +182,12 @@ yet.
 ## 4. Order of work
 
 Items 1 to 7 of the original order shipped between 2026-09-17 and 2026-09-18. On
-2026-09-18 the message body moved to a real engine, and identities and sending, tags, and
-calendar invitations all finished. What is left, in the order it will be missed:
+2026-09-18 the message body moved to a real engine, identities and sending, tags and
+calendar invitations all finished, and the mailbox dashboard shipped, which is the first
+screen Rampart has that webmail has no answer to. What is left, in the order it will be
+missed:
 
-1. **The mailbox dashboard.** Not a Bulwark feature at all, and the first place Rampart
-   goes past it. Every number comes out of the local store, so it needs no server, no
-   setting and no model.
-2. **Encryption** (2.10). S/MIME and PGP. Last on purpose, and the one place where a
+1. **Encryption** (2.10). S/MIME and PGP. Last on purpose, and the one place where a
    half-built implementation is worse than none.
 
 The original note about IMAP sitting at 5 rather than 1 held: every feature above it was
