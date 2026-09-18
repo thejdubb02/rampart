@@ -169,10 +169,10 @@ class Screenshots {
                     messageId = listOf("010001a0b4d211ba-0171d9a7@email.amazonses.com"),
                     to = listOf("markl@americantank.com", "tom@duchamphotel.com",
                         "michelle@duchamphotel.com", "stay@duchamphotel.com"),
-                    authenticationResults = listOf("""mx.skybox7.com; dkim=pass header.d=skybox7.com header.s=s1; spf=pass smtp.mailfrom=cfbounces@amazonses.com; dmarc=pass (p=none) header.from=skybox7.com"""),
+                    authenticationResults = listOf("""mx.blueprint.example; dkim=pass header.d=blueprint.example header.s=s1; spf=pass smtp.mailfrom=cfbounces@amazonses.com; dmarc=pass (p=none) header.from=blueprint.example"""),
                     size = 155_781L,
                     sentAt = "Fri, 18 Sep 2026 07:01:01 -0700",
-                    received = listOf("""from a48-96.smtp-out.amazonses.com (a48-96.smtp-out.amazonses.com [54.240.48.96]) by mx.skybox7.com"""),
+                    received = listOf("""from a48-96.smtp-out.amazonses.com (a48-96.smtp-out.amazonses.com [54.240.48.96]) by mx.blueprint.example"""),
                 ),
                 showDetails = true,
                 onLink = {},
@@ -530,7 +530,7 @@ private val MAILBOXES = listOf(
 
 private val ACCOUNTS = listOf(
     AccountMailboxes("work", "Willhite Strategy", "justin@willhitestrategy.com", MAILBOXES),
-    AccountMailboxes("personal", "Skybox7", "admin@skybox7.com", MAILBOXES.take(3)),
+    AccountMailboxes("personal", "Blueprint", "admin@blueprint.example", MAILBOXES.take(3)),
 )
 
 /** Every row action present, so a shot shows the whole menu rather than part of it. */
@@ -634,7 +634,7 @@ private fun SettingsScreen(page: String) {
                         """<a href="https://willhitestrategy.com">willhitestrategy.com</a>""" +
                         """</td></tr></table></div>""",
                 ),
-                Identity("i2", "Skybox7", "admin@skybox7.com"),
+                Identity("i2", "Blueprint", "admin@blueprint.example"),
             ),
             vacation = Vacation(
                 enabled = true,

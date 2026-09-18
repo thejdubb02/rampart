@@ -56,10 +56,9 @@ about how it works is a feature nobody can make an informed decision about.
 
 ## Why not just use Resend, which we already have
 
-Resend's open tracking is on for `willhitestrategy.com` and `.org`, and
-`wsg-mail-open-label` on vps1 already turns its webhooks into a `$label:opened` keyword on
-the matching message in Sent. That is real and it works. Two reasons it does not answer
-this:
+We already run Resend with open tracking on, and a small service of ours already turns its
+webhooks into a `$label:opened` keyword on the matching message in Sent. That is real and
+it works. Two reasons it does not answer this:
 
 **It only covers mail sent through Resend.** Rampart submits through Stalwart, so nothing
 it sends is tracked today. Routing Rampart's outbound through Resend to get tracking would
@@ -90,11 +89,11 @@ message was to, so it does not get to.
 ### The endpoint, and the fact that a desktop app does not have one
 
 This is where the first design was wrong, and it was wrong in the way every feature here
-can be wrong: it assumed our server. The first draft put the pixel on vps1 and had it set
+can be wrong: it assumed our server. The first draft put the pixel on a box of ours and set
 the keyword through the Stalwart admin token. That works for exactly one person.
 
 **Rampart is a desktop app somebody else installs.** They have a mailbox. They do not have
-a public web server, they do not have our vps1, and they certainly do not have admin rights
+a public web server, they do not have a box of ours, and they certainly do not have admin rights
 on their mail server, which a mail client should never ask for.
 
 So the pixel host is **a separate, optional, self-hosted thing**, and Rampart only needs to
@@ -108,8 +107,7 @@ be pointed at it:
 - The server itself is about a hundred lines and a Dockerfile, in this repo under
   `tracker/`, so running one is a compose file and a DNS record. It serves the GIF, keeps
   the log, and answers one authenticated question: what has been opened since this time.
-- Ours runs on vps1 next to the Resend labeller. That is our deployment, not part of the
-  product.
+- Ours runs next to the Resend labeller. That is our deployment, not part of the product.
 
 | | |
 |---|---|
@@ -225,8 +223,8 @@ of it is somebody else's job here already.
 
 The open notification is a desktop notification, which every install gets. Getting it
 somewhere else is one optional setting: a webhook URL that Rampart posts to. Ours points at
-Herald, which already carries the bounce alerts, so that part is configuration rather than
-code, and nobody else has to have a Herald to get the feature.
+the notification router that already carries our bounce alerts, so that part is
+configuration rather than code, and nobody else needs one to get the feature.
 
 ### Bot filtering, since it is the whole difference
 

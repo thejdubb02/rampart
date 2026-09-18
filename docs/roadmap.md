@@ -20,8 +20,7 @@ matters. Everything after it is the reasoning, kept so the order can be challeng
 something better rather than with a preference.
 
 The same list is on the **Rampart board in Kaneo**
-(`kaneo.willhitestrategy.org`, workspace Willhite Strategy Group, project RAM), one card
-each, carrying the same done-when. The board is for tracking what is moving; this file is
+(our own board, project RAM), one card each, carrying the same done-when. The board is for tracking what is moving; this file is
 for the reasoning behind the order. When they disagree, this file is wrong and should be
 fixed, because a card is easy to drag and an argument is not.
 
@@ -39,7 +38,8 @@ Three rules for keeping it true:
 ## The test every feature has to pass: somebody who is not us
 
 Rampart is public and Apache 2.0, and the person installing it has a mailbox and nothing
-else. No vps1, no Herald, no Vaultwarden, no admin rights on their mail server, and no
+else. No server of ours, no notification router, no password vault, no admin rights on
+their mail server, and no
 willingness to acquire any of those to read their email.
 
 So every feature is designed against that person first, and our own deployment is treated

@@ -96,7 +96,7 @@ releases and a released version is simply the count at the moment it went out.
 
 ## The board is the status, and it is kept current as we go
 
-**Kaneo, workspace Willhite Strategy Group, project RAM** (`kaneo.willhitestrategy.org`).
+**Kaneo, workspace Willhite Strategy Group, project RAM.**
 Justin reads it to see where things are and what is coming, so a card that is out of date
 is worse than no card: it is a wrong answer to the question he opened it to ask.
 

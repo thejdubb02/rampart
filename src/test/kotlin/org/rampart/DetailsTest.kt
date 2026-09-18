@@ -12,16 +12,16 @@ import kotlin.test.assertTrue
  */
 class DetailsTest {
     private val real =
-        "mx.skybox7.com; dkim=pass header.d=skybox7.com header.s=s1; " +
-            "spf=pass smtp.mailfrom=cfbounces+ndrdrop@skybox7.com; " +
-            "dmarc=pass (p=none sp=none dis=none) header.from=skybox7.com"
+        "mx.blueprint.example; dkim=pass header.d=blueprint.example header.s=s1; " +
+            "spf=pass smtp.mailfrom=cfbounces+ndrdrop@blueprint.example; " +
+            "dmarc=pass (p=none sp=none dis=none) header.from=blueprint.example"
 
     @Test
     fun `each check comes back with what it was checked against`() {
         val checks = authChecks(real).associateBy { it.label }
         assertEquals(Check.PASS, checks.getValue("SPF").verdict)
-        assertEquals("cfbounces+ndrdrop@skybox7.com", checks.getValue("SPF").value)
-        assertEquals("skybox7.com", checks.getValue("DKIM").value)
+        assertEquals("cfbounces+ndrdrop@blueprint.example", checks.getValue("SPF").value)
+        assertEquals("blueprint.example", checks.getValue("DKIM").value)
         assertEquals("policy: none", checks.getValue("DMARC").value)
     }
 
@@ -45,20 +45,20 @@ class DetailsTest {
     fun `only our own server's line is read`() {
         // A forwarder further down must not be able to vouch for a message ours could not
         // verify. The topmost line is the one our server wrote.
-        val stacked = "mx.skybox7.com; dkim=fail\nrelay.elsewhere.test; dkim=pass"
+        val stacked = "mx.blueprint.example; dkim=fail\nrelay.elsewhere.test; dkim=pass"
         assertEquals(Check.FAIL, authChecks(stacked).first { it.label == "DKIM" }.verdict)
     }
 
     @Test
     fun `a folded header still gives up its results`() {
-        val folded = "mx.skybox7.com;\r\n\tspf=pass smtp.mailfrom=a@skybox7.com"
+        val folded = "mx.blueprint.example;\r\n\tspf=pass smtp.mailfrom=a@blueprint.example"
         assertEquals(Check.PASS, authChecks(folded).first { it.label == "SPF" }.verdict)
     }
 
     @Test
     fun `the hop that handed it over is named and addressed`() {
         val host = senderHost(
-            listOf("from a48-96.smtp-out.amazonses.com (a48-96.smtp-out.amazonses.com [54.240.48.96]) by mx.skybox7.com"),
+            listOf("from a48-96.smtp-out.amazonses.com (a48-96.smtp-out.amazonses.com [54.240.48.96]) by mx.blueprint.example"),
         )
         assertEquals("Reverse DNS", host?.label)
         assertTrue(host!!.value.contains("54.240.48.96"))
@@ -75,19 +75,19 @@ class DetailsTest {
     @Test
     fun `no Received at all is nothing to show rather than an empty row`() {
         assertNull(senderHost(emptyList()))
-        assertNull(senderHost(listOf("by mx.skybox7.com with LMTP")))
+        assertNull(senderHost(listOf("by mx.blueprint.example with LMTP")))
     }
 
     @Test
     fun `via names the sending domain only when it differs from the one claimed`() {
         assertEquals(
             "amazonses.com",
-            sentVia("admin@skybox7.com", "mx; spf=pass smtp.mailfrom=bounce@amazonses.com"),
+            sentVia("admin@blueprint.example", "mx; spf=pass smtp.mailfrom=bounce@amazonses.com"),
         )
-        assertNull(sentVia("admin@skybox7.com", "mx; spf=pass smtp.mailfrom=a@skybox7.com"))
+        assertNull(sentVia("admin@blueprint.example", "mx; spf=pass smtp.mailfrom=a@blueprint.example"))
         // A subdomain bouncing for its own parent is one organisation, not a via.
-        assertNull(sentVia("admin@skybox7.com", "mx; spf=pass smtp.mailfrom=a@bounces.skybox7.com"))
-        assertNull(sentVia("admin@skybox7.com", null))
+        assertNull(sentVia("admin@blueprint.example", "mx; spf=pass smtp.mailfrom=a@bounces.blueprint.example"))
+        assertNull(sentVia("admin@blueprint.example", null))
     }
 
     @Test

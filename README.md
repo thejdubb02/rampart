@@ -1,26 +1,92 @@
-# Rampart
+<div align="center">
 
-A desktop mail client, built for [Stalwart](https://stalw.art) and happy on anything
-else. Your mail and your whole server, in one native window, on Windows, Linux and
-macOS.
+<img src="branding/Rampart_Logo_with_Lettering_Color.png" width="360" alt="Rampart">
 
-**Type your email address and Rampart finds the rest.** It asks what your domain
-publishes about itself, tries [JMAP](https://jmap.io) first and falls back to IMAP, and
-signs in with the first server that answers. There is a box for the hostname if your
-domain says nothing, and most people will never open it.
+### Your mail and your whole mail server, in one native desktop window.
 
-**JMAP where you have it, and it is not a formality.** IMAP can move messages and very
-little else: it has no way to carry your filter rules, your aliases, your vacation
-responder, your app passwords or your server's own settings, so every IMAP client,
-however good, leaves nine tenths of a modern mail server invisible and sends you to a
-browser for the rest. Rampart on a JMAP server shows all of it in the same window as
-your mail.
+[![Latest release](https://img.shields.io/github/v/release/thejdubb02/rampart?label=download&color=c2185b)](https://github.com/thejdubb02/rampart/releases/latest)
+[![Licence](https://img.shields.io/badge/licence-Apache%202.0-blue)](LICENSE)
+![Windows and Linux](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)
+![Kotlin](https://img.shields.io/badge/built%20with-Kotlin%20%2B%20Compose-7f52ff)
 
-**IMAP where you do not.** Reading, writing, sending, searching, folders, attachments
-and flags all work against any IMAP and SMTP server that takes a password. What the
-protocol cannot do is absent with a sentence saying why, never a button that fails. That
-is the difference between a mail client you can recommend to somebody and one that only
-works if they run the same server you do.
+</div>
+
+<p align="center">
+  <img src="docs/images/reader.png" width="900" alt="Rampart reading a message, with two accounts in the sidebar">
+</p>
+
+Rampart is a desktop mail client that treats your mail server as part of the application
+rather than as something you go and configure in a browser.
+
+**Type your email address and it finds the rest.** It asks what your domain publishes
+about itself, tries [JMAP](https://jmap.io) first and falls back to IMAP, and signs in
+with the first server that answers. There is a box for the hostname if your domain says
+nothing, and most people will never open it.
+
+## Built for Stalwart
+
+Rampart is designed against [Stalwart](https://stalw.art) first, and if that is your mail
+server this is a client built with it in mind. Stalwart speaks JMAP, and JMAP is what
+makes the second half of this application possible: **your account settings and your
+server settings, managed from the same window as your mail.**
+
+IMAP can move messages and very little else. It has no way to carry your filter rules,
+your aliases, your vacation responder, your app passwords or your server's own
+configuration, so every IMAP client, however good it is, leaves nine tenths of a modern
+mail server invisible and sends you to a browser for the rest.
+
+| | Today | Being built |
+|---|---|---|
+| **Mail** | Read, write, send, search, file, offline | |
+| **Your account** | Sieve filter rules with a builder, vacation responder, signatures, contacts, quota | App passwords, API keys, aliases |
+| **Your server** | | Accounts, domains, DKIM, the mail queue, certificates, TLS, listeners, logs |
+
+The account and server screens are rendered from the server's own published schema rather
+than hand written, so they stay correct when Stalwart adds a field. See
+[docs/architecture.md](docs/architecture.md).
+
+**And it works on anything else.** Reading, writing, sending, searching, folders,
+attachments and flags all work against any IMAP and SMTP server that takes a password.
+What the protocol cannot do is absent with a sentence saying why, never a button that
+fails. That is the difference between a mail client you can recommend to somebody and one
+that only works if they run the same server you do.
+
+## What it does today
+
+**Reading.** Threaded conversations, a unified inbox across accounts, instant offline
+search, push over the JMAP WebSocket. HTML drawn as blocks, with a browser engine only
+where a message genuinely needs one. Pictures in the flow, remote images held per sender,
+links confirmed before they open.
+
+**Knowing what a message is.** A word above anything that cannot prove who sent it, from
+the SPF, DKIM and DMARC results the server already recorded. Trackers named rather than
+silently blocked. One-click unsubscribe, view source, save as `.eml`.
+
+**Writing.** Bold, italic, links, lists and inline pictures. Recipient autocomplete from
+your address book and your own mail history. Templates that fill placeholders from the
+recipient. Read receipts, requested and answered as a draft rather than a message that
+sends itself. Undo-send on a timer you choose.
+
+**Keeping a mailbox.** Star, tag, archive, spam, trash, one at a time or in a batch, all
+undoable. Snooze a message until later. Create, rename, nest and delete folders. Filters
+as Sieve, built in the UI or written by hand, in the format your webmail already reads.
+
+**Calendar invitations** answered in place, **contacts** on the server, **a dashboard**
+that counts what is already in the mailbox, and **open tracking** switched on one message
+at a time and never by default.
+
+<p align="center">
+  <img src="docs/images/dashboard.png" width="440" alt="The mailbox dashboard">
+  <img src="docs/images/settings-filters.png" width="440" alt="The Sieve filter builder">
+</p>
+<p align="center">
+  <img src="docs/images/invitation.png" width="440" alt="A calendar invitation answered in place">
+  <img src="docs/images/reader-dark.png" width="440" alt="Rampart in a dark theme">
+</p>
+
+Eighteen themes, the window's title bar included. Keyboard shortcuts with the list on `?`,
+a command palette on Ctrl+K, passwords in the operating system's credential store, and it
+updates itself.
 
 ## Install it
 
@@ -45,23 +111,16 @@ On Linux, take the `.deb` from the
 macOS is not built yet: an unnotarised build is worse than none, and notarising needs a
 paid Apple account.
 
-## Status
+## The optional companion server
 
-Early, but in daily use. Reading, searching, writing, replying and sending work, with
-several accounts at once. The account and server screens described below are not built
-yet.
+Rampart needs a mailbox and nothing else. One feature genuinely cannot work from a desktop
+application alone, which is knowing whether a message you sent was opened, because that
+needs somewhere on the web a picture can be fetched from.
 
-## What it will do
-
-- **Mail.** Read, search, write, send, offline.
-- **Your account.** App passwords, API keys, Sieve filter rules, vacation
-  responder, aliases, quota.
-- **Your server.** Accounts, domains, DKIM, the mail queue, certificates, TLS,
-  listeners, logs. The things that currently mean opening the admin console.
-
-Settings and admin screens are rendered from the server's own published schema
-rather than hand written, so they stay correct when the server adds a field. See
-[docs/architecture.md](docs/architecture.md).
+That server is in [`server/`](server/), it is a container and a token, and it stores a
+random id, a timestamp, a user agent and a truncated network per fetch. It never sees a
+message, a subject, a recipient or your password. If you do not want it, open tracking is
+switched off and Rampart does not ask again.
 
 ## Setting it up for someone else
 
@@ -80,16 +139,25 @@ this, in Rampart or in Thunderbird, Apple Mail or Outlook, all of which read the
 
 ## On your phone
 
-Use [Sterna Mail](https://sternamail.org/). It is a native Android JMAP client,
-free software, on F-Droid, and it is good. Rampart does not duplicate it.
+Use [Sterna Mail](https://sternamail.org/). It is a native Android JMAP client, free
+software, on F-Droid, and it is good. Rampart does not duplicate it.
 
-## Platforms
+## Building it
 
-Windows first, then Linux, then macOS. One Kotlin codebase.
+JDK 21 and nothing else. The Gradle wrapper fetches the rest.
+
+```bash
+./gradlew run          # start it
+./gradlew test         # 650-odd tests, no network
+```
+
+[docs/roadmap.md](docs/roadmap.md) is what is being built next and why, in order.
+[docs/architecture.md](docs/architecture.md) is how it is put together.
 
 ## Licence
 
 Apache 2.0. See [LICENSE](LICENSE).
 
-Rampart builds on [jmap-mua](https://codeberg.org/iNPUTmice/jmap) by Daniel
-Gultsch, Apache 2.0, and takes reference from his [Ltt.rs](https://codeberg.org/iNPUTmice/lttrs-android).
+Rampart builds on [jmap-mua](https://codeberg.org/iNPUTmice/jmap) by Daniel Gultsch,
+Apache 2.0, and takes reference from his
+[Ltt.rs](https://codeberg.org/iNPUTmice/lttrs-android).

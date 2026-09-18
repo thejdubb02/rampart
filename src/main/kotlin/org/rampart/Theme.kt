@@ -147,7 +147,7 @@ internal fun photoFor(email: String): ImageBitmap? =
  * skipped, so "1password@example.org" does not come out as "1P".
  *
  * The two sources are never mixed. Taking a letter from the name and the next from the
- * address turned "Skybox7 / admin@" into "SD", which belongs to nobody.
+ * address turned "Blueprint / admin@" into "BA", which belongs to nobody.
  */
 internal fun initialsOf(label: String, seed: String): String {
     val words = label.split(' ', '.', '_', '-', ',').map { word -> word.filter { it.isLetter() } }

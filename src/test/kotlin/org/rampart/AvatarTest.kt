@@ -13,14 +13,14 @@ class AvatarTest {
 
     @Test
     fun `one word gives its own first two letters, never the address's`() {
-        // "Skybox7" plus admin@ used to come out as "SD", which belongs to nobody.
-        assertEquals("SK", initialsOf("Skybox7", "admin@skybox7.com"))
+        // "Blueprint" plus admin@ used to come out as "BA", which belongs to nobody.
+        assertEquals("BL", initialsOf("Blueprint", "admin@blueprint.example"))
         assertEquals("ST", initialsOf("Stalwart", "noreply@example.org"))
     }
 
     @Test
     fun `no usable name falls back to the address`() {
-        assertEquals("AD", initialsOf("", "admin@skybox7.com"))
+        assertEquals("AD", initialsOf("", "admin@blueprint.example"))
         assertEquals("NO", initialsOf("1234", "noreply@example.org"))
         assertEquals("?", initialsOf("", "1234@example.org"))
     }
@@ -38,7 +38,7 @@ class AccountNameTest {
     fun `an account remembered under its address shows a name, not a truncated email`() {
         assertEquals("justin", shortAccountName("justin@willhitestrategy.com", "justin@willhitestrategy.com"))
         // admin@ says nothing about which server it is, so the host is the useful half.
-        assertEquals("skybox7", shortAccountName("admin@skybox7.com", "admin@skybox7.com"))
+        assertEquals("blueprint", shortAccountName("admin@blueprint.example", "admin@blueprint.example"))
     }
 
     @Test

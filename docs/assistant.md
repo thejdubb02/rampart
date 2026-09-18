@@ -71,7 +71,7 @@ are different appetites.
 
 **The estate rule, and why BYOK bends it.** The standing rule is that anything we give an
 LLM gets an `orkeys` child key capped by `llm_map.py`, an entry in
-`agent-infra/llm-registry.yaml` with a daily budget, and an Uptime Kuma monitor on vps1.
+a registry entry with a daily budget, and an uptime monitor.
 That rule exists so no service can quietly run up a bill against a shared key. A key the
 user typed in is not ours to cap, so instead:
 
@@ -97,8 +97,8 @@ folders, identities.
 **The important observation: most of this already has an API, and it is JMAP.** Filters
 are Sieve scripts over JMAP. Tags are keywords. Folders are mailboxes. Identities are
 identities. Anything holding a mailbox password or a Stalwart API key can already do all
-of it without Rampart's help, and Vaultwarden already holds exactly such a key scoped to
-Justin's mailbox.
+of it without Rampart's help, and a password vault can already hold exactly such a key,
+scoped to one mailbox.
 
 So Rampart's API is not a second way to reach the server. It is worth building only
 where it adds something the raw protocol does not:
@@ -153,9 +153,8 @@ state in the server's own description rather than an omission to explain later.
 **Read-only by default.** The write tools come on with a flag the person sets once, in
 Rampart, not in the MCP client's config. The gate belongs on our side of the boundary.
 
-**What the estate already has, so this is not from nothing.** There are ten MCP servers
-on the gateway, two of them already mailbox servers (`wsg-mailbox`, `skybox7-mailbox`).
-Those talk to the server directly with stored credentials, which is the model section 3
+**This is not from nothing.** Mailbox MCP servers already exist and are easy to write:
+they talk to the mail server directly with stored credentials, which is the model section 3
 says Rampart's API should *not* replace for machine callers. Rampart's MCP server is for
 the case those cannot serve: acting as the signed-in human, with a person in the window
 to approve the change.
