@@ -17,7 +17,10 @@ package org.rampart
 private val NAMES = mapOf(
     "archive" to setOf("archive", "archives", "archived"),
     "trash" to setOf("trash", "deleted", "deleted items", "deleted messages", "bin"),
-    "junk" to setOf("junk", "spam", "junk email", "junk e-mail", "bulk mail"),
+    // "junk mail" is what our own server calls it, and it was missing. Covered by the role
+    // it declares, so nothing was broken here, but a server that declares no role would have
+    // left a Junk folder with no way in or out of it.
+    "junk" to setOf("junk", "spam", "junk mail", "junk email", "junk e-mail", "bulk mail"),
     "drafts" to setOf("drafts", "draft"),
     "sent" to setOf("sent", "sent items", "sent mail", "sent messages"),
     "inbox" to setOf("inbox"),

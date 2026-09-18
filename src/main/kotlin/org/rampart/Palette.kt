@@ -61,7 +61,9 @@ internal val COMMANDS: List<Command> = listOf(
     Command("Forward", "F", "forward"),
     Command("Archive", "E", "archive"),
     Command("Move to trash", "Del", "trash"),
-    Command("Mark as spam", null, "junk"),
+    // One entry for both directions. The command does whichever of the two the open message
+    // actually offers, so a name that only says one half would be wrong half the time.
+    Command("Mark as spam, or not spam", null, "junk"),
     Command("Star or unstar", "S", "star"),
     Command("Mark as read", null, "read"),
     Command("View source", null, "source"),

@@ -46,4 +46,12 @@ class ImapRoleTest {
         assertNull(roleFor("Sent invoices", emptyList()))
         assertNull(roleFor("", emptyList()))
     }
+
+    @Test
+    fun `a folder called Junk Mail is the junk folder`() {
+        // What our own server calls it. It declares the role as well, so nothing was broken,
+        // but a server that declares nothing would have left Junk with no way out of it.
+        assertEquals("junk", roleFor("Junk Mail", emptyList()))
+        assertEquals("junk", roleFor("junk mail", emptyList()))
+    }
 }

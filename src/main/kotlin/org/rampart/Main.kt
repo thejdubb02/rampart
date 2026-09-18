@@ -731,6 +731,19 @@ private fun Reader(
         if (!unified()) here?.second?.id
         else folderFor("inbox", mailboxes[key].orEmpty())?.id
 
+    /**
+     * Whether a message is sitting in Junk right now.
+     *
+     * Decided on the folder's role rather than its name, the same way everything else here
+     * is, because our own server calls it "Junk Mail" and a French one calls it something
+     * else again.
+     */
+    fun inJunk(message: Summary): Boolean {
+        val key = accountOf(message) ?: return false
+        val junk = folderFor("junk", mailboxes[key].orEmpty())?.id ?: return false
+        return sourceFolder(key) == junk
+    }
+
     /** Settings are always about one real account, never about the merged row. */
     fun settingsAccount(): String? =
         here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key
@@ -1362,6 +1375,8 @@ private fun Reader(
         },
         archive = { message -> fileAway(message, "archive")?.invoke() },
         junk = { message -> fileAway(message, "junk")?.invoke() },
+        notJunk = { message -> fileAway(message, "inbox")?.invoke() },
+        isJunk = ::inJunk,
         trash = { message -> fileAway(message, "trash")?.invoke() },
         star = ::starOne,
         markRead = ::markRead,
@@ -1371,10 +1386,22 @@ private fun Reader(
         val message = selected ?: return@run MessageActions()
         if (accountOf(message) == null) return@run MessageActions()
         fun moveTo(role: String): (() -> Unit)? = fileAway(message, role)
+        /*
+         * Spam and Not spam are the same move in opposite directions, and only one of them
+         * is ever the right thing to offer. A message in Junk needs a way out, and that way
+         * out is what was missing: there was no button, no menu entry and no shortcut, so
+         * anything the filter got wrong stayed wrong.
+         *
+         * Moving it back is also how the server learns. Stalwart trains its classifier on
+         * exactly this move, so there is nothing else to call: filing it in the inbox is
+         * both the fix and the correction.
+         */
+        val junked = inJunk(message)
         MessageActions(
             archive = moveTo("archive"),
             trash = moveTo("trash"),
-            junk = moveTo("junk"),
+            junk = if (junked) null else moveTo("junk"),
+            notJunk = if (junked) moveTo("inbox") else null,
             star = { starOne(message) },
         )
     }
@@ -1415,7 +1442,9 @@ private fun Reader(
             "forward" -> selected?.let { composing = forwardOf(it, body, from) }
             "archive" -> actions.archive?.invoke()
             "trash" -> actions.trash?.invoke()
-            "junk" -> actions.junk?.invoke()
+            // One command, and it does whichever of the two is the one on offer, so the
+            // same key both files spam and rescues it depending on where you are.
+            "junk" -> (actions.junk ?: actions.notJunk)?.invoke()
             "star" -> actions.star?.invoke()
             "read" -> {
                 val message = selected
@@ -1979,6 +2008,13 @@ private fun Reader(
             if (picked.size > 1) {
                 Picked(
                     count = picked.size,
+                    // The folder itself rather than any one message: a batch is whatever is
+                    // on screen, and what is on screen is one folder.
+                    inJunk = here?.second?.let { folder ->
+                        folder.role == "junk" || folder.id == here?.first?.let { key ->
+                            folderFor("junk", mailboxes[key].orEmpty())?.id
+                        }
+                    } == true,
                     onClear = { picked = emptySet() },
                     onFile = { role, what ->
                         // Grouped by account, because in the merged inbox the picked
@@ -3229,9 +3265,13 @@ private fun RowMenu(message: Summary, actions: RowActions, open: Boolean, onClos
         }
         actions.star?.let { entry(if (message.flagged) "Remove star" else "Star") { it(message) } }
         actions.archive?.let { entry("Archive") { it(message) } }
-        if (actions.junk != null || actions.trash != null) {
+        if (actions.junk != null || actions.notJunk != null || actions.trash != null) {
             HorizontalDivider()
-            actions.junk?.let { entry("Mark as spam") { it(message) } }
+            if (actions.isJunk?.invoke(message) == true) {
+                actions.notJunk?.let { entry("Not spam") { it(message) } }
+            } else {
+                actions.junk?.let { entry("Mark as spam") { it(message) } }
+            }
             actions.trash?.let { entry("Delete") { it(message) } }
         }
     }
@@ -3242,6 +3282,10 @@ internal data class RowActions(
     val forward: ((Summary) -> Unit)? = null,
     val archive: ((Summary) -> Unit)? = null,
     val junk: ((Summary) -> Unit)? = null,
+    /** Out of Junk again, offered on a row that is in it. */
+    val notJunk: ((Summary) -> Unit)? = null,
+    /** Whether this row is in Junk, which decides which of the two above is shown. */
+    val isJunk: ((Summary) -> Boolean)? = null,
     val trash: ((Summary) -> Unit)? = null,
     val star: ((Summary) -> Unit)? = null,
     val markRead: ((Summary, read: Boolean) -> Unit)? = null,
@@ -3251,6 +3295,8 @@ internal data class MessageActions(
     val archive: (() -> Unit)? = null,
     val trash: (() -> Unit)? = null,
     val junk: (() -> Unit)? = null,
+    /** Out of Junk again. Present exactly when [junk] is not, never both and never neither. */
+    val notJunk: (() -> Unit)? = null,
     val star: (() -> Unit)? = null,
 )
 
@@ -3367,6 +3413,7 @@ internal fun Message(
                 Spacer(Modifier.weight(1f))
                 actions.archive?.let { OutlinedButton(onClick = it) { Text("Archive") } }
                 actions.junk?.let { OutlinedButton(onClick = it) { Text("Spam") } }
+                actions.notJunk?.let { OutlinedButton(onClick = it) { Text("Not spam") } }
                 actions.trash?.let { OutlinedButton(onClick = it) { Text("Delete") } }
                 // Everything past Delete is something people reach for occasionally, and a
                 // row of eight buttons runs off the edge of the pane at any sensible width.
@@ -3942,7 +3989,14 @@ internal data class Undoable(
  * take back, so the pane offers nothing of that kind.
  */
 @Composable
-private fun Picked(count: Int, onClear: () -> Unit, onFile: (role: String, what: String) -> Unit, onRead: () -> Unit) {
+private fun Picked(
+    count: Int,
+    onClear: () -> Unit,
+    onFile: (role: String, what: String) -> Unit,
+    onRead: () -> Unit,
+    /** Whether the folder being looked at is Junk, which swaps Spam for Not spam. */
+    inJunk: Boolean = false,
+) {
     Column(
         Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
         verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterVertically),
@@ -3951,7 +4005,11 @@ private fun Picked(count: Int, onClear: () -> Unit, onFile: (role: String, what:
         Text("$count messages picked", style = MaterialTheme.typography.titleMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { onFile("archive", "archived") }) { Text("Archive") }
-            OutlinedButton(onClick = { onFile("junk", "marked as spam") }) { Text("Spam") }
+            if (inJunk) {
+                OutlinedButton(onClick = { onFile("inbox", "moved to the inbox") }) { Text("Not spam") }
+            } else {
+                OutlinedButton(onClick = { onFile("junk", "marked as spam") }) { Text("Spam") }
+            }
             OutlinedButton(onClick = { onFile("trash", "deleted") }) { Text("Delete") }
             OutlinedButton(onClick = onRead) { Text("Mark read") }
         }

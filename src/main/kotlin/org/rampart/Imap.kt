@@ -635,6 +635,7 @@ private val NAMED = mapOf(
     "drafts" to "drafts",
     "draft" to "drafts",
     "junk" to "junk",
+    "junk mail" to "junk",
     "spam" to "junk",
     "sent" to "sent",
     "sent items" to "sent",
