@@ -182,4 +182,53 @@ class ImapWriteTest {
         assertEquals(listOf("loose@x"), messageIdsIn("loose@x"))
         assertEquals(listOf("loose@x"), messageIdsIn("<loose@x>"))
     }
+
+    @Test
+    fun `an id carries the folder it lives in, because a UID alone does not`() {
+        val id = imapId(4231L, "INBOX")
+        assertEquals(4231L, uidOf(id))
+        assertEquals("INBOX", folderOf(id))
+    }
+
+    @Test
+    fun `a folder name containing the hierarchy separator survives the round trip`() {
+        // The split is on the first space and a UID is always digits, so a slash in the
+        // name is ordinary rather than something to escape.
+        val id = imapId(7L, "Archive/2026/Clients")
+        assertEquals(7L, uidOf(id))
+        assertEquals("Archive/2026/Clients", folderOf(id))
+    }
+
+    @Test
+    fun `a folder name containing a space keeps all of it`() {
+        val id = imapId(12L, "Deleted Items")
+        assertEquals(12L, uidOf(id))
+        assertEquals("Deleted Items", folderOf(id))
+    }
+
+    @Test
+    fun `an id from the other backend opens nothing rather than the wrong thing`() {
+        // A JMAP id is an opaque string with no space in it. Read as an IMAP id it would
+        // otherwise become UID 0 in the folder named "", and folder "" is the server root.
+        assertEquals(-1L, uidOf("Mabcdef123"))
+        assertEquals("", folderOf("Mabcdef123"))
+        assertEquals(emptyMap(), byFolder(listOf("Mabcdef123")))
+    }
+
+    @Test
+    fun `a selection spanning folders is grouped, not sent to one of them`() {
+        val grouped = byFolder(
+            listOf(imapId(1L, "INBOX"), imapId(2L, "Sent Items"), imapId(3L, "INBOX")),
+        )
+        assertEquals(setOf("INBOX", "Sent Items"), grouped.keys)
+        assertEquals(2, grouped.getValue("INBOX").size)
+    }
+
+    @Test
+    fun `the same UID in two folders is two different messages`() {
+        // The reason the id is composite at all: a UID is unique inside a folder and
+        // nowhere else, so 4231 in the inbox and 4231 in Sent are unrelated.
+        val grouped = byFolder(listOf(imapId(4231L, "INBOX"), imapId(4231L, "Sent Items")))
+        assertEquals(2, grouped.size)
+    }
 }
