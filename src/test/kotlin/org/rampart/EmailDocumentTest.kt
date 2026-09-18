@@ -190,4 +190,47 @@ class EmailDocumentTest {
         val page = emailDocument("""<body bgcolor="#102030"><p>Hi</p></body>""", dark = false)
         assertFalse(page.document.contains("invert(1)"))
     }
+
+    private fun scheme(html: String, dark: Boolean): String =
+        Regex("""color-scheme" content="([^"]+)"""").find(emailDocument(html, dark = dark).document)
+            ?.groupValues?.get(1).orEmpty()
+
+    @Test
+    fun `a message left uninverted is never told to use dark defaults`() {
+        // The 0.1.114 bug, and the worst kind: the message renders, with the sender's own
+        // light background and the engine's white text on top of it, so the body is an
+        // empty grey box and nothing anywhere reports a fault.
+        val painted = """<table width="100%" bgcolor="#F4F1EC"><tr><td>Hello</td></tr></table>"""
+        assertEquals("light", scheme(painted, dark = true))
+        // A reply with a background and no colour of its own is the shape it happened on.
+        assertEquals("light", scheme("""<div style="width:100%;background:#f5f5f5">Hi</div>""", dark = true))
+    }
+
+    @Test
+    fun `a message that is being inverted still gets the dark defaults`() {
+        assertEquals("dark light", scheme("<p>Tuesday works.</p>", dark = true))
+    }
+
+    @Test
+    fun `a light window always asks for light, whatever the message did`() {
+        assertEquals("light", scheme("<p>Hi</p>", dark = false))
+        assertEquals("light", scheme("""<body bgcolor="#102030">Hi</body>""", dark = false))
+    }
+
+    @Test
+    fun `the scheme and the inversion never disagree`() {
+        // The invariant behind the bug: dark defaults are only ever correct when the whole
+        // page is about to be turned inside out.
+        listOf(
+            "<p>plain</p>",
+            """<table width="100%" bgcolor="#eeeeee"><tr><td>painted</td></tr></table>""",
+            """<body bgcolor="#123456">painted on body</body>""",
+            "<style>@media (prefers-color-scheme: dark) { body { background: #000 } }</style><p>own</p>",
+        ).forEach { html ->
+            val page = emailDocument(html, dark = true).document
+            val inverted = page.contains("invert(1)")
+            val darkScheme = """content="dark light"""" in page
+            assertEquals(inverted, darkScheme, "scheme and inversion disagree for: $html")
+        }
+    }
 }

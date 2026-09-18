@@ -108,6 +108,18 @@ class Screenshots {
                 UndoBar(text = "12 messages moved to Archive.", seconds = 0, restartOn = "c", onUndo = {}, onDismiss = {})
             }
         }
+        // A reply that sets a background and leaves its text colour to the client, which
+        // is the shape that came out as an empty grey box in 0.1.114.
+        val plainReply =
+            """<div style="width:100%;background:#f4f4f4"><div style="padding:16px">""" +
+                "<p>Mike, it has been 10 weeks and no comms from you. Can you give me an update " +
+                "on where the ADA and privacy work stands?</p><p>Thanks,<br>Mark</p>" +
+                """<blockquote style="border-left:2px solid #ccc;padding-left:10px">""" +
+                "<p>On 4 July, Mike wrote:</p><p>We will have the first pass over to you shortly.</p>" +
+                "</blockquote></div></div>"
+        shoot("plain-reply-dark", 900, 420, dark) {
+            Message(summary = MESSAGES[1], body = Body(plainReply, null), onLink = {})
+        }
         shoot("report", 980, 640) {
             Message(summary = MESSAGES[0], body = Body(report, null), onLink = {})
         }

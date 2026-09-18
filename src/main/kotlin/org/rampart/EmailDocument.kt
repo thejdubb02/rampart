@@ -52,13 +52,24 @@ internal fun emailDocument(
     val css = stylesheet(source, remoteImages)
     val body = clean.body().html()
     // A message that chose its own colours is left alone. See [paintsItself].
-    val invert = if (dark && !paintsItself(clean, css)) DARK_CSS else ""
+    val ownColours = dark && paintsItself(clean, css)
+    val invert = if (dark && !ownColours) DARK_CSS else ""
+    /*
+     * The colour scheme has to follow the inversion, not the window.
+     *
+     * `color-scheme: dark` tells the engine to use dark defaults, which is white text on a
+     * dark canvas. That is right when the whole page is about to be turned inside out, and
+     * catastrophic when it is not: a message that set a light background and left its text
+     * colour alone got the sender's light background with the engine's white text on it,
+     * which is an empty grey box. Shipped in 0.1.114 and found the same evening.
+     */
+    val scheme = if (ownColours || !dark) "light" else "dark light"
     return EmailPage(
         """<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="$policy">
-<meta name="color-scheme" content="${if (dark) "dark light" else "light"}">
+<meta name="color-scheme" content="$scheme">
 <style>$css</style>
 <style>$BASE_CSS$invert</style>
 </head><body>$body</body></html>""",
