@@ -72,6 +72,7 @@ internal interface IconPack {
     val Unread: ImageVector
     val Read: ImageVector
     val Contacts: ImageVector
+    val Search: ImageVector
 
 }
 
@@ -131,6 +132,7 @@ internal object LineIcons : IconPack {
         "Contacts",
         "M9 3.4a2.7 2.7 0 1 1 0 5.4 2.7 2.7 0 0 1 0-5.4M3.6 15.4a5.4 5.4 0 0 1 10.8 0",
     )
+    override val Search = icon("Search", "M8.1 2.6a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11M12.2 12.2 15.6 15.6")
     override val Back = icon("Back", "M15 9H3.6M8 3.6 2.6 9l5.4 5.4")
     override val Collapse = icon("Collapse", "m10.5 4-5 5 5 5")
     override val Expand = icon("Expand", "m7 4 5 5-5 5")
@@ -198,6 +200,7 @@ internal object HeavyIcons : IconPack by LineIcons {
     override val label = "Heavy"
     override val Inbox by lazy { heavy(LineIcons.Inbox) }
     override val Contacts by lazy { heavy(LineIcons.Contacts) }
+    override val Search by lazy { heavy(LineIcons.Search) }
     override val Archive by lazy { heavy(LineIcons.Archive) }
     override val Drafts by lazy { heavy(LineIcons.Drafts) }
     override val Junk by lazy { heavy(LineIcons.Junk) }

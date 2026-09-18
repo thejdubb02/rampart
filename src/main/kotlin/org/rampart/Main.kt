@@ -768,7 +768,19 @@ private fun Reader(
         val cached = if (!plain) emptyList()
         else io { session(key).store?.messages(mailbox.id, unreadOnly = unreadOnly) }.orEmpty()
         if (cached.isNotEmpty()) emails = cached
-        loading = cached.isEmpty()
+        /*
+         * A spinner only where there is nothing to look at.
+         *
+         * Every refresh used to blank this pane and put a spinner over it, including the
+         * refresh caused by opening a message: marking it read changes the account's state,
+         * the server pushes that back, and the list reloads because a change is a change
+         * whoever made it. The list came back identical a moment later, so the whole visible
+         * effect was a flash.
+         *
+         * The unified inbox felt it worst. It keeps no local copy, so `cached` is always
+         * empty there and the spinner was unconditional.
+         */
+        loading = cached.isEmpty() && emails.isEmpty()
 
         /*
          * If nothing about this account's mail has moved since this folder was last read,
@@ -1139,7 +1151,13 @@ private fun Reader(
         val key = accountOf(message) ?: return
         emails = emails.map { if (it.id == message.id) it.copy(seen = read) else it }
         if (selected?.id == message.id) selected = selected?.copy(seen = read)
-        scope.launch { io { session(key).jmap.setKeyword(listOf(message.id), "\$seen", read) } }
+        scope.launch {
+            io { session(key).jmap.setKeyword(listOf(message.id), "\$seen", read) }
+            // The copy on disk learns it too. Without this a reload served from the local
+            // store shows the row unread again for the moment before the server answers,
+            // which is the same flash by a different route.
+            here?.second?.id?.let { box -> io { session(key).store?.put(box, emails) } }
+        }
     }
 
     /*
@@ -1637,21 +1655,24 @@ private fun Reader(
                 }
             }
         }
-        SearchBar(
-            query = query,
-            focusRequester = searchField,
-            onFocusChanged = { typing = it },
-            onQueryChange = { query = it },
-            onSearch = {
-                settingsOpen = false
-                showingResults = query.isNotBlank()
-                selected = null
-                body = null
-                scope.launch { reload() }
-            },
-        )
         Row(Modifier.fillMaxSize()) {
             Sidebar(
+                search = {
+                    SearchBar(
+                        query = query,
+                        focusRequester = searchField,
+                        onFocusChanged = { typing = it },
+                        onQueryChange = { query = it },
+                        onSearch = {
+                            settingsOpen = false
+                            contactsOpen = false
+                            showingResults = query.isNotBlank()
+                            selected = null
+                            body = null
+                            scope.launch { reload() }
+                        },
+                    )
+                },
                 accounts = sessions.map {
                     AccountMailboxes(it.key, it.account.name, it.account.email, mailboxes[it.key].orEmpty())
                 },
@@ -2186,6 +2207,8 @@ internal fun Sidebar(
     /** What a right-click on a folder can ask for. Null hides the menu entirely. */
     folderMenu: ((String, Mailbox, FolderJob) -> Unit)? = null,
     onSelect: (String, Mailbox) -> Unit,
+    /** The search field, drawn at the top. Absent while the sidebar is narrowed. */
+    search: @Composable () -> Unit = {},
 ) {
     Column(
         Modifier.width(if (collapsed) 60.dp else 232.dp).fillMaxHeight()
@@ -2193,6 +2216,12 @@ internal fun Sidebar(
             .padding(horizontal = if (collapsed) 8.dp else 12.dp, vertical = 14.dp),
         horizontalAlignment = if (collapsed) Alignment.CenterHorizontally else Alignment.Start,
     ) {
+        // Nothing at all when narrowed: a field 44dp wide is not a field, and the sidebar
+        // is narrowed precisely to get the width back. Ctrl+K still reaches search.
+        if (!collapsed) {
+            search()
+            Spacer(Modifier.height(10.dp))
+        }
         if (collapsed) {
             FilledIconButton(onClick = onWrite, modifier = Modifier.size(40.dp)) {
                 Icon(RampartIcons.Write, contentDescription = "Write", modifier = Modifier.size(17.dp))
@@ -2560,27 +2589,38 @@ internal fun SearchBar(
     onQueryChange: (String) -> Unit,
     onSearch: () -> Unit,
 ) {
+    /*
+     * In the sidebar, above Write, rather than on a bar of its own.
+     *
+     * It had the full width of the window and nothing beside it, which is a 52dp stripe of
+     * nothing above everything else on screen. Here it costs no row that was not there.
+     */
     Row(
-        Modifier.fillMaxWidth().height(52.dp)
-            .background(MaterialTheme.colorScheme.surface)
-            .padding(horizontal = 16.dp),
+        Modifier.fillMaxWidth().height(38.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Built rather than borrowed: Material's text field has a minimum height of its
         // own and forcing it shorter clips the text inside it, which is what a 38dp
         // OutlinedTextField did here.
         Row(
-            Modifier.width(520.dp).height(34.dp)
+            Modifier.fillMaxWidth().height(34.dp)
                 .clip(MaterialTheme.shapes.small)
                 .background(MaterialTheme.colorScheme.surfaceVariant)
                 .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
-                .padding(start = 11.dp, end = 4.dp),
+                .padding(start = 9.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Icon(
+                RampartIcons.Search,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.size(14.dp),
+            )
+            Spacer(Modifier.width(7.dp))
             Box(Modifier.weight(1f)) {
                 if (query.isEmpty()) {
                     Text(
-                        "Search all mail",
+                        "Search mail",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.outline,
                     )
