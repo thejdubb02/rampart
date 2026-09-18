@@ -140,6 +140,12 @@ data class Body(
     val spamStatus: String? = null,
     /** Raw Disposition-Notification-To, if the sender asked to be told it was opened. */
     val receiptTo: String? = null,
+    /** The whole message in bytes, as the server counts it. Zero when it did not say. */
+    val size: Long = 0L,
+    /** The Date header, which is when the sender says it was sent. */
+    val sentAt: String? = null,
+    /** Every Received line, newest first. Only the topmost is ever trusted. */
+    val received: List<String> = emptyList(),
 )
 
 class Jmap private constructor(
@@ -350,6 +356,11 @@ class Jmap private constructor(
                     add("header:List-Unsubscribe-Post:asText")
                     add("header:Authentication-Results:asText:all")
                     add("header:X-Spam-Status:asText")
+                    // For the details panel. size and sentAt are JMAP's own; Received is
+                    // the only place the hop that handed it over is written down, and all
+                    // of them are asked for because a header nobody asks for is not sent.
+                    add("size"); add("sentAt")
+                    add("header:Received:asText:all")
                     add("header:" + MDN_HEADER + ":asText")
                 }
                 put("fetchHTMLBodyValues", true)
@@ -384,6 +395,9 @@ class Jmap private constructor(
             authenticationResults = stringsIn(email["header:Authentication-Results:asText:all"]),
             spamStatus = email["header:X-Spam-Status:asText"]?.str(),
             receiptTo = email["header:" + MDN_HEADER + ":asText"]?.str(),
+            size = email["size"]?.jsonPrimitive?.longOrNull ?: 0L,
+            sentAt = email["sentAt"]?.str(),
+            received = stringsIn(email["header:Received:asText:all"]),
         )
     }
 

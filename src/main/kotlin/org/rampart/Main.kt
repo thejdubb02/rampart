@@ -3201,6 +3201,8 @@ internal fun Message(
     onReceipt: (String) -> Unit = {},
     /** Put this sender in the server's address book. Null where there is none. */
     onAddContact: ((Summary) -> Unit)? = null,
+    /** Opens the details panel on first draw. For the screenshot harness, which cannot click. */
+    showDetails: Boolean = false,
     /** Whether that sender is already there, so the entry is absent rather than a duplicate. */
     inContacts: Boolean = false,
     /** The message as it arrived, while somebody is looking at it. */
@@ -3437,13 +3439,30 @@ internal fun Message(
                         )
                         Spacer(Modifier.width(11.dp))
                         Column(Modifier.weight(1f)) {
-                            Text(
-                                summary.from,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    summary.from,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                // Only when the message went out through somewhere other
+                                // than the domain it claims, which is the ordinary
+                                // explanation for mail that looks odd and is not.
+                                sentVia(summary.fromEmail, body?.authenticationResults?.joinToString("\n"))
+                                    ?.let { host ->
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            "via $host",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.outline,
+                                            modifier = Modifier.clip(MaterialTheme.shapes.small)
+                                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                                .padding(horizontal = 7.dp, vertical = 2.dp),
+                                        )
+                                    }
+                            }
                             if (summary.fromEmail.isNotBlank()) {
                                 Text(
                                     summary.fromEmail,
@@ -3454,11 +3473,64 @@ internal fun Message(
                                 )
                             }
                         }
-                        Text(
-                            summary.receivedAt.asLocalTime(),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline,
-                        )
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                summary.receivedAt.asLocalTime(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline,
+                            )
+                            humanBytes(body?.size ?: 0L).takeIf { it.isNotBlank() }?.let {
+                                Text(
+                                    it,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.outline,
+                                )
+                            }
+                        }
+                    }
+
+                    /*
+                     * Who else got it, and everything else on request.
+                     *
+                     * Two names and a count rather than all of them: a message to nine
+                     * people should not push the body off the screen, and a bare number
+                     * with no names is no use either.
+                     */
+                    var details by remember(summary.id) { mutableStateOf(showDetails) }
+                    val everyone = remember(body) {
+                        (body?.to.orEmpty() + body?.cc.orEmpty()).filter { it.isNotBlank() }
+                    }
+                    if (everyone.isNotEmpty()) {
+                        val (shown, more) = shownRecipients(everyone)
+                        Spacer(Modifier.height(6.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "To",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline,
+                            )
+                            Spacer(Modifier.width(7.dp))
+                            Text(
+                                shown.joinToString(", ") + if (more > 0) "  +$more more" else "",
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                if (details) "Hide details" else "Show details",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.clip(MaterialTheme.shapes.small)
+                                    .clickable { details = !details }
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                        }
+                    }
+                    if (details) {
+                        Spacer(Modifier.height(10.dp))
+                        MessageDetails(summary, body, proof.spamScore)
                     }
                     val tags = remember(summary.keywords) { tagsOf(summary.keywords) }
                     var adding by remember(summary.id) { mutableStateOf<String?>(null) }
@@ -3689,6 +3761,20 @@ internal fun downloadsFolder(): java.nio.file.Path {
 
 internal fun String.asLocalTime(): String =
     runCatching { WHEN.format(Instant.parse(this)) }.getOrDefault(this)
+
+/**
+ * The same instant written out in full, for the details panel.
+ *
+ * The short form beside a message is right there, where the year and the seconds are noise.
+ * In the panel they are the point: the gap between when a message says it was sent and
+ * when it actually landed is how you spot one that sat somewhere for an hour.
+ */
+internal fun String.asFullLocalTime(): String = runCatching {
+    java.time.format.DateTimeFormatter
+        .ofPattern("EEEE, d MMMM yyyy 'at' HH:mm:ss")
+        .withZone(java.time.ZoneId.systemDefault())
+        .format(Instant.parse(this))
+}.getOrDefault(this)
 
 /**
  * One message in a conversation that is not the one being read: who, when, and the first

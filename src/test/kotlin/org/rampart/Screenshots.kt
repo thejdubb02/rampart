@@ -98,6 +98,26 @@ class Screenshots {
             )
         }
         shoot("settings-signatures", 1200, 900, withArt) { SettingsScreen(page = "identities") }
+        // The header and the panel behind Show details, on a message that passes every
+        // check: a pass has to be as plain to read as a failure.
+        shoot("details", 1000, 620, dark) {
+            Message(
+                summary = MESSAGES[1],
+                body = Body(
+                    "<p>The report is below.</p>",
+                    null,
+                    messageId = listOf("010001a0b4d211ba-0171d9a7@email.amazonses.com"),
+                    to = listOf("markl@americantank.com", "tom@duchamphotel.com",
+                        "michelle@duchamphotel.com", "stay@duchamphotel.com"),
+                    authenticationResults = listOf("""mx.skybox7.com; dkim=pass header.d=skybox7.com header.s=s1; spf=pass smtp.mailfrom=cfbounces@amazonses.com; dmarc=pass (p=none) header.from=skybox7.com"""),
+                    size = 155_781L,
+                    sentAt = "Fri, 18 Sep 2026 07:01:01 -0700",
+                    received = listOf("""from a48-96.smtp-out.amazonses.com (a48-96.smtp-out.amazonses.com [54.240.48.96]) by mx.skybox7.com"""),
+                ),
+                showDetails = true,
+                onLink = {},
+            )
+        }
         shoot("body", 820, 1500) {
             Message(
                 summary = MESSAGES[1],

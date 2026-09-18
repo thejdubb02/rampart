@@ -161,6 +161,33 @@ proven, and it is listed that way on the board.
 
 ---
 
+## The message header, and showing the working
+
+The authenticity badge says one line when something is wrong and nothing when it is not,
+which is the right default and is why it gets believed. It leaves nowhere to go when you
+want to know *which* check failed, or to tell "checked and fine" apart from "never
+checked", which are very different things.
+
+So the header now carries the size beside the date, the recipients as two names and a
+count, and a "via" chip when the message went out through a domain other than the one it
+claims. Behind Show details, four groups: who it went to and when it was sent against when
+it landed; SPF, DKIM, DMARC and the hop that handed it over, each with the domain it was
+checked against; the message and thread ids; and the subject and size.
+
+Two rules in there worth keeping:
+
+- **Only the topmost Authentication-Results and the topmost Received are read.** Every hop
+  prepends its own, ours is first, and a forwarder further down can neither vouch for a
+  message our server could not verify nor condemn one it was happy with. The bottom of a
+  Received stack is the sender's own claim about itself and can say anything.
+- **A pass is stated as plainly as a failure.** A panel that only speaks up when something
+  is wrong cannot answer the question it exists for.
+
+Reverse DNS is as far as a header can take it. Anything stronger is a live lookup, and a
+lookup on every message opened is a request per message to somebody else's resolver.
+
+---
+
 ## Sender marks, and the picture Rampart will not fetch
 
 Every row carries the sender's mark, the way the reader already did. Where a contact card
