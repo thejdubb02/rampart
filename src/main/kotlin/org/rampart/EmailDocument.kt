@@ -239,7 +239,10 @@ private const val REMOTE_POLICY =
  * anything still too wide scrolls sideways rather than stretching everything else.
  */
 private const val BASE_CSS = """
-html { overflow-x: auto; overflow-y: hidden; }
+/* A message is normally exactly as tall as the panel it was given, so there is nothing
+   to scroll. One taller than the panel will fit scrolls itself, which is what auto is
+   for: hidden clipped it instead, and the rest of the message was simply gone. */
+html { overflow-x: auto; overflow-y: auto; }
 body { margin: 0; padding: 0; overflow-x: auto; }
 img:not([style*="max-width"]) { max-width: 100%; height: auto; }
 table:not([style*="max-width"]) { max-width: 100%; }

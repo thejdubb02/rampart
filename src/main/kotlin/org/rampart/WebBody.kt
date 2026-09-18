@@ -43,14 +43,27 @@ internal fun WebBody(
      */
     onScroll: (Float) -> Unit = {},
 ) {
-    // Grows to whatever the message turns out to be, so the pane scrolls rather than the
-    // message scrolling inside a box inside the pane.
-    var height by remember { mutableStateOf(160) }
+    /*
+     * Grows to whatever the message turns out to be, so the pane scrolls rather than the
+     * message scrolling inside a box inside the pane. **Up to a point**, and the point is
+     * the reason this is capped rather than free.
+     *
+     * The panel underneath is a heavyweight AWT component, and asking for one as tall as a
+     * long mail thread asks the graphics stack for a single surface taller than it will
+     * make: past roughly eight thousand physical pixels it stops being drawn and the
+     * message is a blank box. At 150% scaling that is a document about 5,400 points tall,
+     * which a quoted thread reaches easily and a newsletter does not, so it looked like
+     * particular messages were broken rather than long ones.
+     *
+     * Past the cap the page scrolls itself. [WIRING] works out which of the two is
+     * happening rather than being told, so there is one rule and nothing to keep in step.
+     */
+    var height by remember(document) { mutableStateOf(160) }
     // Held here rather than made in the factory: JavaFX calls it from the JS side and keeps
     // only a weak reference, so anything it can collect stops being callable a minute in.
     val bridge = remember { WebBridge() }
     bridge.onLink = onLink
-    bridge.onHeight = { if (it in 1..40_000) height = it }
+    bridge.onHeight = { if (it > 0) height = minOf(it, TALLEST) }
     bridge.onScroll = onScroll
     val panel = remember { JFXPanel() }
 
@@ -106,6 +119,15 @@ class WebBridge {
  * you a login page. The height is reported again whenever the page changes size, because a
  * picture finishing decoding is the ordinary reason the first measurement is short.
  */
+/**
+ * The tallest panel worth asking for, in points.
+ *
+ * Under the graphics stack's own limit at any scaling anybody runs: 3,000 points is 6,000
+ * physical pixels at 200%, comfortably inside the roughly 8,000 where a surface stops
+ * being drawn. Well over nine tenths of messages are shorter than this and never notice.
+ */
+private const val TALLEST = 3_000
+
 private val WIRING = """
 (function () {
   document.addEventListener('click', function (e) {
@@ -115,6 +137,10 @@ private val WIRING = """
     window.rampart.open(a.getAttribute('href'));
   }, true);
   window.addEventListener('wheel', function (e) {
+    // A message taller than the panel it was given scrolls itself, and the wheel is left
+    // alone to do that. Everything else is exactly as tall as its content, so there is
+    // nothing here to scroll and the wheel belongs to the pane outside.
+    if (document.documentElement.scrollHeight > window.innerHeight + 1) return;
     // A line at a time and a page at a time are both reported here, so they are turned
     // into pixels before they leave. Otherwise a mouse that reports lines moves three.
     var step = e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? 400 : 1);
