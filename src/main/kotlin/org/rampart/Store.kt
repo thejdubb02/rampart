@@ -95,7 +95,100 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             // repaired by deleting the file.
             "CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(id UNINDEXED, sender, subject, body)",
             "CREATE TABLE IF NOT EXISTS cursor (mailbox TEXT PRIMARY KEY, state TEXT NOT NULL)",
+            // What was sent tracked, and what came back. Two tables because one message
+            // gets fetched many times and the interesting question is how many.
+            """
+            CREATE TABLE IF NOT EXISTS tracked (
+                id TEXT PRIMARY KEY, messageId TEXT NOT NULL, recipient TEXT NOT NULL,
+                subject TEXT NOT NULL, sentAt INTEGER NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS fetched (
+                id TEXT NOT NULL, at INTEGER NOT NULL, userAgent TEXT NOT NULL, network TEXT NOT NULL,
+                PRIMARY KEY (id, at)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS tracked_message ON tracked (messageId)",
         )
+    }
+
+    /** Remembers that a message went out tracked. */
+    fun track(tracked: Tracked) {
+        connection.prepareStatement(
+            "INSERT OR REPLACE INTO tracked (id, messageId, recipient, subject, sentAt) VALUES (?, ?, ?, ?, ?)",
+        ).use { s ->
+            s.setString(1, tracked.id)
+            s.setString(2, tracked.messageId)
+            s.setString(3, tracked.recipient)
+            s.setString(4, tracked.subject)
+            s.setLong(5, tracked.sentAt.toEpochMilli())
+            s.executeUpdate()
+        }
+    }
+
+    /**
+     * Writes down fetches the companion reported.
+     *
+     * `INSERT OR IGNORE` on (id, at), so asking again over an overlapping window cannot
+     * count one open twice. The cursor moves forward on its own and the two together mean
+     * a poll that is interrupted halfway loses nothing and duplicates nothing.
+     */
+    fun recordFetches(fetches: List<Fetch>) {
+        connection.prepareStatement(
+            "INSERT OR IGNORE INTO fetched (id, at, userAgent, network) VALUES (?, ?, ?, ?)",
+        ).use { s ->
+            fetches.forEach { fetch ->
+                s.setString(1, fetch.id)
+                s.setLong(2, fetch.at.toEpochMilli())
+                s.setString(3, fetch.userAgent)
+                s.setString(4, fetch.network)
+                s.addBatch()
+            }
+            s.executeBatch()
+        }
+    }
+
+    /** Everything sent tracked, newest first, with what has been fetched for each. */
+    fun tracking(limit: Int = 500): List<Pair<Tracked, List<Fetch>>> {
+        val sent = connection.prepareStatement(
+            "SELECT id, messageId, recipient, subject, sentAt FROM tracked ORDER BY sentAt DESC LIMIT ?",
+        ).use { s ->
+            s.setInt(1, limit)
+            s.executeQuery().use { rows ->
+                buildList {
+                    while (rows.next()) {
+                        add(
+                            Tracked(
+                                id = rows.getString(1),
+                                messageId = rows.getString(2),
+                                account = "",
+                                recipient = rows.getString(3),
+                                subject = rows.getString(4),
+                                sentAt = java.time.Instant.ofEpochMilli(rows.getLong(5)),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+        if (sent.isEmpty()) return emptyList()
+        val byId = HashMap<String, MutableList<Fetch>>()
+        connection.prepareStatement("SELECT id, at, userAgent, network FROM fetched ORDER BY at ASC").use { s ->
+            s.executeQuery().use { rows ->
+                while (rows.next()) {
+                    byId.getOrPut(rows.getString(1)) { ArrayList() }.add(
+                        Fetch(
+                            rows.getString(1),
+                            java.time.Instant.ofEpochMilli(rows.getLong(2)),
+                            rows.getString(3),
+                            rows.getString(4),
+                        ),
+                    )
+                }
+            }
+        }
+        return sent.map { it to byId[it.id].orEmpty() }
     }
 
     private fun exec(vararg statements: String) {

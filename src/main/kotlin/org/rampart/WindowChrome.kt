@@ -20,16 +20,58 @@ internal object WindowChrome {
         if (!onWindows) return
         runCatching { Dwm.setDark(component, dark) }
     }
+
+    /**
+     * Paints the title bar in the theme's own colours.
+     *
+     * Windows 11 takes the real colours; Windows 10 ignores these two attributes entirely
+     * and keeps the dark or light chrome set above, which is why both are sent and neither
+     * is checked. A default title bar is not worth telling anybody about.
+     *
+     * The bar is part of the window, and a black strip above eighteen themes is the one
+     * piece of the app that never matched the rest of it.
+     */
+    fun setTitleBarColour(component: Component, caption: Int, text: Int, dark: Boolean) {
+        if (!onWindows) return
+        runCatching { Dwm.setDark(component, dark) }
+        runCatching { Dwm.setColours(component, caption, text) }
+    }
 }
 
-private object Dwm {
+internal object Dwm {
     /**
      * DWMWA_USE_IMMERSIVE_DARK_MODE. It is 20 from Windows 10 build 18985 onwards and 19
      * before that, and the call simply fails on the wrong one, so both are tried.
      */
     private val DARK_MODE_ATTRIBUTES = intArrayOf(20, 19)
 
+    /** DWMWA_CAPTION_COLOR and DWMWA_TEXT_COLOR, both Windows 11 and after. */
+    private const val CAPTION_COLOR = 35
+    private const val TEXT_COLOR = 36
+
     private val library: Dwmapi by lazy { Native.load("dwmapi", Dwmapi::class.java) }
+
+    fun setColours(component: Component, caption: Int, text: Int) {
+        val handle = Native.getComponentPointer(component) ?: return
+        library.DwmSetWindowAttribute(handle, CAPTION_COLOR, IntByReference(colorRef(caption)), 4)
+        library.DwmSetWindowAttribute(handle, TEXT_COLOR, IntByReference(colorRef(text)), 4)
+        // The bar is only redrawn when the frame next changes, so nudge it, the same way
+        // the dark flag has to be nudged above.
+        component.repaint()
+    }
+
+    /**
+     * 0xRRGGBB to a Windows COLORREF, which is 0x00BBGGRR.
+     *
+     * Red and blue swap. Getting this wrong does not fail, it just paints the wrong colour,
+     * which is why there is a test for it rather than a comment saying to be careful.
+     */
+    fun colorRef(rgb: Int): Int {
+        val r = (rgb shr 16) and 0xFF
+        val g = (rgb shr 8) and 0xFF
+        val b = rgb and 0xFF
+        return r or (g shl 8) or (b shl 16)
+    }
 
     fun setDark(component: Component, dark: Boolean) {
         val handle = Native.getComponentPointer(component) ?: return

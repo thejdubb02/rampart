@@ -436,10 +436,32 @@ internal class Imap private constructor(
         val sent = Smtp.connect(sendHost, user, password, sendPort).use {
             it.send(draft, identity, emptyList())
         }
-        // The bytes that went out, not a second rendering of the draft: IMAP has no
-        // EmailSubmission to file the copy, so the client does it, and two renderings of one
-        // draft differ in their Message-ID.
-        sentMailboxId?.let { runCatching { append(it, MimeMessage(Session.getInstance(Properties()), sent.inputStream())) } }
+        sentMailboxId?.let { folder ->
+            runCatching {
+                val session = Session.getInstance(Properties())
+                val filed = MimeMessage(session, sent.inputStream())
+                /*
+                 * A tracked message is filed without its pixel, so opening your own copy
+                 * cannot register as the recipient reading it.
+                 *
+                 * Easier here than it is on JMAP: IMAP has no EmailSubmission, so the client
+                 * files the copy itself and can simply file a different rendering. The
+                 * Message-ID is lifted off the bytes that actually went out, because two
+                 * renderings of one draft otherwise disagree about it and the reply threads
+                 * against a message that is not in the mailbox.
+                 */
+                if (draft.trackingPixel.isNotEmpty()) {
+                    val copy = buildMessage(session, draft.copy(trackingPixel = ""), identity, emptyList())
+                    copy.saveChanges()
+                    filed.getHeader("Message-ID")?.firstOrNull()?.let { copy.setHeader("Message-ID", it) }
+                    filed.getHeader("Date")?.firstOrNull()?.let { copy.setHeader("Date", it) }
+                    append(folder, copy)
+                } else {
+                    // The bytes that went out, not a second rendering of the draft.
+                    append(folder, filed)
+                }
+            }
+        }
     }
 
     /** APPEND, with the server's new UID when it offers UIDPLUS and a re-read when it does not. */

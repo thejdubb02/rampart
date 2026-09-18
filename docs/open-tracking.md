@@ -5,7 +5,29 @@ it, so the reversal is recorded here rather than quietly edited: the reason for 
 it was that the feature spec warned against copying competitors blindly, and "the business
 runs on knowing whether outreach was read" is a better reason than that was.
 
-**The server half is built** (2026-09-18) and lives in `server/`, with its own README, a
+**Built** (2026-09-18), both halves. The server is in `server/`; the client is the toggle
+on the composer, the pixel in the outgoing message, the local record and the poll.
+
+Four things settled by building the client half rather than by reasoning about it:
+
+- **The copy in Sent has to be a replacement, not an edit.** This file said the Sent copy
+  simply never contains the pixel, "because we write that copy ourselves". On JMAP we do
+  not: `EmailSubmission` sends the Email that was created and then relabels that same object
+  into Sent, so there is one object and it is the one that went out. An Email is immutable
+  apart from its keywords and mailboxes, so the pixel cannot be taken out of it. Rampart now
+  files a clean second copy and destroys the tracked one, created before destroyed so a
+  failure leaves a correct Sent copy that merely still has a pixel in it.
+- **Which means Rampart mints the Message-ID.** The Sent copy is a different object from the
+  one that was sent, and without the same Message-ID on both, the reply comes back and
+  threads against nothing. Checked against the live server: Stalwart accepts a client-set
+  `messageId` on create and hands it back verbatim.
+- **IMAP gets this for free**, because it has no EmailSubmission: the client files the copy
+  itself and can simply file a different rendering, with the Message-ID lifted off the bytes
+  that actually went out.
+- **A tracked plain-text message gains an HTML part** it would not otherwise have had. A
+  pixel cannot live in a text part; it would arrive as the tag spelled out mid-message.
+
+**The server half** (2026-09-18) and lives in `server/`, with its own README, a
 Dockerfile and a compose file. It serves the pixel, keeps the log and answers the read-back.
 The client half, which is the composer toggle, the pixel in the outgoing message, the local
 record and the marking of the Sent copy, is still the design below.

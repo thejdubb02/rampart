@@ -110,6 +110,27 @@ object Secrets {
         return if (store(key, made) == null) made else null
     }
 
+    /**
+     * The token Rampart uses to read opens back from the companion server.
+     *
+     * In the operating system's store rather than the settings file, for the same reason a
+     * password is: a settings file gets pasted into a bug report. Keyed through a made-up
+     * account the same way [mailKey] is, because the store is keyed by account and this
+     * belongs to the install rather than to any one mailbox.
+     */
+    private val TRACKING = SavedAccount("Rampart tracking server", "companion", "tracking-token")
+
+    fun trackingToken(): String? = load(TRACKING)
+
+    /** Null when it was kept, otherwise the reason it was not. Blank forgets it. */
+    fun setTrackingToken(value: String): String? {
+        if (value.isBlank()) {
+            forget(TRACKING)
+            return null
+        }
+        return store(TRACKING, value)
+    }
+
     fun forget(account: SavedAccount) {
         runCatching {
             val id = id(account)

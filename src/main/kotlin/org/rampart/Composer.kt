@@ -81,6 +81,22 @@ data class Draft(
     val references: List<String> = emptyList(),
     /** Files already uploaded to the server, ready to be named on the way out. */
     val attachments: List<Attachment> = emptyList(),
+    /**
+     * The tracking pixel's HTML, or empty on the overwhelming majority of messages.
+     *
+     * Carried on the draft rather than passed alongside it because it has to survive the
+     * whole way down to whichever backend builds the message, and an extra argument on
+     * every send path is how one of them ends up forgetting it.
+     */
+    val trackingPixel: String = "",
+    /**
+     * The Message-ID to use, minted here rather than by the server.
+     *
+     * Only set when tracking is on, and then it is essential: the copy kept in Sent is a
+     * different object from the one that was sent, and without the same Message-ID on both
+     * the reply comes back and threads against nothing.
+     */
+    val messageId: String? = null,
     /** The sign-off, as it was appended to [body], so the HTML part can swap it out. */
     val textSignature: String = "",
     /** The same sign-off written as HTML, or empty when there is none. */
@@ -99,6 +115,13 @@ data class Draft(
      * asking. Off unless it is turned on for this message.
      */
     val receipt: Boolean = false,
+    /**
+     * Whether this message goes out tracked. Off unless somebody said so on this message.
+     *
+     * Separate from [trackingPixel]: this is the intention, that is the machinery. The id
+     * is minted at send time, so the composer can carry the decision around without one.
+     */
+    val tracked: Boolean = false,
 ) {
     val recipients: List<String> get() = (to.split(',') + cc.split(',')).map { it.trim() }.filter { it.isNotEmpty() }
 }
@@ -254,8 +277,27 @@ internal fun Composer(
     /** Filling the window rather than sitting in the corner of it. */
     full: Boolean = false,
     onFull: (Boolean) -> Unit = {},
+    /** Whether a companion server is set up, which is the only thing that shows the toggle. */
+    trackingReady: Boolean = false,
+    /** Whether tracking was last on for this recipient's domain. */
+    trackedBefore: (String) -> Boolean = { false },
 ) {
     var draft by remember(initial) { mutableStateOf(initial) }
+    /*
+     * Tracking follows the recipient, once, and then stops arguing.
+     *
+     * Switched on as soon as the first recipient is one it was on for last time, and never
+     * again after somebody has touched the toggle on this message: a decision that keeps
+     * being overridden as the To line is edited is one nobody trusts. `chosen` is what
+     * remembers that they touched it.
+     */
+    var chosen by remember(initial) { mutableStateOf(initial.tracked) }
+    val firstRecipient = draft.recipients.firstOrNull().orEmpty()
+    LaunchedEffect(firstRecipient, trackingReady) {
+        if (!chosen && trackingReady && firstRecipient.isNotBlank()) {
+            draft = draft.copy(tracked = trackedBefore(trackingDomain(firstRecipient)))
+        }
+    }
     // The selection has to live here, not be derived from the string, or every formatting
     // button would have to guess where the caret is. Kept beside draft.body rather than
     // replacing it, because the draft is what gets saved and sent.
@@ -393,6 +435,17 @@ internal fun Composer(
                     }
                     TextButton(onClick = { draft = draft.copy(receipt = !draft.receipt) }) {
                         Text(if (draft.receipt) "Receipt on" else "Receipt")
+                    }
+                    // Only where a server has been set up. A toggle that silently does
+                    // nothing would mean every message going out believing it was tracked.
+                    if (trackingReady) {
+                        TextButton(onClick = { chosen = true; draft = draft.copy(tracked = !draft.tracked) }) {
+                            Text(
+                                if (draft.tracked) "Tracking on" else "Track",
+                                color = if (draft.tracked) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                     // Next to Discard rather than in the corner, because at panel width
                     // a title bar of its own would cost a line of the message.
@@ -836,15 +889,29 @@ internal fun signatureBlock(signature: String) = "\n\n-- \n" + signature.trimEnd
  * used to be cut out and never put back, which sent an HTML part that was the message minus
  * its sign-off while the text part had one.
  */
-internal fun htmlBodyOf(body: String, textSignature: String, htmlSignature: String): String? {
+internal fun htmlBodyOf(
+    body: String,
+    textSignature: String,
+    htmlSignature: String,
+    /**
+     * The tracking pixel, appended last.
+     *
+     * **Its presence forces an HTML part to exist.** A message typed as plain text with no
+     * HTML sign-off returns null here, meaning text only, and a pixel cannot live in a text
+     * part: it would arrive as the tag spelled out in the middle of somebody's message. So
+     * a tracked plain message gets an HTML part it would not otherwise have had.
+     */
+    pixel: String = "",
+): String? {
     val block = if (textSignature.isBlank()) "" else signatureBlock(textSignature)
     val at = if (block.isEmpty()) -1 else body.indexOf(block)
     if (htmlSignature.isBlank()) {
         val typed = if (at < 0) body else body.removeRange(at, at + block.length)
-        return if (markupToPlain(typed) == typed) null else htmlOf(body)
+        if (markupToPlain(typed) == typed && pixel.isEmpty()) return null
+        return htmlOf(body) + pixel
     }
-    if (at < 0) return htmlOf(body) + htmlSignature
-    return htmlOf(body.take(at)) + htmlSignature + htmlOf(body.substring(at + block.length))
+    if (at < 0) return htmlOf(body) + htmlSignature + pixel
+    return htmlOf(body.take(at)) + htmlSignature + htmlOf(body.substring(at + block.length)) + pixel
 }
 
 /**

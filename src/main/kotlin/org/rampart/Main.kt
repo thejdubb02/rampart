@@ -90,6 +90,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.ImageBitmap
@@ -311,7 +312,16 @@ private fun ApplicationScope.Rampart() {
         // existing install opening light again the first time it runs a build with themes.
         var theme by remember { mutableStateOf(themeFor(Settings.theme(), Settings.dark() ?: followSystem)) }
         var pack by remember { mutableStateOf(iconPack(Settings.iconPack())) }
-        LaunchedEffect(theme) { WindowChrome.setDarkTitleBar(window, theme.dark) }
+        // The whole window, not just the part Compose draws. A black strip above a purple
+        // theme is the one piece of the app that never matched the rest of it.
+        LaunchedEffect(theme) {
+            WindowChrome.setTitleBarColour(
+                window,
+                caption = theme.background.toArgb(),
+                text = theme.text.toArgb(),
+                dark = theme.dark,
+            )
+        }
         LaunchedEffect(Unit) {
             SingleInstance.bringToFront {
                 javax.swing.SwingUtilities.invokeLater {
@@ -668,6 +678,8 @@ private fun Reader(
     var tintRows by remember { mutableStateOf(Settings.tintRowsByTag()) }
     var undoBarSeconds by remember { mutableStateOf(Settings.undoBarSeconds()) }
     var loader by remember { mutableStateOf(Loader.of(Settings.loader())) }
+    var pendingTrack: Tracked? = null
+    var trackingServer by remember { mutableStateOf(Settings.trackingServer()) }
     /** The meeting this message is about, when it is about one. */
     var invitation by remember { mutableStateOf<Invitation?>(null) }
     /** What the answer being sent was, so the buttons say so and cannot be pressed twice. */
@@ -1526,6 +1538,41 @@ private fun Reader(
     }
 
     /*
+     * What has been opened, asked of the companion rather than of the mail server.
+     *
+     * The whole loop is one call, and it needs nothing from the mailbox at all: Rampart
+     * asks what has been fetched since it last asked, writes it into the local copy, and
+     * matches it to messages here, where the mapping from id to message lives. The server
+     * is never told what it is answering about.
+     *
+     * Silent on every failure. A tracking server that is down is not a reason to interrupt
+     * somebody reading their mail, and the cursor does not move, so nothing is lost.
+     */
+    LaunchedEffect(sessions, trackingServer) {
+        if (trackingServer.isBlank()) return@LaunchedEffect
+        while (true) {
+            val token = withContext(Dispatchers.IO) { Secrets.trackingToken() }
+            if (!token.isNullOrBlank()) {
+                runCatching {
+                    val since = Instant.ofEpochMilli(Settings.trackingCursor())
+                    val found = withContext(Dispatchers.IO) {
+                        TrackingClient.since(trackingServer, token, since)
+                    }
+                    if (found.isNotEmpty()) {
+                        withContext(Dispatchers.IO) {
+                            sessions.forEach { open -> runCatching { open.store?.recordFetches(found) } }
+                        }
+                        // Moved only after the rows are written, so a crash between the two
+                        // re-reads rather than skips. The store ignores a duplicate.
+                        Settings.setTrackingCursor(found.maxOf { it.at.toEpochMilli() })
+                    }
+                }
+            }
+            delay(120_000)
+        }
+    }
+
+    /*
      * Its own round rather than a line inside the poll above, because a local function
      * cannot be called before it is declared and the poll is written further up.
      *
@@ -1945,6 +1992,8 @@ private fun Reader(
             book = withContacts(books[writingAccount()].orEmpty(), contacts.map { it.first }),
             full = composeFull,
             onFull = { composeFull = it },
+            trackingReady = trackingServer.isNotBlank(),
+            trackedBefore = { domain -> domain in Settings.trackedDomains() },
             onSend = { draft ->
                 val key = writingAccount()
                 val account = key?.let(::session)
@@ -1989,15 +2038,57 @@ private fun Reader(
                                 return@launch
                             }
                         }
+                        /*
+                         * The tracking id is minted here, at the last moment, and never in
+                         * the composer.
+                         *
+                         * A draft that is edited and saved five times would otherwise carry
+                         * five ids, or the same id on two different messages if it were
+                         * copied. Minting on the way out means one id belongs to exactly one
+                         * message that actually went.
+                         *
+                         * The Message-ID is minted with it, because a tracked message keeps
+                         * a different object in Sent from the one that was sent and the two
+                         * have to agree or the reply threads against nothing.
+                         */
+                        val trackingBase = Settings.trackingServer()
+                        val outgoing = if (!draft.tracked || trackingBase.isBlank()) {
+                            draft
+                        } else {
+                            val id = newTrackingId()
+                            draft.copy(
+                                trackingPixel = pixelHtml(trackingBase, id),
+                                messageId = newTrackingId() + "@" + (domainOf(identity.email).ifBlank { "rampart.invalid" }),
+                            ).also { ready ->
+                                pendingTrack = Tracked(
+                                    id = id,
+                                    messageId = ready.messageId.orEmpty(),
+                                    account = key,
+                                    recipient = draft.recipients.firstOrNull().orEmpty(),
+                                    subject = draft.subject,
+                                    sentAt = Instant.now(),
+                                )
+                            }
+                        }
                         try {
                             withContext(Dispatchers.IO) {
-                                account.jmap.send(draft, identity, drafts.id, folderFor("sent", boxes)?.id)
+                                account.jmap.send(outgoing, identity, drafts.id, folderFor("sent", boxes)?.id)
+                                // Written down only once it has actually gone. A tracked id
+                                // for a message that failed to send would sit in the list
+                                // forever waiting for an open that cannot come.
+                                pendingTrack?.let { account.store?.track(it) }
                                 // The sent message is its own copy in Sent, so the working
                                 // copy in Drafts is now a duplicate of mail already gone.
                                 draftId?.let { runCatching { account.jmap.destroy(listOf(it)) } }
                             }
                             // Who you write to counts for more than who writes to you,
                             // so a sent message is the strongest signal the book gets.
+                            // Remembered by domain, so the next message to the same place
+                            // starts with the same answer rather than asking again.
+                            draft.recipients.firstOrNull()?.let {
+                                Settings.rememberTracking(trackingDomain(it), draft.tracked)
+                            }
+                            pendingTrack = null
                             var book = books[key] ?: AddressBook.read(AddressBook.file(key))
                             draft.recipients.forEach { book = noted(book, it) }
                             books = books + (key to book)
@@ -2268,6 +2359,7 @@ private fun Reader(
                     onTintRowsByTag = { tintRows = it },
                     onUndoBarSeconds = { undoBarSeconds = it },
                     onLoader = { loader = it },
+                    onTrackingServer = { trackingServer = it },
                     vacation = vacation,
                     vacationError = vacationError,
                     onVacation = { wanted ->

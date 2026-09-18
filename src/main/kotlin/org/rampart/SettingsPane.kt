@@ -28,7 +28,14 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
@@ -86,6 +93,8 @@ internal fun SettingsPane(
     onUndoBarSeconds: (Int) -> Unit = {},
     /** Told when the loader changes, so every spinner in the app switches at once. */
     onLoader: (Loader) -> Unit = {},
+    /** Told when the tracking server changes, so the composer's toggle appears or goes. */
+    onTrackingServer: (String) -> Unit = {},
     onRestart: () -> Unit,
     /** Null while the server's filter script is still being read. */
     filters: Script?,
@@ -136,6 +145,7 @@ internal fun SettingsPane(
                             identities, signatureError, onSignature, onPickSignatureImage,
                         )
                         "away" -> AwayPage(vacation, vacationError, onVacation)
+                        "tracking" -> TrackingPage(onTrackingServer)
                         "about" -> AboutPage(update, onRestart)
                     }
                 }
@@ -161,6 +171,7 @@ private val SettingsPages: List<Triple<String, String, String>> = listOf(
     Triple("filters", "Filters", "Mail"),
     Triple("identities", "Identities and signatures", "Mail"),
     Triple("away", "Away reply", "Mail"),
+    Triple("tracking", "Open tracking", "Mail"),
     Triple("about", "About", "Rampart"),
 )
 
@@ -206,6 +217,8 @@ private fun ThemesPage(
     onIconPack: (IconPack) -> Unit,
     onTintRowsByTag: (Boolean) -> Unit = {},
     onLoader: (Loader) -> Unit = {},
+    /** Told when the tracking server changes, so the composer's toggle appears or goes. */
+    onTrackingServer: (String) -> Unit = {},
 ) {
     val current = LocalRampartTheme.current
     Section("Theme", "Ported from Clique, so the ones you already picked there are here.")
@@ -600,6 +613,127 @@ private fun AwayPage(vacation: Vacation?, vacationError: String?, onVacation: (V
         return
     }
     AwayReply(vacation, vacationError, onVacation)
+}
+
+/**
+ * Where the companion server is, and whether Rampart can reach it.
+ *
+ * **Empty is the normal case and the page says so plainly.** The rule this app is built
+ * around is that a feature needing infrastructure is visibly unavailable with a sentence
+ * saying why, never quietly missing, because a toggle that silently does nothing means
+ * every message goes out tracked and nothing is ever recorded.
+ */
+@Composable
+private fun TrackingPage(onTrackingServer: (String) -> Unit = {}) {
+    val scope = rememberCoroutineScope()
+    var server by remember { mutableStateOf(Settings.trackingServer()) }
+    var token by remember { mutableStateOf(Secrets.trackingToken().orEmpty()) }
+    var checking by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<String?>(null) }
+    var worked by remember { mutableStateOf(false) }
+
+    Section(
+        "Open tracking",
+        "A 1x1 image in a message you send, at an address unique to it. When the recipient's " +
+            "mail client fetches that image, your own server writes down that it did. That is " +
+            "the whole mechanism, and it is what every sales tool does.",
+    )
+    Text(
+        "It is off unless you switch it on for a particular message, and there is deliberately " +
+            "no way to turn it on for everything. Rampart blocks other people's tracking pixels " +
+            "by default and names who sent them, which is the same feature pointed the other way.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.outline,
+    )
+    Spacer(Modifier.height(14.dp))
+
+    OutlinedTextField(
+        value = server,
+        onValueChange = { server = it; result = null },
+        label = { Text("Your companion server") },
+        placeholder = { Text("https://img.example.com") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Spacer(Modifier.height(10.dp))
+    OutlinedTextField(
+        value = token,
+        onValueChange = { token = it; result = null },
+        label = { Text("The token you started it with") },
+        singleLine = true,
+        visualTransformation = PasswordVisualTransformation(),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Spacer(Modifier.height(12.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Button(
+            enabled = !checking,
+            onClick = {
+                checking = true
+                result = null
+                scope.launch {
+                    val problem = withContext(Dispatchers.IO) { TrackingClient.check(server, token) }
+                    if (problem == null) {
+                        Settings.setTrackingServer(server)
+                        onTrackingServer(server)
+                        // The reason a save can fail is worth showing: without a credential
+                        // store the token is not kept and tracking stops working on restart.
+                        result = Secrets.setTrackingToken(token) ?: "Saved. Rampart can reach it."
+                        worked = true
+                    } else {
+                        result = problem
+                        worked = false
+                    }
+                    checking = false
+                }
+            },
+        ) { Text(if (checking) "Checking" else "Check and save") }
+        if (checking) {
+            Spacer(Modifier.width(12.dp))
+            Spinner(size = 20.dp, thickness = 2.dp)
+        }
+        if (server.isNotBlank() || token.isNotBlank()) {
+            Spacer(Modifier.width(8.dp))
+            TextButton(onClick = {
+                server = ""
+                token = ""
+                Settings.setTrackingServer("")
+                Secrets.setTrackingToken("")
+                onTrackingServer("")
+                result = "Turned off. The toggle will not appear on the composer."
+                worked = false
+            }) { Text("Turn it off") }
+        }
+    }
+    result?.let {
+        Spacer(Modifier.height(10.dp))
+        Text(
+            it,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (worked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+        )
+    }
+
+    Spacer(Modifier.height(18.dp))
+    Section(
+        "You have to run the server yourself",
+        "Rampart is a desktop app, and a tracking pixel has to be fetched from somewhere on " +
+            "the web, which a desktop app is not. The server is in the Rampart repository " +
+            "under server/, with a Dockerfile and a compose file: it is one container and one " +
+            "hostname. It never sees a message, a subject, a recipient or an address.",
+    )
+
+    Spacer(Modifier.height(18.dp))
+    Section(
+        "What it cannot tell you",
+        "An open is a picture being fetched, which is not the same as somebody reading. " +
+            "Gmail fetches every image through its own proxy on delivery, and Apple Mail " +
+            "Privacy Protection pre-fetches everything for everyone who has it on. Rampart " +
+            "records those as automatic rather than counting them, because an open count " +
+            "that includes robots is a number that makes you chase somebody who never read " +
+            "anything. A recipient who blocks images, as Rampart does by default, never " +
+            "registers at all.",
+    )
 }
 
 @Composable

@@ -644,9 +644,15 @@ internal class Jmap private constructor(
      * that differs from what is eventually sent is a bug waiting for the day someone sends
      * one without reopening it.
      */
-    private fun JsonObjectBuilder.emailObject(draft: Draft, identity: Identity, draftsMailboxId: String) {
+    private fun JsonObjectBuilder.emailObject(
+        draft: Draft,
+        identity: Identity,
+        draftsMailboxId: String,
+        /** A draft on the way out, and a read message for a copy filed straight into Sent. */
+        keywords: Map<String, Boolean> = mapOf("\$draft" to true),
+    ) {
         putJsonObject("mailboxIds") { put(draftsMailboxId, true) }
-        putJsonObject("keywords") { put("\$draft", true) }
+        putJsonObject("keywords") { keywords.forEach { (keyword, on) -> put(keyword, on) } }
         putJsonArray("from") {
             add(buildJsonObject { put("name", identity.name); put("email", identity.email) })
         }
@@ -676,7 +682,10 @@ internal class Jmap private constructor(
         // client that shows HTML and still reads as text in one that does not. Checked
         // against the live server, alongside an attachment, because the two together are
         // what the convenience properties are fussy about.
-        val html = htmlBodyOf(draft.body, draft.textSignature, draft.htmlSignature)
+        // Minted by us only when tracking is on, because the Sent copy is then a second
+        // object and the two have to agree or a reply threads against nothing.
+        draft.messageId?.let { putJsonArray("messageId") { add(it.trim().removePrefix("<").removeSuffix(">")) } }
+        val html = htmlBodyOf(draft.body, draft.textSignature, draft.htmlSignature, draft.trackingPixel)
         putJsonArray("textBody") { add(buildJsonObject { put("partId", "b"); put("type", "text/plain") }) }
         if (html != null) {
             putJsonArray("htmlBody") { add(buildJsonObject { put("partId", "h"); put("type", "text/html") }) }
@@ -1058,6 +1067,50 @@ internal class Jmap private constructor(
         checkNotNull(created)
         responses[1][1].jsonObject["created"]?.jsonObject?.get("sub")
             ?: throw JmapError(refusal(responses[1][1].jsonObject, "notCreated", "The server would not send the message"))
+        if (ready.trackingPixel.isNotEmpty() && sentMailboxId != null) {
+            replaceSentCopy(ready, identity, sentMailboxId, created.jsonObject["id"].require("id"))
+        }
+    }
+
+    /**
+     * Puts a copy without the tracking pixel in Sent, in place of the one that was sent.
+     *
+     * **Opening your own message must not register as the recipient reading it.** That is
+     * the single thing that would make the numbers useless, and it is not hypothetical: the
+     * copy in Sent is read on a phone all the time, and a phone loads images.
+     *
+     * It has to be a replacement rather than an edit, because JMAP makes an Email immutable
+     * apart from its keywords and its mailboxes: there is no way to reach into a stored
+     * message and take one tag out of its body. And it has to be one object on the way out
+     * rather than two, because `EmailSubmission` sends the Email that was created and then
+     * relabels that same object into Sent, so there is never a moment where the sent copy
+     * and the filed copy are different things to begin with.
+     *
+     * The new one carries the Message-ID that went out, which is why [Draft.messageId] is
+     * minted here rather than left to the server. Without it a reply threads against a
+     * message that is no longer in the mailbox.
+     *
+     * Created before the old one is destroyed, so a failure anywhere leaves a correct copy
+     * in Sent that merely still has a pixel in it. Losing the record of what was sent would
+     * be a far worse outcome than a self-open.
+     */
+    private fun replaceSentCopy(sent: Draft, identity: Identity, sentMailboxId: String, trackedId: String) {
+        runCatching {
+            val clean = sent.copy(trackingPixel = "")
+            val made = call(
+                invoke("Email/set", "c") {
+                    putJsonObject("create") {
+                        // Not a draft, and already read: it is a record of something that
+                        // has gone, not something waiting to be finished or seen.
+                        putJsonObject("clean") {
+                            emailObject(clean, identity, sentMailboxId, mapOf("\$seen" to true))
+                        }
+                    }
+                },
+            )[0][1].jsonObject
+            made["created"]?.jsonObject?.get("clean") ?: return
+            call(invoke("Email/set", "d") { putJsonArray("destroy") { add(trackedId) } })
+        }
     }
 
     /** JMAP reports a refused create per id, so the reason is inside the response, not the status code. */

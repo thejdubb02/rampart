@@ -149,7 +149,7 @@ internal fun buildMessage(
         message.setHeader(MDN_HEADER, senderStr)
     }
 
-    val html = htmlBodyOf(draft.body, draft.textSignature, draft.htmlSignature)
+    val html = htmlBodyOf(draft.body, draft.textSignature, draft.htmlSignature, draft.trackingPixel)
     val plainText = markupToPlain(draft.body)
 
     val (inlineFiles, attachments) = files.partition { it.inline && it.cid != null }

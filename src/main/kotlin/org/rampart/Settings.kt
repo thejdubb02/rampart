@@ -155,6 +155,38 @@ object Settings {
 
     fun setTintRowsByTag(value: Boolean) = write { put("tintRowsByTag", JsonPrimitive(value)) }
 
+    /**
+     * Where the companion server is, or empty when there is not one.
+     *
+     * Empty is the normal case and the whole feature is then visibly unavailable rather
+     * than silently missing: a tracking toggle that does nothing is worse than no toggle.
+     * The token that goes with it is in the credential store, never here.
+     */
+    fun trackingServer(): String = read()["trackingServer"]?.jsonPrimitive?.contentOrNull.orEmpty()
+
+    fun setTrackingServer(value: String) = write { put("trackingServer", JsonPrimitive(value.trim())) }
+
+    /**
+     * The recipient domains tracking was last switched on for.
+     *
+     * By domain rather than by address: deciding to track outreach is a decision about a
+     * company, and being asked again for every new contact at the same place is how a
+     * per-message switch turns into somebody reaching for a global one.
+     */
+    fun trackedDomains(): Set<String> =
+        (read()["trackedDomains"] as? JsonArray)?.mapNotNull { it.jsonPrimitive.contentOrNull }?.toSet() ?: emptySet()
+
+    fun rememberTracking(domain: String, on: Boolean) = write {
+        val now = trackedDomains().toMutableSet()
+        if (on) now.add(domain.lowercase()) else now.remove(domain.lowercase())
+        put("trackedDomains", JsonArray(now.sorted().map(::JsonPrimitive)))
+    }
+
+    /** The moment the companion was last asked what had been fetched. */
+    fun trackingCursor(): Long = read()["trackingCursor"]?.jsonPrimitive?.longOrNull ?: 0L
+
+    fun setTrackingCursor(value: Long) = write { put("trackingCursor", JsonPrimitive(value)) }
+
     /** Which loader is drawn while Rampart waits. Kept apart from the theme, like the icons. */
     fun loader(): String = read()["loader"]?.jsonPrimitive?.contentOrNull.orEmpty()
 
