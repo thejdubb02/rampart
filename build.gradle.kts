@@ -30,6 +30,17 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     // Parses and sanitises message HTML. Hostile input, so this is not hand rolled.
     implementation("org.jsoup:jsoup:1.21.1")
+
+    /*
+     * IMAP, so Rampart is not a client for one server.
+     *
+     * Angus Mail is the maintained implementation of Jakarta Mail, which is the reference
+     * IMAP client on the JVM and has been since it was JavaMail. Not hand rolled: IMAP is
+     * thirty years of extensions, folded headers, encodings and server quirks, and the
+     * failure mode of getting one of them subtly wrong is mail that reads incorrectly
+     * rather than an error anybody sees.
+     */
+    implementation("org.eclipse.angus:angus-mail:2.0.3")
     // SQLite with FTS5 for the local store, and with encryption, which the stock xerial
     // driver does not have. This is that driver plus SQLCipher, so encrypting the file is
     // a pragma on the connection rather than a project of its own.
