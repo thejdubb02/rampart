@@ -148,10 +148,16 @@ fun renderText(text: String, linkColor: Color, onLink: (String) -> Unit): Render
     return Rendered(out.toAnnotatedString())
 }
 
-private fun link(url: String, color: Color, onLink: (String) -> Unit) = LinkAnnotation.Clickable(
-    tag = url,
-    styles = TextLinkStyles(SpanStyle(color = color, textDecoration = TextDecoration.Underline)),
-) { onLink(url) }
+private fun link(url: String, color: Color, onLink: (String) -> Unit, underline: Boolean = true) =
+    LinkAnnotation.Clickable(
+        tag = url,
+        styles = TextLinkStyles(
+            SpanStyle(
+                color = color,
+                textDecoration = if (underline) TextDecoration.Underline else TextDecoration.None,
+            ),
+        ),
+    ) { onLink(url) }
 
 /**
  * Walks the cleaned tree once, appending as it goes. Blank lines are owed rather than written,
@@ -167,6 +173,14 @@ internal class Walker(
      * the characters passes.
      */
     private val background: Color = Color.Unspecified,
+    /**
+     * Whether a link in here gets an underline.
+     *
+     * Off inside a button, where the whole shape already says it can be pressed and the
+     * sender's own style says `text-decoration: none`. A rule underneath the words of a
+     * filled button is the one thing that stops it looking like one.
+     */
+    private val underlineLinks: Boolean = true,
 ) {
     private val out = AnnotatedString.Builder()
     private var started = false
@@ -206,7 +220,7 @@ internal class Walker(
         STYLES[tag]?.let { out.pushStyle(it); pops++ }
         if (tag == "a") {
             val href = e.attr("abs:href").ifBlank { e.attr("href") }.trim()
-            if (href.isNotBlank()) { out.pushLink(link(href, linkColor, onLink)); pops++ }
+            if (href.isNotBlank()) { out.pushLink(link(href, linkColor, onLink, underlineLinks)); pops++ }
         }
 
         e.childNodes().forEach { node(it) }

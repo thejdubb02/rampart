@@ -65,6 +65,23 @@ internal sealed interface Block {
         )
     }
 
+    /**
+     * A link the sender drew as a button, and which has to be drawn as one.
+     *
+     * Every transactional message ends in one of these: confirm your address, open the
+     * ticket, view the invoice. It is an ordinary anchor with a background colour and some
+     * padding on it, and read as ordinary text it becomes a line of blue words that does not
+     * look like the thing the whole message is asking you to press.
+     *
+     * The label keeps its link annotation, so pressing it goes through exactly the same path
+     * every other link in the message does.
+     */
+    data class Button(
+        val label: AnnotatedString,
+        val background: Int,
+        val centred: Boolean = false,
+    ) : Block
+
     data object Rule : Block
 }
 
@@ -232,6 +249,28 @@ private class Cutter(
                     }
                 }
                 /*
+                 * A link with a background is a button, and is the point of most of the mail
+                 * that has one. Only when it holds no block of its own: an anchor wrapped
+                 * round a banner image is a linked picture, not a button with a picture in it.
+                 */
+                "a" -> {
+                    val fill = colourOf(element)
+                    if (fill != null && !holdsBlocks(element)) {
+                        flush()
+                        val label = Walker(inkFor(fill), quoteColor, onLink, background, underlineLinks = false)
+                            .also { it.node(element) }.build()
+                        if (label.isNotBlank()) {
+                            out += Block.Button(label, fill, centred || isCentred(element))
+                        }
+                    } else if (holdsBlocks(element)) {
+                        flush()
+                        out += blocks(element, centred || isCentred(element))
+                    } else {
+                        inline.node(element)
+                    }
+                }
+
+                /*
                  * **The same question for every other element, which is where the pictures
                  * were going.** An `a`, a `span` or a `font` was read as text and nothing
                  * else, so an image inside a link contributed no characters and disappeared.
@@ -331,13 +370,7 @@ private class Cutter(
      * what anything built this decade emits. Named colours are not resolved, because a
      * layout table naming one is vanishingly rare next to the cost of carrying the list.
      */
-    private fun colourOf(element: Element?): Int? {
-        element ?: return null
-        val raw = element.attr("bgcolor").ifBlank {
-            BACKGROUND.find(element.attr("style"))?.groupValues?.get(1).orEmpty()
-        }.trim()
-        return hexColour(raw)
-    }
+    private fun colourOf(element: Element?): Int? = backgroundOf(element)
 
     /**
      * How wide a cell asks to be, relative to its neighbours.
@@ -384,7 +417,37 @@ private class Cutter(
  * has none, and is never drawn.
  */
 private fun standsAlone(element: Element): Boolean =
+    holdsBlocks(element) ||
+        // A link the sender filled with a colour is a button, and a button is a block. Read
+        // as part of the paragraph around it, it comes out as a line of blue words in the
+        // middle of a sentence, which is what the message is actually asking you to press.
+        element.select("a[style], a[bgcolor]").any { backgroundOf(it) != null }
+
+/**
+ * Whether an element holds a block of its own, ignoring the button rule.
+ *
+ * Separate from [standsAlone] because jsoup's `select` includes the element itself, so a
+ * button anchor satisfies the button half of that test on its own account. Asked with the
+ * wrong one, an anchor is forever "holding a block", and the branch that would have drawn it
+ * as a button can never be reached.
+ */
+private fun holdsBlocks(element: Element): Boolean =
     element.select("img, hr, blockquote, ul, ol, table, h1, h2, h3, h4, h5, h6").isNotEmpty()
+
+/**
+ * The background colour an element asks for, from either of the two ways mail says it.
+ *
+ * File level rather than a method, because the walk and the test that decides whether to
+ * recurse into an element both have to answer it the same way. They disagreed once and the
+ * result was a button that was recognised and never reached.
+ */
+internal fun backgroundOf(element: Element?): Int? {
+    element ?: return null
+    val raw = element.attr("bgcolor").ifBlank {
+        BACKGROUND.find(element.attr("style"))?.groupValues?.get(1).orEmpty()
+    }.trim()
+    return hexColour(raw)
+}
 
 /**
  * Whether an element asks to be centred, by either of the two ways mail says so.

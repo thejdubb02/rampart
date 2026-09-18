@@ -323,4 +323,47 @@ class TableColourTest {
         val html = """<table><tr><td><h1>Left</h1></td></tr></table>"""
         assertFalse(cut(html).blocks.filterIsInstance<Block.Words>().first().centred)
     }
+
+    @Test
+    fun `a link the sender filled with a colour is a button`() {
+        // Every transactional message ends in one of these: confirm your address, open the
+        // ticket, view the invoice. Read as text it is a line of blue words in the middle of
+        // a sentence, and it is the thing the whole message is asking you to press.
+        val html = """<p>Here you go.</p><p><a href="https://example.org/x" style="background:#2b1a0e;color:#fff;padding:9px 16px;border-radius:4px">Open in FreeScout</a></p>"""
+        val buttons = cut(html).blocks.filterIsInstance<Block.Button>()
+        assertEquals(1, buttons.size)
+        assertEquals("Open in FreeScout", buttons.first().label.text)
+        assertEquals(0xFF2B1A0E.toInt(), buttons.first().background)
+    }
+
+
+    @Test
+    fun `an ordinary link is left as a link`() {
+        val html = """<p>Read the <a href="https://example.org">notes</a> first.</p>"""
+        assertEquals(0, cut(html).blocks.filterIsInstance<Block.Button>().size)
+        assertEquals(1, cut(html).blocks.filterIsInstance<Block.Words>().size)
+    }
+
+    @Test
+    fun `a link wrapped round a banner is a linked picture, not a button with a picture in it`() {
+        val html = """<a href="https://example.org" style="background:#336699"><img src="https://example.org/banner.png"></a>"""
+        val blocks = cut(html).blocks
+        assertEquals(1, blocks.filterIsInstance<Block.Picture>().size)
+        assertEquals(0, blocks.filterIsInstance<Block.Button>().size)
+    }
+
+    @Test
+    fun `a button escapes the paragraph it is written in`() {
+        // jsoup's select includes the element itself, so the anchor satisfies the button
+        // test on its own account. Asked with that test rather than one about real block
+        // content, an anchor is forever "holding a block" and can never become a button.
+        val html = """<div>Some words <a href="https://example.org" style="background:#112233">Press</a> after them.</div>"""
+        assertEquals(1, cut(html).blocks.filterIsInstance<Block.Button>().size)
+    }
+
+    @Test
+    fun `a button in a centred wrapper is centred`() {
+        val html = """<div align="center"><a href="https://example.org" style="background:#112233">Press</a></div>"""
+        assertTrue(cut(html).blocks.filterIsInstance<Block.Button>().first().centred)
+    }
 }

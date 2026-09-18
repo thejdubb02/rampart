@@ -2,6 +2,8 @@ package org.rampart
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -114,6 +116,31 @@ private fun ColumnScope.Draw(
             modifier = Modifier.padding(bottom = 10.dp)
                 .then(if (centred) Modifier.fillMaxWidth() else Modifier),
         )
+        }
+
+        /*
+         * Drawn as the sender drew it: their colour, readable ink, rounded, and only as wide
+         * as its words. Hugging the text is the whole difference between a button and the
+         * full width band a table cell with a colour becomes, and it is what makes it read
+         * as something to press.
+         */
+        is Block.Button -> Box(
+            Modifier.fillMaxWidth().padding(bottom = 10.dp),
+            contentAlignment = if (block.centred || LocalCellCentred.current) {
+                Alignment.TopCenter
+            } else {
+                Alignment.TopStart
+            },
+        ) {
+            Text(
+                block.label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = inkFor(block.background),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color(block.background))
+                    .padding(horizontal = 16.dp, vertical = 9.dp),
+            )
         }
 
         // IntrinsicSize.Min on the row is what lets the edge be as tall as the quote: a
@@ -256,6 +283,7 @@ internal fun flatten(blocks: List<Block>): AnnotatedString = AnnotatedString.Bui
                     }
                     append('\n')
                 }
+                is Block.Button -> { append(block.label); append('\n') }
                 is Block.Picture -> if (block.alt.isNotBlank()) { append(block.alt); append('\n') }
                 Block.Rule -> append("\n")
             }
