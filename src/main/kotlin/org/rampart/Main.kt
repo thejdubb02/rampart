@@ -661,6 +661,7 @@ private fun Reader(
     var tagsSeen by remember { mutableStateOf<Map<String, Map<String, Int>>>(emptyMap()) }
     var tagColours by remember { mutableStateOf(Settings.tagColours()) }
     var folded by remember { mutableStateOf(Settings.collapsedSections()) }
+    var tintRows by remember { mutableStateOf(Settings.tintRowsByTag()) }
     /** The meeting this message is about, when it is about one. */
     var invitation by remember { mutableStateOf<Invitation?>(null) }
     /** What the answer being sent was, so the buttons say so and cannot be pressed twice. */
@@ -689,6 +690,8 @@ private fun Reader(
     // The server's cards, with the JSON each came from, so a save can be built on top
     // of it and leave the properties this build does not draw alone.
     var contacts by remember { mutableStateOf<List<Pair<Contact, JsonObject>>>(emptyList()) }
+    var contactBooks by remember { mutableStateOf<List<ContactBook>>(emptyList()) }
+    var quotas by remember { mutableStateOf<Map<String, List<MailQuota>>>(emptyMap()) }
     var contactsLoading by remember { mutableStateOf(false) }
     var contactsError by remember { mutableStateOf<String?>(null) }
     var signatureError by remember { mutableStateOf<String?>(null) }
@@ -1146,7 +1149,12 @@ private fun Reader(
         contactsLoading = true
         contactsError = null
         try {
-            contacts = withContext(Dispatchers.IO) { session(key).jmap.contacts() }
+            withContext(Dispatchers.IO) {
+                // Both in one trip. The books are what name and filter the list, so
+                // fetching them separately would draw the list once without them.
+                contactBooks = runCatching { session(key).jmap.addressBooks() }.getOrDefault(emptyList())
+                contacts = session(key).jmap.contacts()
+            }
         } catch (e: Exception) {
             // Never fatal. The address book built from mail is the one that has to work.
             contactsError = whyFailed(e)
@@ -1160,6 +1168,22 @@ private fun Reader(
         if (!settingsOpen || key == null) return@LaunchedEffect
         vacationError = null
         vacation = withContext(Dispatchers.IO) { runCatching { session(key).jmap.vacation() }.getOrNull() }
+    }
+
+    /*
+     * How full each mailbox is, asked for only while the page that shows it is open.
+     *
+     * Every account rather than the one in front, because the Accounts page lists them all
+     * and a bar under one of three would look like the other two had failed. Each is caught
+     * on its own so one server that will not answer does not blank the others.
+     */
+    LaunchedEffect(settingsOpen, sessions) {
+        if (!settingsOpen) return@LaunchedEffect
+        quotas = withContext(Dispatchers.IO) {
+            sessions.associate { open ->
+                open.key to runCatching { open.jmap.quota() }.getOrDefault(emptyList())
+            }
+        }
     }
 
     /*
@@ -2086,6 +2110,7 @@ private fun Reader(
         CompositionLocalProvider(
             LocalSenderPhotos provides senderPhotos,
             LocalTagColours provides tagColours,
+            LocalTintRowsByTag provides tintRows,
         ) {
         Row(Modifier.fillMaxSize()) {
             Sidebar(
@@ -2176,6 +2201,7 @@ private fun Reader(
                     contacts = contacts.map { it.first },
                     loading = contactsLoading,
                     error = contactsError,
+                    books = contactBooks,
                     onSave = if (sessions.any { it.jmap.hasContacts() }) { wanted ->
                         val key = writingAccount()
                         if (key != null) {
@@ -2185,17 +2211,15 @@ private fun Reader(
                                     withContext(Dispatchers.IO) {
                                         val jmap = session(key).jmap
                                         val original = contacts.firstOrNull { it.first.id == wanted.id }?.second
-                                        // A new card has to land in a book, and the default
-                                        // one is the only sane guess. Stalwart refuses a
-                                        // card that belongs to none.
-                                        val books = if (wanted.bookIds.isEmpty()) {
+                                        // A card has to land in a book: Stalwart refuses one
+                                        // that belongs to none. The editor picks it now, so
+                                        // this is only the fallback for a card that arrived
+                                        // from somewhere else without one.
+                                        val books = wanted.bookIds.ifEmpty {
+                                            val known = contactBooks.ifEmpty { jmap.addressBooks() }
                                             listOfNotNull(
-                                                jmap.addressBooks()
-                                                    .firstOrNull { it.isDefault }?.id
-                                                    ?: jmap.addressBooks().firstOrNull()?.id,
+                                                (known.firstOrNull { it.isDefault } ?: known.firstOrNull())?.id,
                                             )
-                                        } else {
-                                            wanted.bookIds
                                         }
                                         jmap.saveContact(wanted.copy(bookIds = books), original)
                                         contacts = jmap.contacts()
@@ -2240,6 +2264,8 @@ private fun Reader(
                         AccountMailboxes(it.key, it.account.name, it.account.email, mailboxes[it.key].orEmpty())
                     },
                     identities = identities[settingsAccount()].orEmpty(),
+                    quotas = quotas,
+                    onTintRowsByTag = { tintRows = it },
                     vacation = vacation,
                     vacationError = vacationError,
                     onVacation = { wanted ->
@@ -2483,8 +2509,8 @@ private fun Reader(
                                 try {
                                     withContext(Dispatchers.IO) {
                                         val jmap = session(key).jmap
-                                        val book = jmap.addressBooks()
-                                            .let { books -> books.firstOrNull { it.isDefault } ?: books.firstOrNull() }
+                                        val known = contactBooks.ifEmpty { jmap.addressBooks() }
+                                        val book = known.firstOrNull { it.isDefault } ?: known.firstOrNull()
                                         jmap.saveContact(
                                             Contact(
                                                 name = message.from.trim(),
@@ -3605,8 +3631,24 @@ private fun MessageRow(
      *
      * Selection still wins, because that is the row being acted on.
      */
+    /*
+     * A tag's colour on the row itself, when that is switched on.
+     *
+     * Bulwark's `tintListRowsByTag`, which is the last thing its tag settings do that this
+     * did not. Very faint on purpose: at any strength that reads as a colour it fights the
+     * unread tint above it and an inbox where everything is tagged becomes unreadable,
+     * which is the reason it is a setting rather than the default.
+     *
+     * The first tag wins where a message has several. Blending them makes a brown nobody
+     * chose, and the chips beside the subject already say what the others are.
+     */
+    val tint = if (!LocalTintRowsByTag.current) null else {
+        tagsOf(message.keywords, LocalTagColours.current).firstOrNull()?.let { Color(it.color) }
+    }
     val background = when {
         selected -> MaterialTheme.colorScheme.surfaceVariant
+        tint != null && !message.seen -> tint.copy(alpha = 0.22f)
+        tint != null -> tint.copy(alpha = 0.11f)
         !message.seen -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
         else -> Color.Transparent
     }

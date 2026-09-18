@@ -40,6 +40,7 @@ private const val SUBMISSION = "urn:ietf:params:jmap:submission"
 private const val VACATION = "urn:ietf:params:jmap:vacationresponse"
 private const val SIEVE = "urn:ietf:params:jmap:sieve"
 private const val CONTACTS = "urn:ietf:params:jmap:contacts"
+private const val QUOTA = "urn:ietf:params:jmap:quota"
 
 /**
  * About where a server stops taking an HTML signature.
@@ -747,6 +748,35 @@ internal class Jmap private constructor(
      */
     override fun hasContacts(): Boolean = capabilities.any { it.endsWith(":contacts") }
 
+    /**
+     * RFC 9425 `Quota/get`, asked for only where the session says it exists.
+     *
+     * **An advertised capability and a configured limit are different things.** This
+     * account advertises `urn:ietf:params:jmap:quota` and answers with an empty list,
+     * because no quota has been set on it. Checked against the live server rather than
+     * assumed from the capability, the same way ContactCard/query was.
+     */
+    override fun quota(): List<MailQuota> {
+        if (capabilities.none { it.endsWith(":quota") }) return emptyList()
+        return runCatching {
+            call(
+                invoke("Quota/get", "q") { put("ids", JsonNull) },
+                also = QUOTA,
+            )[0].list().map {
+                val o = it.jsonObject
+                MailQuota(
+                    name = o["name"]?.str().orEmpty(),
+                    used = o["used"]?.num() ?: 0L,
+                    // hardLimit is the one that stops delivery. warnLimit and softLimit are
+                    // advisory, and showing a bar against an advisory number would say the
+                    // mailbox is full while mail is still arriving.
+                    limit = o["hardLimit"]?.num(),
+                    resourceType = o["resourceType"]?.str().orEmpty(),
+                )
+            }
+        }.getOrDefault(emptyList())
+    }
+
     override fun addressBooks(): List<ContactBook> = call(
         invoke("AddressBook/get", "a") { put("ids", JsonNull) },
         also = CONTACTS,
@@ -1294,6 +1324,10 @@ private fun jsonToSummary(o: JsonObject): Summary = Summary(
 )
 
 private fun kotlinx.serialization.json.JsonElement.str(): String? = jsonPrimitive.contentOrNull
+
+/** A number, or null where the server sent null or something that is not one. */
+private fun kotlinx.serialization.json.JsonElement.num(): Long? =
+    (this as? JsonPrimitive)?.contentOrNull?.toLongOrNull()
 
 private fun kotlinx.serialization.json.JsonElement?.require(name: String): String =
     this?.str() ?: throw JmapError("The server's reply has no $name.")

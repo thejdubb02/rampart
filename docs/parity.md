@@ -96,7 +96,28 @@ to write them would put Rampart's furniture in somebody's mail. The colour deriv
 the tag's name is still the default, and it is stable, so two clients agree until somebody
 changes one.
 
-Still missing: per-tag visibility rules.
+This file previously said "still missing: per-tag visibility rules". **There is no such
+setting in Bulwark**, and the line was written from a guess rather than from its settings.
+Read out of its own per-user settings on 2026-09-18, everything it keeps about tags is
+three keys: `emailKeywords` (the registry of id, label and colour), `nestedTags`, and
+`tintListRowsByTag`. Rampart nests always, and has its own colours, so the only one of the
+three it did not have was the tinting, which is now a setting here too and is the last of
+this section.
+
+### 2.8b Contacts, and how full the mailbox is
+
+**Have.** Every address book on the account rather than only the default one. This mailbox
+has two, and the second is "Trusted Senders", which is not decoration: its cards were being
+listed among everything else with nothing saying where they came from, and every new
+contact was saved into the wrong book. Contacts can now be filtered by book, each row says
+which book it is in, and a card can be put in several, which JSContact allows.
+
+**Quota, where the server keeps one.** JMAP's `Quota/get` (RFC 9425) and IMAP's own QUOTA
+extension, shown under each account. The thing worth recording: **an advertised capability
+and a configured limit are different things.** This server advertises
+`urn:ietf:params:jmap:quota` and returns an empty list, because no limit is set on the
+account, so "no quota" had to be a sentence rather than an error. Checked against the live
+server rather than inferred, the same way `ContactCard/query` was.
 
 ### 2.9 Identities and sending
 

@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -77,6 +78,10 @@ internal fun SettingsPane(
     iconPack: IconPack = LineIcons,
     onIconPack: (IconPack) -> Unit = {},
     onAddAccount: () -> Unit,
+    /** How full each account is, by account key. Empty until settings is open. */
+    quotas: Map<String, List<MailQuota>> = emptyMap(),
+    /** Told when the row tinting is switched, so the list redraws without reopening. */
+    onTintRowsByTag: (Boolean) -> Unit = {},
     onRestart: () -> Unit,
     /** Null while the server's filter script is still being read. */
     filters: Script?,
@@ -110,7 +115,7 @@ internal fun SettingsPane(
             ) {
                 Column(Modifier.widthIn(max = 720.dp).fillMaxWidth()) {
                     when (page) {
-                        "accounts" -> AccountsPage(accounts, onAddAccount)
+                        "accounts" -> AccountsPage(accounts, onAddAccount, quotas)
                         "notifications" -> NotificationsPage(notifyOnArrival, onNotifyOnArrival)
                         "reading" -> ReadingPage()
                         "filters" -> FiltersPage(
@@ -122,7 +127,7 @@ internal fun SettingsPane(
                             supported = filtersSupported,
                             onSave = onFilters,
                         )
-                        "themes" -> ThemesPage(onTheme, iconPack, onIconPack)
+                        "themes" -> ThemesPage(onTheme, iconPack, onIconPack, onTintRowsByTag)
                         "identities" -> IdentitiesPage(
                             identities, signatureError, onSignature, onPickSignatureImage,
                         )
@@ -191,7 +196,12 @@ private fun SettingsNav(current: String, onPick: (String) -> Unit) {
 }
 
 @Composable
-private fun ThemesPage(onTheme: (Theme) -> Unit, iconPack: IconPack, onIconPack: (IconPack) -> Unit) {
+private fun ThemesPage(
+    onTheme: (Theme) -> Unit,
+    iconPack: IconPack,
+    onIconPack: (IconPack) -> Unit,
+    onTintRowsByTag: (Boolean) -> Unit = {},
+) {
     val current = LocalRampartTheme.current
     Section("Theme", "Ported from Clique, so the ones you already picked there are here.")
     // Not lazy in any useful sense: there are eighteen of these and the column above
@@ -238,6 +248,31 @@ private fun ThemesPage(onTheme: (Theme) -> Unit, iconPack: IconPack, onIconPack:
         }
     }
 
+    var tint by remember { mutableStateOf(Settings.tintRowsByTag()) }
+    Section(
+        "Tags in the list",
+        "Bulwark colours a tagged row. Off here by default, because Rampart already tints " +
+            "an unread row and two tints on one row read as a fault rather than two facts.",
+    )
+    Row(
+        Modifier.fillMaxWidth().clickable {
+            tint = !tint
+            Settings.setTintRowsByTag(tint)
+            onTintRowsByTag(tint)
+        }.padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Switch(
+            checked = tint,
+            onCheckedChange = {
+                tint = it
+                Settings.setTintRowsByTag(it)
+                onTintRowsByTag(it)
+            },
+        )
+        Spacer(Modifier.width(12.dp))
+        Text("Colour a tagged row with its tag", style = MaterialTheme.typography.bodyMedium)
+    }
 }
 
 /**
@@ -376,7 +411,12 @@ private fun NotificationsPage(notifyOnArrival: Boolean, onNotifyOnArrival: (Bool
 }
 
 @Composable
-private fun AccountsPage(accounts: List<AccountMailboxes>, onAddAccount: () -> Unit) {
+private fun AccountsPage(
+    accounts: List<AccountMailboxes>,
+    onAddAccount: () -> Unit,
+    /** How full each account is, by account key. Absent where the server keeps no limit. */
+    quotas: Map<String, List<MailQuota>> = emptyMap(),
+) {
     Section("Accounts", "Signed in on this computer. Passwords stay in Windows, never in a file.")
     accounts.forEach { account ->
         Row(
@@ -396,11 +436,41 @@ private fun AccountsPage(accounts: List<AccountMailboxes>, onAddAccount: () -> U
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.outline,
                 )
+                mainQuota(quotas[account.key].orEmpty())?.let { quota ->
+                    Spacer(Modifier.height(5.dp))
+                    quotaShare(quota)?.let { share ->
+                        LinearProgressIndicator(
+                            progress = { share },
+                            color = if (quotaIsTight(quota)) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.primary,
+                            trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier.fillMaxWidth().height(4.dp),
+                        )
+                        Spacer(Modifier.height(4.dp))
+                    }
+                    Text(
+                        quotaText(quota),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (quotaIsTight(quota)) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.outline,
+                    )
+                }
             }
         }
     }
     Spacer(Modifier.height(6.dp))
     OutlinedButton(onClick = onAddAccount) { Text("Add account") }
+    // Said once, under the list, rather than as a line under every account. A mailbox with
+    // no limit is the normal case and repeating it would read as something being wrong.
+    if (accounts.isNotEmpty() && accounts.none { mainQuota(quotas[it.key].orEmpty()) != null }) {
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "No storage limit is set on " + (if (accounts.size > 1) "these mailboxes" else "this mailbox") +
+                ", so there is nothing to run out of. If one is set later it appears here.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline,
+        )
+    }
 }
 
 @Composable

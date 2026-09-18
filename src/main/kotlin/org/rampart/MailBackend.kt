@@ -117,6 +117,12 @@ internal interface MailBackend {
 
     fun addressBooks(): List<ContactBook>
 
+    /**
+     * How full the mailbox is. Empty where the server keeps no limit, which is an answer
+     * and not a failure: both protocols make a quota optional even where they support one.
+     */
+    fun quota(): List<MailQuota>
+
     /** The card and the JSON it arrived as, because a save is written on top of the latter. */
     fun contacts(): List<Pair<Contact, JsonObject>>
 

@@ -144,6 +144,17 @@ object Settings {
         put("collapsedSections", JsonArray(sections.sorted().map(::JsonPrimitive)))
     }
 
+    /**
+     * Whether a tagged row in the message list carries its tag's colour.
+     *
+     * Off by default, which is the one place this deliberately differs from Bulwark. Its
+     * list is roomier; Rampart's already tints an unread row, and two tints on one row read
+     * as a rendering fault rather than as two facts.
+     */
+    fun tintRowsByTag(): Boolean = read()["tintRowsByTag"]?.jsonPrimitive?.booleanOrNull == true
+
+    fun setTintRowsByTag(value: Boolean) = write { put("tintRowsByTag", JsonPrimitive(value)) }
+
     /** Which icon pack, kept apart from the theme so the two can be chosen separately. */
     fun iconPack(): String = read()["iconPack"]?.jsonPrimitive?.contentOrNull.orEmpty()
 

@@ -42,6 +42,28 @@ internal data class Contact(
 internal data class ContactBook(val id: String, val name: String, val isDefault: Boolean)
 
 /**
+ * Which address books a card should be saved into.
+ *
+ * A card already in one stays where it is, because a picker that silently moved it would
+ * take it out of a book somebody else put it in. A new one goes into [preferred] when a
+ * book is being looked at, then the default, then whichever there is.
+ *
+ * Never empty when there is any book at all: Stalwart refuses a card belonging to none, and
+ * the refusal arrives as a save that failed rather than as anything explaining why.
+ */
+internal fun booksFor(
+    contact: Contact,
+    books: List<ContactBook>,
+    preferred: String? = null,
+): Set<String> {
+    if (contact.bookIds.isNotEmpty()) return contact.bookIds.toSet()
+    val pick = books.firstOrNull { it.id == preferred }
+        ?: books.firstOrNull { it.isDefault }
+        ?: books.firstOrNull()
+    return setOfNotNull(pick?.id)
+}
+
+/**
  * A card as it arrived, read down to the parts Rampart shows.
  *
  * Every collection in JSContact is a map from an arbitrary key to an object rather than a

@@ -118,6 +118,15 @@ internal val LocalSenderPhotos = staticCompositionLocalOf { emptyMap<String, Ima
  */
 internal val LocalTagColours = staticCompositionLocalOf { emptyMap<String, Long>() }
 
+/**
+ * Whether a tagged row in the message list carries its tag's colour.
+ *
+ * Bulwark's `tintListRowsByTag`. A local for the same reason as the colours above: it is
+ * read in one place deep in the list and threading it through would put a parameter on
+ * every function between here and there.
+ */
+internal val LocalTintRowsByTag = staticCompositionLocalOf { false }
+
 /** The picture for [email], or null. Case is not part of an address. */
 @Composable
 internal fun photoFor(email: String): ImageBitmap? =

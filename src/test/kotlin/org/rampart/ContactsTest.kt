@@ -204,4 +204,36 @@ class ContactPhotoTest {
         val written = merged(contactOf(fromServer).copy(name = "New"), fromServer)
         assertEquals("data:image/png;base64,AAAA", contactOf(written).photo)
     }
+
+    // ---- which book a card is saved into -----------------------------------------------
+
+    private val personal = ContactBook("b", "Stalwart Address Book", isDefault = true)
+    private val trusted = ContactBook("c", "Trusted Senders", isDefault = false)
+
+    @Test
+    fun `a card already in a book stays where it is`() {
+        // Including one in several, which JSContact allows and a picker must not undo.
+        assertEquals(
+            setOf("b", "c"),
+            booksFor(Contact(id = "1", bookIds = listOf("b", "c")), listOf(personal, trusted), preferred = "c"),
+        )
+    }
+
+    @Test
+    fun `a new card goes into the book being looked at`() {
+        assertEquals(setOf("c"), booksFor(Contact(), listOf(personal, trusted), preferred = "c"))
+    }
+
+    @Test
+    fun `with no book in mind it goes to the default, then to whatever there is`() {
+        assertEquals(setOf("b"), booksFor(Contact(), listOf(personal, trusted)))
+        assertEquals(setOf("c"), booksFor(Contact(), listOf(trusted)))
+        // A filter naming a book that has since gone is ignored rather than obeyed.
+        assertEquals(setOf("b"), booksFor(Contact(), listOf(personal, trusted), preferred = "gone"))
+    }
+
+    @Test
+    fun `a server with no address book asks for none, rather than inventing one`() {
+        assertEquals(emptySet(), booksFor(Contact(), emptyList()))
+    }
 }

@@ -51,9 +51,8 @@ internal fun emailDocument(
     val policy = if (remoteImages) REMOTE_POLICY else LOCAL_POLICY
     val css = stylesheet(source, remoteImages)
     val body = clean.body().html()
-    // A message that ships its own dark mode is left alone: inverting one that already
-    // chose its colours is how a careful sender's design comes out wrong.
-    val invert = if (dark && !OWN_DARK_MODE.containsMatchIn(css + body)) DARK_CSS else ""
+    // A message that chose its own colours is left alone. See [paintsItself].
+    val invert = if (dark && !paintsItself(clean, css)) DARK_CSS else ""
     return EmailPage(
         """<!DOCTYPE html>
 <html><head>
@@ -252,6 +251,74 @@ img, video { filter: invert(1) hue-rotate(180deg); }
 
 /** A message that asked for dark treatment of its own, and so should not be inverted. */
 private val OWN_DARK_MODE = Regex("""prefers-color-scheme\s*:\s*dark""", RegexOption.IGNORE_CASE)
+
+/**
+ * Whether the message painted its own page, and so must not be inverted.
+ *
+ * **[DARK_CSS] exists for a message that never chose a colour**, which is the ordinary
+ * case: black text on the white a mail client supplies by default, and a sheet of white in
+ * a dark window is worse than turning it inside out. A message that set its own background
+ * is a different thing entirely. It has a design, and inverting a design produces something
+ * nobody made: a hotel's dark brown header came out pink, which is how this was found.
+ *
+ * Three ways a sender says so, and the third is the one that matters in practice. Almost no
+ * marketing email sets a background on `body`, because Outlook ignored it for twenty years;
+ * they all wrap the message in a full-width table and paint that instead.
+ *
+ * White is not a design. A sender who writes `bgcolor="#ffffff"` is being defensive about
+ * clients that default to something else, not choosing white over black, so that one still
+ * inverts and still turns dark.
+ */
+private fun paintsItself(document: Document, css: String): Boolean {
+    if (OWN_DARK_MODE.containsMatchIn(css + document.html())) return true
+    if (colouredBackground(document.body())) return true
+    // `body{background:...}` in the message's own stylesheet, which bodyRule() has already
+    // copied across by this point but which may also have arrived in a rule of its own.
+    if (BODY_BACKGROUND.containsMatchIn(css)) return true
+    return document.body().select("table, div, center, td").any { spansTheWidth(it) && colouredBackground(it) }
+}
+
+/** A background colour that is not white and not transparent. */
+private fun colouredBackground(element: org.jsoup.nodes.Element): Boolean {
+    val stated = listOf(
+        element.attr("bgcolor"),
+        Regex("""background(-color)?\s*:\s*([^;]+)""", RegexOption.IGNORE_CASE)
+            .find(element.attr("style"))?.groupValues?.get(2).orEmpty(),
+    )
+    return stated.any { value ->
+        val colour = value.trim().lowercase().removeSuffix(";").trim()
+        colour.isNotBlank() && colour !in BLANK_COLOURS
+    }
+}
+
+/**
+ * Wide enough to be the page rather than a box inside it.
+ *
+ * A quoted block or a callout with a tint is not a design decision about the whole message,
+ * and treating one as such would leave an otherwise plain message as a white sheet.
+ */
+private fun spansTheWidth(element: org.jsoup.nodes.Element): Boolean {
+    if (element.tagName().equals("center", ignoreCase = true)) return true
+    val width = element.attr("width").trim().ifBlank {
+        Regex("""(?<!min-|max-)width\s*:\s*([^;]+)""", RegexOption.IGNORE_CASE)
+            .find(element.attr("style"))?.groupValues?.get(1).orEmpty()
+    }
+    val cleaned = width.trim().lowercase().removeSuffix(";").trim()
+    // A pixel width is a fixed-width message body, which is still the whole page. 600 is
+    // the width every email template in existence settled on.
+    val pixels = cleaned.removeSuffix("px").toIntOrNull()
+    return cleaned == "100%" || (pixels != null && pixels >= 500)
+}
+
+private val BLANK_COLOURS = setOf(
+    "", "#fff", "#ffffff", "white", "transparent", "inherit", "initial", "none", "unset",
+    "rgb(255,255,255)", "rgb(255, 255, 255)",
+)
+
+private val BODY_BACKGROUND = Regex(
+    """(^|[,{}\s])(body|html)\s*\{[^}]*background""",
+    setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+)
 
 /**
  * Bytes as a `data:` URI, which is how a part the message carries reaches the engine.

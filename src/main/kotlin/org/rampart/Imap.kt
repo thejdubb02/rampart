@@ -539,6 +539,33 @@ internal class Imap private constructor(
 
     override fun hasContacts(): Boolean = false
 
+    /**
+     * IMAP's own QUOTA extension (RFC 2087), which Angus exposes on the store.
+     *
+     * Asked for on the root rather than per folder: `getQuota("")` is the account, which is
+     * the question being asked. A server without the extension throws, and that is the same
+     * answer as a server with no limit set, so both come back empty rather than as an error
+     * somebody has to read.
+     */
+    override fun quota(): List<MailQuota> = runCatching {
+        store.getQuota("").flatMap { quota ->
+            quota.resources.orEmpty().map { resource ->
+                MailQuota(
+                    name = quota.quotaRoot.orEmpty(),
+                    // IMAP counts storage in kilobytes and JMAP counts it in octets. Scaled
+                    // here so one screen is not two units, which would read as a mailbox
+                    // a thousand times emptier than it is.
+                    used = if (isSize(resource.name)) resource.usage * 1024 else resource.usage,
+                    limit = if (isSize(resource.name)) resource.limit * 1024 else resource.limit,
+                    resourceType = if (isSize(resource.name)) "octets" else "count",
+                )
+            }
+        }
+    }.getOrDefault(emptyList())
+
+    /** STORAGE is the size one. MESSAGE and anything else a server invents is a count. */
+    private fun isSize(resource: String?): Boolean = resource.equals("STORAGE", ignoreCase = true)
+
     override fun addressBooks(): List<ContactBook> = throw Unsupported(Lacks.CONTACTS)
 
     override fun contacts(): List<Pair<Contact, JsonObject>> = throw Unsupported(Lacks.CONTACTS)

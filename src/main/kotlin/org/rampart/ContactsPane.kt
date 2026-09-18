@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -52,12 +53,29 @@ internal fun ContactsPane(
     onSave: ((Contact) -> Unit)?,
     onDelete: (Contact) -> Unit,
     onWrite: (String) -> Unit,
+    /**
+     * Every address book on the account, not only the default one.
+     *
+     * A mailbox routinely has more than one and the second is rarely decorative: this
+     * account's is "Trusted Senders", which decides what the server believes about a sender.
+     * Reading only the default one showed those cards mixed in with everything else with
+     * nothing saying where they came from, and saved every new card into the wrong book.
+     */
+    books: List<ContactBook> = emptyList(),
 ) {
     var query by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf<Contact?>(null) }
     var confirmDelete by remember { mutableStateOf<Contact?>(null) }
-    val shown = remember(contacts, query) {
-        matching(contacts, query).sortedBy { it.label.lowercase() }
+    // One book is not a choice, so the filter and the picker are simply absent then.
+    val several = books.size > 1
+    var book by remember { mutableStateOf<String?>(null) }
+    // A book that disappears while its filter is on would otherwise leave an empty list
+    // and no way back to the others.
+    if (book != null && books.none { it.id == book }) book = null
+    val shown = remember(contacts, query, book) {
+        matching(contacts, query)
+            .filter { book == null || book in it.bookIds }
+            .sortedBy { it.label.lowercase() }
     }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 16.dp)) {
@@ -90,6 +108,24 @@ internal fun ContactsPane(
             )
         }
 
+        if (onSave != null && several) {
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = book == null,
+                    onClick = { book = null },
+                    label = { Text("All") },
+                )
+                books.forEach { each ->
+                    FilterChip(
+                        selected = book == each.id,
+                        onClick = { book = if (book == each.id) null else each.id },
+                        label = { Text(each.name) },
+                    )
+                }
+            }
+        }
+
         error?.let {
             Spacer(Modifier.height(10.dp))
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
@@ -108,6 +144,15 @@ internal fun ContactsPane(
                 items(shown, key = { it.id }) { contact ->
                     ContactRow(
                         contact = contact,
+                        // Only where there is more than one book and no filter narrowing
+                        // it to one: naming the book on every row of a filtered list is
+                        // the same word repeated down the screen.
+                        book = if (several && book == null) {
+                            books.filter { it.id in contact.bookIds }
+                                .joinToString(", ") { it.name }
+                        } else {
+                            ""
+                        },
                         onEdit = { editing = contact },
                         onDelete = { confirmDelete = contact },
                         onWrite = onWrite,
@@ -121,6 +166,10 @@ internal fun ContactsPane(
     editing?.let { contact ->
         ContactEditor(
             contact = contact,
+            // A new card opened while a book is filtered goes into that book, because
+            // that is plainly what was meant by making it there.
+            books = if (several) books else emptyList(),
+            preferred = book,
             onCancel = { editing = null },
             onSave = {
                 editing = null
@@ -147,6 +196,8 @@ internal fun ContactsPane(
 @Composable
 private fun ContactRow(
     contact: Contact,
+    /** Which address book they are in. Empty where naming it would say nothing. */
+    book: String = "",
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onWrite: (String) -> Unit,
@@ -179,6 +230,7 @@ private fun ContactRow(
                 contact.organisation.takeIf { it.isNotBlank() },
                 contact.emails.firstOrNull()?.takeIf { it != contact.label },
                 contact.phones.firstOrNull(),
+                book.takeIf { it.isNotBlank() },
             ).joinToString("  ")
             if (under.isNotBlank()) {
                 Text(
@@ -209,12 +261,29 @@ private fun ContactRow(
  * form. Everything the card holds that is not on here travels through untouched.
  */
 @Composable
-private fun ContactEditor(contact: Contact, onCancel: () -> Unit, onSave: (Contact) -> Unit) {
+private fun ContactEditor(
+    contact: Contact,
+    onCancel: () -> Unit,
+    onSave: (Contact) -> Unit,
+    /** Empty where the account has only one, which is not a choice worth drawing. */
+    books: List<ContactBook> = emptyList(),
+    /** The book to put a new card in when nothing else says. */
+    preferred: String? = null,
+) {
     var name by remember(contact) { mutableStateOf(contact.name) }
     var emails by remember(contact) { mutableStateOf(contact.emails.joinToString("\n")) }
     var phones by remember(contact) { mutableStateOf(contact.phones.joinToString("\n")) }
     var organisation by remember(contact) { mutableStateOf(contact.organisation) }
     var note by remember(contact) { mutableStateOf(contact.note) }
+    /*
+     * An existing card keeps the books it is already in, and a new one starts in the
+     * filtered book, or the default, or the first there is.
+     *
+     * Kept as a set because a card may legitimately be in several: JSContact says so, and
+     * a picker that forced it to one would quietly take a contact out of a book somebody
+     * else put it in.
+     */
+    var chosen by remember(contact) { mutableStateOf(booksFor(contact, books, preferred)) }
 
     AlertDialog(
         onDismissRequest = onCancel,
@@ -253,6 +322,31 @@ private fun ContactEditor(contact: Contact, onCancel: () -> Unit, onSave: (Conta
                     label = { Text("Note") },
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (books.size > 1) {
+                    Text(
+                        "Address book",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        books.forEach { each ->
+                            FilterChip(
+                                selected = each.id in chosen,
+                                // Never down to none: Stalwart refuses a card that belongs
+                                // to no book, and the refusal arrives as a save that failed
+                                // rather than as anything explaining why.
+                                onClick = {
+                                    chosen = if (each.id in chosen) {
+                                        (chosen - each.id).ifEmpty { chosen }
+                                    } else {
+                                        chosen + each.id
+                                    }
+                                },
+                                label = { Text(each.name) },
+                            )
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
@@ -265,6 +359,7 @@ private fun ContactEditor(contact: Contact, onCancel: () -> Unit, onSave: (Conta
                             phones = phones.lines().map(String::trim).filter { it.isNotBlank() },
                             organisation = organisation.trim(),
                             note = note.trim(),
+                            bookIds = chosen.toList().ifEmpty { contact.bookIds },
                         ),
                     )
                 },

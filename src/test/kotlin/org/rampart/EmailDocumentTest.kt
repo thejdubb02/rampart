@@ -134,4 +134,60 @@ class EmailDocumentTest {
         // Parameters are not part of the type in a data URI.
         assertTrue(dataUri("image/png; name=logo.png", byteArrayOf(0)).startsWith("data:image/png;base64,"))
     }
+
+    // ---- dark mode, and what it must not touch -----------------------------------------
+
+    private fun inverts(html: String): Boolean =
+        emailDocument(html, dark = true).document.contains("invert(1)")
+
+    @Test
+    fun `a plain message is turned inside out, because a white sheet in a dark window is worse`() {
+        assertTrue(inverts("<p>Tuesday works.</p>"))
+        // Explicit white is defensiveness about other clients, not a design, so it inverts.
+        assertTrue(inverts("""<table width="100%" bgcolor="#ffffff"><tr><td>Hello</td></tr></table>"""))
+    }
+
+    @Test
+    fun `a message that painted its own page is left exactly as it was sent`() {
+        // The real one this was found on: a hotel's alert, a cream page and a dark brown
+        // header bar. Inverted, the brown header came out pink.
+        val duchamp =
+            """<table width="100%" bgcolor="#F4F1EC"><tr><td>""" +
+                """<table width="100%" bgcolor="#3B1F0B"><tr><td align="center">""" +
+                """<h2>DUCHAMP</h2></td></tr></table></td></tr></table>"""
+        assertFalse(inverts(duchamp))
+    }
+
+    @Test
+    fun `the background counts wherever the sender put it`() {
+        assertFalse(inverts("""<body bgcolor="#102030"><p>Hello</p></body>"""))
+        assertFalse(inverts("""<body style="background-color:#102030"><p>Hello</p></body>"""))
+        assertFalse(inverts("""<style>body { background: #102030; }</style><p>Hello</p>"""))
+        // A fixed-width body, which is the other half of how every template is built.
+        assertFalse(inverts("""<table width="600" bgcolor="#102030"><tr><td>Hi</td></tr></table>"""))
+        assertFalse(inverts("""<div style="width:100%;background:#102030">Hi</div>"""))
+    }
+
+    @Test
+    fun `a sender who did dark mode themselves is still left alone`() {
+        assertFalse(
+            inverts("<style>@media (prefers-color-scheme: dark) { body { background: #000 } }</style><p>Hi</p>"),
+        )
+    }
+
+    @Test
+    fun `a tinted box inside an otherwise plain message is not a design`() {
+        // Only a full-width wrapper counts. A quote block or a callout must not stop the
+        // inversion, or an ordinary message becomes a white sheet in a dark window.
+        assertTrue(inverts("""<p>See below.</p><table width="300" bgcolor="#eeeeee"><tr><td>Quoted</td></tr></table>"""))
+        assertTrue(inverts("""<p>See below.</p><td bgcolor="#eeeeee">Quoted</td>"""))
+        // A max-width on a wrapper is a responsive hint, not a stated width.
+        assertTrue(inverts("""<div style="max-width:600px">Hello</div>"""))
+    }
+
+    @Test
+    fun `a light window never inverts anything, whatever the sender did`() {
+        val page = emailDocument("""<body bgcolor="#102030"><p>Hi</p></body>""", dark = false)
+        assertFalse(page.document.contains("invert(1)"))
+    }
 }

@@ -56,6 +56,24 @@ class Screenshots {
         val withArt = theme("aincrad")
         shoot("connect", 900, 760) { Connect(saved = SAVED, canRemember = true) { _, _ -> } }
         shoot("reader", 1400, 900) { Panes() }
+        // Bulwark's tintListRowsByTag, which is a setting here. Both states side by side,
+        // because the whole question is whether the tint reads as information or as a
+        // fault, and that cannot be judged from either one alone.
+        shoot("tinted-rows", 900, 460) {
+            Row(Modifier.fillMaxSize()) {
+                listOf(false, true).forEach { tinted ->
+                    Box(Modifier.weight(1f)) {
+                        CompositionLocalProvider(
+                            LocalTintRowsByTag provides tinted,
+                            LocalTagColours provides mapOf("invoices" to 0xFF2F5D96L, "groundworks" to 0xFF4F6D3AL),
+                        ) {
+                            MessageList(MESSAGES, null, loading = false, title = if (tinted) "Tinted" else "Plain") { _, _, _ -> }
+                        }
+                    }
+                    VerticalDivider()
+                }
+            }
+        }
         shoot("reader-dark", 1400, 900, dark) { Panes() }
         shoot("sidebar-collapsed", 1400, 900, dark) { Panes(collapsed = true) }
         // Taller than any window, because the point of this one is the whole body: a
@@ -81,6 +99,11 @@ class Screenshots {
             """<tr><td>Melissa OBrien</td><td>4</td><td>In town for a wedding, sent winery list.</td></tr>""" +
             """</table></td></tr></table>"""
         shoot("report", 980, 640) {
+            Message(summary = MESSAGES[0], body = Body(report, null), onLink = {})
+        }
+        // The same message in a dark window. It paints its own page, so it must arrive
+        // looking exactly as it did above: inverting it turned the brown header pink.
+        shoot("report-dark", 980, 640, dark) {
             Message(summary = MESSAGES[0], body = Body(report, null), onLink = {})
         }
         shoot("contacts", 1000, 760, dark) {
