@@ -4,6 +4,7 @@ import jakarta.mail.Flags
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -230,5 +231,53 @@ class ImapWriteTest {
         // nowhere else, so 4231 in the inbox and 4231 in Sent are unrelated.
         val grouped = byFolder(listOf(imapId(4231L, "INBOX"), imapId(4231L, "Sent Items")))
         assertEquals(2, grouped.size)
+    }
+
+
+
+
+
+    @Test
+    fun `a conversation is every message in its own group, nesting flattened`() {
+        // Checked against our own server, which answered exactly this shape:
+        // * THREAD (26)(27)(28)(30 58)(36)(46)(59)(69)
+        val response = "* THREAD (26)(27)(28)(30 58)(36)(46)(59)(69)"
+        assertEquals(listOf(30L, 58L), groupContaining(response, 30L))
+        assertEquals(listOf(30L, 58L), groupContaining(response, 58L))
+        assertEquals(listOf(27L), groupContaining(response, 27L))
+    }
+
+    @Test
+    fun `a nested group is one conversation, not several`() {
+        // The nesting is who answered whom. Every number inside a top level group is in the
+        // same conversation, which is the only question being asked.
+        val response = "* THREAD (1 2 (3)(4 5))(9)"
+        assertEquals(listOf(1L, 2L, 3L, 4L, 5L), groupContaining(response, 4L))
+        assertEquals(listOf(9L), groupContaining(response, 9L))
+    }
+
+    @Test
+    fun `a uid in no group is its own conversation rather than nothing`() {
+        // What a folder answers about a message deleted underneath us. Returning an empty
+        // list here would be a reader that opens a message and shows no message.
+        assertEquals(listOf(404L), groupContaining("* THREAD (1)(2)", 404L))
+        assertEquals(listOf(404L), groupContaining("", 404L))
+    }
+
+    @Test
+    fun `a search is every word, because the whole phrase finds nothing`() {
+        // Our own server returns the message for two adjacent words of its subject and
+        // returns nothing for the whole subject, so the query cannot be passed through.
+        assertNotNull(searchTerm("reasons prevent"))
+        assertNotNull(searchTerm("one"))
+    }
+
+    @Test
+    fun `a search with nothing in it is no search, not a search for everything`() {
+        // An empty IMAP term matches every message in the folder, which is the whole
+        // mailbox presented as a result.
+        assertNull(searchTerm(""))
+        assertNull(searchTerm("   "))
+        assertNull(searchTerm("Re: Fwd:"))
     }
 }

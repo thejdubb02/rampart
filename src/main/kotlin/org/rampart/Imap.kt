@@ -10,10 +10,14 @@ import jakarta.mail.internet.InternetAddress
 import jakarta.mail.internet.MailDateFormat
 import jakarta.mail.internet.MimeBodyPart
 import jakarta.mail.internet.MimeMessage
+import org.eclipse.angus.mail.iap.Argument
+import jakarta.mail.search.AndTerm
 import jakarta.mail.search.BodyTerm
 import jakarta.mail.search.FlagTerm
 import jakarta.mail.search.FromStringTerm
+import jakarta.mail.search.HeaderTerm
 import jakarta.mail.search.OrTerm
+import jakarta.mail.search.SearchTerm
 import jakarta.mail.search.SubjectTerm
 import org.eclipse.angus.mail.imap.IMAPFolder
 import org.eclipse.angus.mail.imap.IMAPStore
@@ -265,32 +269,70 @@ internal class Imap private constructor(
         // caller is told so rather than being given the inbox and left to assume it looked
         // everywhere, which is the answer that quietly loses mail.
         val folder = mailboxId ?: throw Unsupported(Lacks.SERVER_SEARCH_ALL)
-        val term = OrTerm(
-            arrayOf(
-                SubjectTerm(text),
-                FromStringTerm(text),
-                BodyTerm(text),
-            ),
-        )
+        val term = searchTerm(text) ?: return emptyList()
         return useFolder(folder, Folder.READ_ONLY) { open ->
             open.search(term).filterIsInstance<MimeMessage>().asReversed().take(limit).map { summaryOf(it, open) }
         }
     }
 
     /**
-     * The one message, because on IMAP a message is its own conversation.
+     * The conversation a message belongs to, as the server itself groups it.
      *
-     * [SERVER_THREADS][Lacks.SERVER_THREADS] is the honest reason and refusing outright is
-     * the wrong way to give it: the reader calls this every time a message is opened, so a
-     * refusal here is not a missing feature, it is a mail client that cannot open mail.
-     * One message is what a server with no threading actually knows, and walking References
-     * is the thing that will improve it.
+     * **THREAD (RFC 5256), not a header search.** Walking References client side means
+     * asking the server to find messages by Message-ID, and Stalwart does not match that
+     * header at all: checked against our own, where SUBJECT and HEADER Subject both find
+     * the message and HEADER Message-ID finds nothing for the exact id, for the domain, or
+     * for any token in it. THREAD is what the extension exists for and Stalwart implements
+     * it, so the grouping is the server's rather than a guess built on a search that
+     * silently returns nothing.
+     *
+     * A server without the extension gets the one message. That is what it actually knows,
+     * and the reader asks for the thread of everything it opens, so a refusal here would be
+     * a mail client that cannot open mail.
+     *
+     * **One folder, unlike JMAP.** A JMAP thread id spans the account; THREAD is per folder,
+     * and matching a group in Sent to a group in the inbox needs the root Message-ID, which
+     * is the lookup this server cannot do. So a reply of your own sitting in Sent is not
+     * shown beside the message it answers. Honest and documented rather than half worked
+     * around.
      */
-    override fun thread(threadId: String): List<Summary> =
-        useFolder(folderOf(threadId), Folder.READ_ONLY) { folder ->
-            val message = folder.getMessageByUID(uidOf(threadId)) as? MimeMessage
-            listOfNotNull(message?.let { summaryOf(it, folder) })
+    override fun thread(threadId: String): List<Summary> {
+        val uid = uidOf(threadId)
+        return useFolder(folderOf(threadId), Folder.READ_ONLY) { folder ->
+            val group = if (store.hasCapability("THREAD=REFERENCES")) {
+                runCatching { threadGroup(folder, uid) }.getOrDefault(listOf(uid))
+            } else {
+                listOf(uid)
+            }
+            folder.getMessagesByUID(group.toLongArray())
+                .filterNotNull()
+                .filterIsInstance<MimeMessage>()
+                .map { summaryOf(it, folder) }
+                .sortedBy { it.receivedAt }
+                .ifEmpty {
+                    listOfNotNull((folder.getMessageByUID(uid) as? MimeMessage)?.let { summaryOf(it, folder) })
+                }
         }
+    }
+
+    /** The UIDs the server puts in the same conversation as [uid], including it. */
+    private fun threadGroup(folder: IMAPFolder, uid: Long): List<Long> {
+        @Suppress("UNCHECKED_CAST")
+        val lines = folder.doCommand { protocol ->
+            // UTF-8 rather than US-ASCII: the charset applies to the search half of the
+            // command, and a subject with an accent in it is not a reason to fail.
+            val arguments = Argument().apply {
+                writeAtom("REFERENCES")
+                writeAtom("UTF-8")
+                writeAtom("ALL")
+            }
+            val responses = protocol.command("UID THREAD", arguments)
+            val collected = responses.map { it.toString() }
+            protocol.notifyResponseHandlers(responses)
+            collected
+        } as? List<String> ?: return listOf(uid)
+        return groupContaining(lines.firstOrNull { it.contains("THREAD") }.orEmpty(), uid)
+    }
 
     // ---- folders --------------------------------------------------------------------
 
@@ -675,7 +717,7 @@ private fun sentAtFrom(value: String): String? =
 
 private class FoundBody(var html: String? = null, var text: String? = null)
 
-private fun headerPairs(message: MimeMessage): List<Pair<String, String>> = buildList {
+internal fun headerPairs(message: MimeMessage): List<Pair<String, String>> = buildList {
     val headers = message.allHeaders
     while (headers.hasMoreElements()) {
         val header = headers.nextElement()
@@ -800,4 +842,91 @@ private fun textOf(part: Part): String? {
     // rest of the message.
     val content = runCatching { part.content }.getOrNull() ?: return null
     return (content as? String)?.takeIf { it.isNotBlank() }
+}
+
+/**
+ * The id every message in a conversation has in common.
+ *
+ * The first entry in References is the message that started it, and every reply carries the
+ * whole chain, so that one id is what the rest of the thread can be found by. A message
+ * with no References is either the start of a conversation or not in one, and either way
+ * its own Message-ID is the right thing to search for.
+ *
+ * Empty when the message has neither, which happens: a message with no Message-ID is
+ * malformed but it still arrives, and there is nothing to thread it by. The caller shows
+ * the one message rather than searching for the empty string, which would match everything.
+ */
+internal fun rootOf(body: Body): String =
+    body.references.firstOrNull()?.trim().orEmpty().ifBlank { body.messageId.firstOrNull()?.trim().orEmpty() }
+
+/**
+ * The conversation holding [uid], out of a THREAD response.
+ *
+ * The response is a list of top level groups, each of which may nest to show who answered
+ * whom: `* THREAD (26)(27)(30 58)(1 2 (3)(4))`. The nesting is the shape of the
+ * conversation and every number inside one group is in the same conversation, which is the
+ * only question being asked here, so each group is flattened.
+ *
+ * Returns just [uid] when it appears in no group, which is what a folder answers about a
+ * message that has been deleted underneath us.
+ */
+internal fun groupContaining(response: String, uid: Long): List<Long> {
+    val payload = response.substringAfter("THREAD", "").trim()
+    var depth = 0
+    val group = mutableListOf<Long>()
+    val groups = mutableListOf<List<Long>>()
+    val number = StringBuilder()
+    fun endNumber() {
+        if (number.isNotEmpty()) {
+            number.toString().toLongOrNull()?.let { group += it }
+            number.clear()
+        }
+    }
+    payload.forEach { character ->
+        when {
+            character == '(' -> { endNumber(); depth++ }
+            character == ')' -> {
+                endNumber()
+                depth--
+                // Only at the outermost close, because a nested group is a reply inside the
+                // same conversation rather than a conversation of its own.
+                if (depth == 0) {
+                    groups += group.toList()
+                    group.clear()
+                }
+            }
+            character.isDigit() -> number.append(character)
+            else -> endNumber()
+        }
+    }
+    endNumber()
+    if (group.isNotEmpty()) groups += group.toList()
+    return groups.firstOrNull { uid in it } ?: listOf(uid)
+}
+
+/**
+ * The query as IMAP will actually answer it: every word, anywhere in the message.
+ *
+ * **Word by word, not the phrase.** Searching our own server for the whole of a subject it
+ * holds returns nothing, while two adjacent words from the same subject return the message.
+ * Pasting a subject line in is the commonest way to look for a conversation, and the JMAP
+ * side supports it, so passing the query through whole would have made search look broken
+ * on exactly the thing people use it for.
+ *
+ * Every word has to appear, each of them in the subject, the sender or the body. That is
+ * narrower than matching any one word, which on a two word query is most of a mailbox.
+ *
+ * A leading Re: or Fwd: comes off first, using the same rule the subject sort uses, so a
+ * pasted reply subject finds the conversation it came from.
+ *
+ * Null when there is nothing left to search for, because an empty IMAP search term matches
+ * every message in the folder.
+ */
+internal fun searchTerm(text: String): SearchTerm? {
+    val words = bareSubject(text).split(Regex("\\s+")).filter { it.isNotBlank() }
+    if (words.isEmpty()) return null
+    val perWord = words.map { word ->
+        OrTerm(arrayOf(SubjectTerm(word), FromStringTerm(word), BodyTerm(word)))
+    }
+    return if (perWord.size == 1) perWord.first() else AndTerm(perWord.toTypedArray())
 }
