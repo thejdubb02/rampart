@@ -179,6 +179,42 @@ internal val TAG_COLOURS = listOf(
     0xFF7A2E2EL, 0xFF3F7A4FL, 0xFF35507AL, 0xFF6E6E6EL,
 )
 
+/**
+ * Every account's tags as one list, with the counts added up.
+ *
+ * **Tags are per account on the server and one list in the sidebar, and both of those are
+ * right.** A keyword lives in one mailbox and cannot be read from another, so the truthful
+ * model underneath is per account. But nobody thinks of "Billing" as two tags because they
+ * happen to have two mailboxes, and a TAGS heading under every account, with nothing under
+ * most of them, says the opposite of what is true.
+ *
+ * So they merge here, case-insensitively, the way two spellings of one tag already do.
+ * Opening one asks every account that has it and puts the answers together, which is what
+ * the unified inbox does with folders.
+ */
+internal fun mergedTags(
+    perAccount: Map<String, Map<String, Int>>,
+    chosen: Map<String, Long> = emptyMap(),
+): List<TagRow> {
+    val counts = HashMap<String, Int>()
+    val spelling = HashMap<String, String>()
+    perAccount.values.forEach { account ->
+        account.forEach { (keyword, n) ->
+            counts.merge(keyword.lowercase(), n, Int::plus)
+            // The first spelling seen wins, so the list does not reshuffle when one account
+            // happens to be read before the other.
+            spelling.putIfAbsent(keyword.lowercase(), keyword)
+        }
+    }
+    return tagRows(spelling.values, chosen, counts.mapKeys { spelling.getValue(it.key) })
+}
+
+/** Which accounts carry [keyword], so opening it knows who to ask. */
+internal fun accountsWith(perAccount: Map<String, Map<String, Int>>, keyword: String): List<String> =
+    perAccount.filter { (_, counts) ->
+        counts.keys.any { it.equals(keyword, ignoreCase = true) || it.startsWith(keyword + NEST, ignoreCase = true) }
+    }.keys.toList()
+
 /*
  * What a folded section is called, so the same name is written and read in one place.
  *
@@ -187,7 +223,7 @@ internal val TAG_COLOURS = listOf(
  */
 internal fun foldFolders(account: String) = "folders/$account"
 
-internal fun foldTags(account: String) = "tags/$account"
+internal fun foldTags(account: String = "") = "tags/$account"
 
 internal fun foldTag(account: String, keyword: String) = "tag/$account/${keyword.lowercase()}"
 

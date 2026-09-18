@@ -283,4 +283,47 @@ class TagsTest {
         // And the id is case-insensitive, because the tag's own spelling is.
         assertEquals(foldTag("a", "Clients"), foldTag("a", "clients"))
     }
+
+    // ---- one list out of several accounts ----------------------------------------------
+
+    private val twoAccounts = mapOf(
+        "a" to mapOf("Billing" to 31, "Clients/Acme" to 12),
+        "b" to mapOf("billing" to 5, "Receipts" to 7),
+    )
+
+    @Test
+    fun `the same tag in two mailboxes is one tag with both counts`() {
+        // Nobody has two Billing tags because they have two mailboxes.
+        val rows = mergedTags(twoAccounts).associateBy { it.keyword.lowercase() }
+        assertEquals(36, rows.getValue("billing").count)
+        assertEquals(7, rows.getValue("receipts").count)
+        assertEquals(12, rows.getValue("clients/acme").count)
+        // And it appears once, under whichever spelling was seen first.
+        assertEquals(1, mergedTags(twoAccounts).count { it.keyword.equals("billing", ignoreCase = true) })
+    }
+
+    @Test
+    fun `opening a tag asks only the accounts that have it`() {
+        assertEquals(listOf("a", "b"), accountsWith(twoAccounts, "billing").sorted())
+        assertEquals(listOf("b"), accountsWith(twoAccounts, "Receipts"))
+        assertEquals(listOf("a"), accountsWith(twoAccounts, "Clients/Acme"))
+        // A parent level counts as held by whoever holds anything under it, so opening
+        // Clients asks the account that has Clients/Acme.
+        assertEquals(listOf("a"), accountsWith(twoAccounts, "Clients"))
+        // Nobody has it, so nobody is asked.
+        assertEquals(emptyList(), accountsWith(twoAccounts, "nothing"))
+    }
+
+    @Test
+    fun `a name that merely starts the same is not held by that account`() {
+        assertEquals(emptyList(), accountsWith(mapOf("a" to mapOf("Clientside" to 3)), "Clients"))
+    }
+
+    @Test
+    fun `one account is still one list`() {
+        val rows = mergedTags(mapOf("a" to mapOf("Billing" to 2)))
+        assertEquals(listOf("Billing"), rows.map { it.keyword })
+        assertEquals(2, rows.single().count)
+        assertEquals(emptyList(), mergedTags(emptyMap()))
+    }
 }

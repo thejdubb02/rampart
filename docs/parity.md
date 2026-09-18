@@ -83,7 +83,13 @@ that lives in `roadmap.md` under the matching section number.
 
 ### 2.8 Tags
 
-**Have.** Tags are JMAP keywords, so they are the same tags webmail shows. They nest with
+**Have.** Tags are JMAP keywords, so they are the same tags webmail shows. **Per account
+underneath and one list in the sidebar**, and both of those are deliberate: a keyword lives
+in one mailbox and cannot be read from another, so per account is the truthful model, but
+nobody has two Billing tags because they have two mailboxes. They merge case-insensitively,
+the counts add up, and opening one asks every account that has it and puts the answers
+together, the way the unified inbox does with folders. A heading under each account, with
+nothing under most of them, said the opposite of what was true. They nest with
 a slash and the sidebar draws the tree, inventing a level wherever one is missing, because
 tagging a message `Clients/Acme` without ever making `Clients` is the normal way a branch
 starts. Clicking one lists everything carrying it, across every folder, which is the point

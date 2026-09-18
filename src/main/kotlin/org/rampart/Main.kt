@@ -670,7 +670,7 @@ private fun Reader(
      * A third kind of list beside a folder and a search result. It is not a folder: the
      * messages in it are wherever they were filed, which is the point of a tag.
      */
-    var viewingTag by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var viewingTag by remember { mutableStateOf<String?>(null) }
     /** Every tag each account has, read out of its local copy. */
     var tagsSeen by remember { mutableStateOf<Map<String, Map<String, Int>>>(emptyMap()) }
     var tagColours by remember { mutableStateOf(Settings.tagColours()) }
@@ -695,7 +695,9 @@ private fun Reader(
      * ends, so making it state would recompose the whole window every time the sidebar
      * moved a pixel.
      */
-    val tagBounds = remember { mutableMapOf<Pair<String, String>, Rect>() }
+    // Keyed by the keyword alone: the tag list is one list now, and a message dropped on a
+    // tag is tagged in its own account, which the message already says.
+    val tagBounds = remember { mutableMapOf<String, Rect>() }
     // Any text field, not just search: a bare letter is a shortcut only when nothing
     // is being typed into. Tagging a message shares this for the same reason.
     var typing by remember { mutableStateOf(false) }
@@ -926,14 +928,7 @@ private fun Reader(
 
     suspend fun reload() {
         val (openKey, mailbox) = here ?: return
-        /*
-         * A tag belongs to the account whose sidebar it was clicked in, and that is not
-         * necessarily the account whose folder is open. Opening a tag does not move `here`,
-         * because the folder underneath stays where it was, so taking the account from
-         * `here` asked the wrong server for it: with two accounts signed in, every tag under
-         * the second one came back empty.
-         */
-        val key = viewingTag?.first ?: openKey
+        val key = openKey
         /*
          * What is already on disk goes up first, and the server is asked afterwards.
          *
@@ -980,23 +975,35 @@ private fun Reader(
             exhausted = false
             return
         }
-        emails = if (key == ALL_ACCOUNTS) {
+        val tagging = viewingTag
+        emails = if (tagging != null) {
+            /*
+             * A tag is asked of every account that has it, and the answers are put together.
+             *
+             * A keyword lives in one mailbox and cannot be read from another, so this is the
+             * only way one list can mean one idea. Each account is caught on its own, so one
+             * server being unreachable loses its share rather than the whole list, and an
+             * account that has never seen the keyword is not asked at all.
+             */
+            val holders = accountsWith(tagsSeen, tagging).ifEmpty { listOf(key) }
+            withContext(Dispatchers.IO) {
+                holders.flatMap { account ->
+                    runCatching { session(account).jmap.withKeyword(tagging) }.getOrNull()
+                        ?: runCatching { session(account).store?.withKeyword(tagging) }.getOrNull().orEmpty()
+                }
+            }.sortedByDescending { it.receivedAt }
+        } else if (key == ALL_ACCOUNTS) {
             // One account failing is not the whole list failing, so each is caught inside
             // rather than out here: the others still show.
             withContext(Dispatchers.IO) { everyInbox() }
         } else {
-            val tag = viewingTag?.second
             io {
-                when {
-                    tag != null -> session(key).jmap.withKeyword(tag)
-                    showingResults && query.isNotBlank() -> session(key).jmap.search(query, mailbox.id)
-                    else -> session(key).jmap.emails(mailbox.id, unreadOnly = unreadOnly)
-                }
+                if (showingResults && query.isNotBlank()) session(key).jmap.search(query, mailbox.id)
+                else session(key).jmap.emails(mailbox.id, unreadOnly = unreadOnly)
             }
                 // The server is still the authority on search, because it can see mail we
                 // have never fetched. The local copy is the answer when it cannot be
                 // reached, which is the difference between "no results" and "no network".
-                ?: tag?.let { io { session(key).store?.withKeyword(it) } }
                 ?: io { session(key).store?.search(query) }.takeIf { showingResults && query.isNotBlank() }
                 ?: emptyList()
         }
@@ -1292,13 +1299,18 @@ private fun Reader(
         }
     }
 
-    /** Opens a tag: the same list pane, showing everything carrying that keyword. */
-    fun openTag(key: String, keyword: String) {
+    /**
+     * Opens a tag: the same list pane, showing everything carrying that keyword.
+     *
+     * Across every account that has it, because a tag is one idea even when it lives in two
+     * mailboxes. An account that has never seen the keyword is not asked.
+     */
+    fun openTag(keyword: String) {
         selected = null
         body = null
         query = ""
         showingResults = false
-        viewingTag = key to keyword
+        viewingTag = keyword
         // here has not changed, so nothing else will start the load.
         scope.launch { reload() }
     }
@@ -2225,14 +2237,12 @@ private fun Reader(
                     AccountMailboxes(it.key, it.account.name, it.account.email, mailboxes[it.key].orEmpty())
                 },
                 here = here,
-                tags = remember(tagsSeen, tagColours) {
-                    tagsSeen.mapValues { (_, counts) -> tagRows(counts.keys, tagColours, counts) }
-                },
+                tags = remember(tagsSeen, tagColours) { mergedTags(tagsSeen, tagColours) },
                 hereTag = viewingTag,
-                onSelectTag = { key, keyword ->
+                onSelectTag = { keyword ->
                     settingsOpen = false
                     contactsOpen = false
-                    openTag(key, keyword)
+                    openTag(keyword)
                 },
                 onTagColour = { keyword, colour ->
                     Settings.setTagColour(keyword, colour)
@@ -2244,7 +2254,7 @@ private fun Reader(
                     Settings.setCollapsedSections(folded)
                 },
                 dragAt = dragAt,
-                onTagBounds = { key, keyword, bounds -> tagBounds[key to keyword] = bounds },
+                onTagBounds = { keyword, bounds -> tagBounds[keyword] = bounds },
                 onSettings = { settingsOpen = !settingsOpen; if (settingsOpen) { contactsOpen = false; dashboardOpen = false } },
                 onDashboard = { dashboardOpen = !dashboardOpen; if (dashboardOpen) { contactsOpen = false; settingsOpen = false } },
                 inDashboard = dashboardOpen,
@@ -2440,7 +2450,7 @@ private fun Reader(
                 emails = emails,
                 selected = selected,
                 loading = loading,
-                title = viewingTag?.second?.let { tagsOf(setOf(it)).firstOrNull()?.label ?: it }
+                title = viewingTag?.let { tagsOf(setOf(it)).firstOrNull()?.label ?: it }
                     ?: here?.second?.name.orEmpty(),
                 /*
                  * Dragging a message onto a tag in the sidebar.
@@ -2460,7 +2470,7 @@ private fun Reader(
                             tagBounds.entries.firstOrNull { it.value.contains(point) }?.key
                         }
                         val dropped = dragging
-                        if (hit != null && dropped != null) tagMessage(dropped, hit.second)
+                        if (hit != null && dropped != null) tagMessage(dropped, hit)
                         dragging = null
                         dragAt = null
                     }
@@ -2839,11 +2849,11 @@ internal fun Sidebar(
     /** What a right-click on a folder can ask for. Null hides the menu entirely. */
     folderMenu: ((String, Mailbox, FolderJob) -> Unit)? = null,
     onSelect: (String, Mailbox) -> Unit,
-    /** Every tag each account has, by account key. */
-    tags: Map<String, List<TagRow>> = emptyMap(),
-    /** The tag being looked at, and whose account. */
-    hereTag: Pair<String, String>? = null,
-    onSelectTag: (String, String) -> Unit = { _, _ -> },
+    /** Every tag on every account, merged into one list. */
+    tags: List<TagRow> = emptyList(),
+    /** The tag being looked at, across every account that has it. */
+    hereTag: String? = null,
+    onSelectTag: (String) -> Unit = {},
     /** A colour chosen for a tag, or null to put it back to the one from its name. */
     onTagColour: (String, Long?) -> Unit = { _, _ -> },
     /** The sections folded away, by the ids [foldFolders], [foldTags] and [foldTag] make. */
@@ -2853,7 +2863,7 @@ internal fun Sidebar(
     /** Where the pointer is while a message is being dragged, in window coordinates. */
     dragAt: Offset? = null,
     /** Where each tag row ended up, so a drag that ends over one can find it. */
-    onTagBounds: (String, String, Rect) -> Unit = { _, _, _ -> },
+    onTagBounds: (String, Rect) -> Unit = { _, _ -> },
     /** The search field, drawn at the top. Absent while the sidebar is narrowed. */
     search: @Composable () -> Unit = {},
 ) {
@@ -2945,38 +2955,47 @@ internal fun Sidebar(
                         onManage = folderMenu?.let { manage -> { what -> manage(account.key, row.mailbox, what) } },
                     )
                 }
-                // Narrowed there is no room for a word, and a column of coloured dots says
-                // nothing, so the tags are simply not there until the sidebar is open.
-                val rows = if (collapsed) emptyList() else tags[account.key].orEmpty()
-                if (rows.isNotEmpty()) {
-                    item(key = "${account.key}/tags-heading") {
-                        GroupHeading(
-                            text = "TAGS",
-                            open = foldTags(account.key) !in folded,
-                            onClick = { onFold(foldTags(account.key)) },
-                            top = 12.dp,
-                        )
-                    }
-                    val shown = if (foldTags(account.key) in folded) emptyList()
-                    else visibleTags(rows, account.key, folded)
-                    items(shown, key = { "${account.key}/tag/${it.keyword}" }) { row ->
-                        TagLine(
-                            row = row,
-                            selected = hereTag?.first == account.key && hereTag.second == row.keyword,
-                            // A branch with something under it folds when its own chevron is
-                            // clicked, and opens the list when its name is.
-                            open = if (rows.any { it.keyword.startsWith(row.keyword + NEST) }) {
-                                foldTag(account.key, row.keyword) !in folded
-                            } else {
-                                null
-                            },
-                            onFold = { onFold(foldTag(account.key, row.keyword)) },
-                            onClick = { if (row.real) onSelectTag(account.key, row.keyword) },
-                            onColour = { onTagColour(row.keyword, it) },
-                            dragAt = dragAt,
-                            onMeasured = { onTagBounds(account.key, row.keyword, it) },
-                        )
-                    }
+            }
+            /*
+             * One TAGS section, under every account rather than inside each of them.
+             *
+             * A keyword lives in one mailbox and cannot be read from another, so per account
+             * is the truthful model underneath and it is kept. It is the wrong thing to draw:
+             * nobody has two Billing tags because they have two mailboxes, and a heading
+             * under every account with nothing under most of them says the opposite of what
+             * is true. Opening one asks every account that has it.
+             *
+             * Narrowed there is no room for a word, and a column of coloured dots says
+             * nothing, so the tags are simply not there until the sidebar is open.
+             */
+            val rows = if (collapsed) emptyList() else tags
+            if (rows.isNotEmpty()) {
+                item(key = "tags-heading") {
+                    GroupHeading(
+                        text = "TAGS",
+                        open = foldTags() !in folded,
+                        onClick = { onFold(foldTags()) },
+                        top = 16.dp,
+                    )
+                }
+                val shown = if (foldTags() in folded) emptyList() else visibleTags(rows, "", folded)
+                items(shown, key = { "tag/${it.keyword}" }) { row ->
+                    TagLine(
+                        row = row,
+                        selected = hereTag.equals(row.keyword, ignoreCase = true),
+                        // A branch with something under it folds when its own chevron is
+                        // clicked, and opens the list when its name is.
+                        open = if (rows.any { it.keyword.startsWith(row.keyword + NEST) }) {
+                            foldTag("", row.keyword) !in folded
+                        } else {
+                            null
+                        },
+                        onFold = { onFold(foldTag("", row.keyword)) },
+                        onClick = { if (row.real) onSelectTag(row.keyword) },
+                        onColour = { onTagColour(row.keyword, it) },
+                        dragAt = dragAt,
+                        onMeasured = { onTagBounds(row.keyword, it) },
+                    )
                 }
             }
         }
