@@ -1,10 +1,13 @@
 # Setting Rampart up for someone
 
-Rampart reads a small file listing which servers to offer on the sign-in screen. Fill it
-in once and signing in is a click and a password, with no host names to remember and no
-settings to explain.
+**Most people do not need this file.** Type your email address and your password and
+Rampart asks your domain where its mail server is. This is for the domains that publish
+nothing, and for setting somebody else's machine up before you hand it over.
 
-**The file never holds a password, and cannot be made to.** Rampart reads exactly three
+It lists which servers to offer on the sign-in screen. Fill it in once and signing in is a
+click and a password, with no host names to remember and no settings to explain.
+
+**The file never holds a password, and cannot be made to.** Rampart reads a fixed set of
 fields per account and ignores everything else, so a `password` key put there by a person
 or by an assistant is read as nothing, and is gone the next time Rampart writes the file.
 The password is typed in, held in memory for that session, and never written to disk.
@@ -37,13 +40,23 @@ the full `/.well-known/jmap` address. Rampart works out the rest.
 
 `name` is only a label on the sign-in screen. Leave it out and the email address is used.
 
+Two fields are optional and are normally written by Rampart rather than by you, after a
+sign-in that worked:
+
+- `protocol`, either `"jmap"` or `"imap"`. Left out, it means JMAP. Setting it saves
+  Rampart trying JMAP first and waiting for it to time out on a server that only speaks
+  IMAP.
+- `sendServer`, where mail is sent from, for IMAP accounts whose submission server is not
+  the same host as the one they read from. A port that is not the usual one goes in the
+  host, as `mail.example.org:465`.
+
 ## Handing this to an assistant
 
 Copy the block below, replace the two lines at the top, and give it to whatever assistant
 you use. It is deliberately dull: no account is created, nothing is sent anywhere, and
 nothing it produces can contain a secret.
 
-> I use Rampart, a desktop mail client for JMAP servers. Write me the accounts file for it.
+> I use Rampart, a desktop mail client. Write me the accounts file for it.
 >
 > My mail server is: **<host name, or the web address you use for webmail>**
 > My email address is: **<your address>**
@@ -60,6 +73,10 @@ nothing it produces can contain a secret.
 >   ]
 > }
 > ```
+>
+> If you know my server speaks IMAP rather than JMAP, add `"protocol": "imap"` to the
+> account, and `"sendServer"` if mail is sent through a different host. Leave both out if
+> you are not sure.
 >
 > Save it to `%APPDATA%\Rampart\accounts.json` on Windows, or
 > `~/.config/rampart/accounts.json` on Linux and macOS. Create the folder if it is not

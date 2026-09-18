@@ -1,13 +1,26 @@
 # Rampart
 
-A desktop application for [Stalwart](https://stalw.art). Your mail and your whole
-server, in one native window, on Windows, Linux and macOS.
+A desktop mail client, built for [Stalwart](https://stalw.art) and happy on anything
+else. Your mail and your whole server, in one native window, on Windows, Linux and
+macOS.
 
-Rampart speaks [JMAP](https://jmap.io), not IMAP. That is the whole point. IMAP can
-move messages and nothing else: it has no way to carry your filter rules, your
-aliases, your vacation responder, your app passwords or your server's own settings.
-So every IMAP client, however good, leaves nine tenths of a modern mail server
-invisible and sends you to a browser for the rest.
+**Type your email address and Rampart finds the rest.** It asks what your domain
+publishes about itself, tries [JMAP](https://jmap.io) first and falls back to IMAP, and
+signs in with the first server that answers. There is a box for the hostname if your
+domain says nothing, and most people will never open it.
+
+**JMAP where you have it, and it is not a formality.** IMAP can move messages and very
+little else: it has no way to carry your filter rules, your aliases, your vacation
+responder, your app passwords or your server's own settings, so every IMAP client,
+however good, leaves nine tenths of a modern mail server invisible and sends you to a
+browser for the rest. Rampart on a JMAP server shows all of it in the same window as
+your mail.
+
+**IMAP where you do not.** Reading, writing, sending, searching, folders, attachments
+and flags all work against any IMAP and SMTP server that takes a password. What the
+protocol cannot do is absent with a sentence saying why, never a button that fails. That
+is the difference between a mail client you can recommend to somebody and one that only
+works if they run the same server you do.
 
 ## Install it
 
@@ -52,11 +65,18 @@ rather than hand written, so they stay correct when the server adds a field. See
 
 ## Setting it up for someone else
 
-Rampart reads a short file listing which servers to offer, so signing in is a click and a
-password rather than a conversation about JMAP. The file holds a name, a server and an
-address, and cannot hold a password: Rampart reads those three fields and drops everything
-else. There is a template, and a block you can hand to an assistant to fill in for you, in
+Most people need nothing here: an address and a password is the whole setup.
+
+For the ones whose domain publishes nothing, Rampart also reads a short file listing which
+servers to offer, so signing in is a click and a password rather than a conversation about
+hostnames. It holds a name, a server, an address and which protocol worked, and it cannot
+hold a password: Rampart reads those fields and drops everything else. There is a template,
+and a block you can hand to an assistant to fill in for you, in
 [docs/connecting.md](docs/connecting.md).
+
+If you run the mail server, publishing three DNS records means nobody has to do any of
+this, in Rampart or in Thunderbird, Apple Mail or Outlook, all of which read them too:
+`_jmap._tcp`, `_imaps._tcp` and `_submissions._tcp` (RFC 6186 and RFC 8314).
 
 ## On your phone
 
