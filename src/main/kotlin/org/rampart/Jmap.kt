@@ -148,7 +148,7 @@ data class Body(
     val received: List<String> = emptyList(),
 )
 
-class Jmap private constructor(
+internal class Jmap private constructor(
     private val credential: String,
     private val apiUrl: String,
     val accountId: String,
@@ -160,7 +160,7 @@ class Jmap private constructor(
     private val pushUrl: String,
     /** What the server will accept in one upload, in bytes. Zero when it did not say. */
     private val maxUpload: Long,
-) {
+) : MailBackend {
     companion object {
         fun connect(server: String, user: String, password: String): Jmap = try {
             session(server, user, password)
@@ -242,7 +242,7 @@ class Jmap private constructor(
         )
     }
 
-    fun mailboxes(): List<Mailbox> {
+    override fun mailboxes(): List<Mailbox> {
         val list = call(invoke("Mailbox/get", "m") { put("ids", JsonNull) })[0].list()
         return list.map {
             val o = it.jsonObject
@@ -264,7 +264,7 @@ class Jmap private constructor(
      * that re-reading the inbox costs. A check every minute is only reasonable because of
      * it, and the inbox is read only on the checks where the answer has moved.
      */
-    fun mailState(): String? =
+    override fun mailState(): String? =
         call(invoke("Email/get", "s") { putJsonArray("ids") {} })[0][1].jsonObject["state"]?.str()
 
     /**
@@ -282,7 +282,7 @@ class Jmap private constructor(
      * messages in it readable: the list asks for the next hundred when it gets near the
      * bottom rather than trying to hold all of them.
      */
-    fun emails(mailboxId: String, limit: Int = 100, from: Int = 0, unreadOnly: Boolean = false): List<Summary> {
+    override fun emails(mailboxId: String, limit: Int, from: Int, unreadOnly: Boolean): List<Summary> {
         val responses = call(
             invoke("Email/query", "q") {
                 // Filtered on the server, not here. Hiding the read ones out of the page we
@@ -327,7 +327,7 @@ class Jmap private constructor(
      * Thread/get already returns the ids in date order, which was checked against the
      * server rather than taken from the specification, so they are not sorted again here.
      */
-    fun thread(threadId: String): List<Summary> {
+    override fun thread(threadId: String): List<Summary> {
         if (threadId.isBlank()) return emptyList()
         val ids = call(invoke("Thread/get", "t") { putJsonArray("ids") { add(threadId) } })[0]
             .list().firstOrNull()?.jsonObject?.get("emailIds")?.let { it as? JsonArray }?.mapNotNull { it.str() }
@@ -343,7 +343,7 @@ class Jmap private constructor(
         return ids.mapNotNull { found[it] }
     }
 
-    fun body(id: String): Body {
+    override fun body(id: String): Body {
         val email = call(
             invoke("Email/get", "b") {
                 putJsonArray("ids") { add(id) }
@@ -408,7 +408,7 @@ class Jmap private constructor(
      * like [download]. A message that claims a 200MB inline image must not be able to take
      * the app down with it.
      */
-    fun blob(attachment: Attachment, limit: Long = 8L * 1024 * 1024): ByteArray? {
+    override fun blob(attachment: Attachment, limit: Long): ByteArray? {
         if (downloadUrl.isBlank() || attachment.size > limit) return null
         val url = downloadUrl
             .replace("{accountId}", pct(accountId))
@@ -434,7 +434,7 @@ class Jmap private constructor(
      * Every Email has a blob of its own whole self, which is what "view source" and saving
      * a .eml both need. Capped, because this is going into a window rather than onto disk.
      */
-    fun raw(emailId: String, limit: Long = 4L * 1024 * 1024): String? {
+    override fun raw(emailId: String, limit: Long): String? {
         val email = call(
             invoke("Email/get", "r") {
                 putJsonArray("ids") { add(emailId) }
@@ -466,9 +466,9 @@ class Jmap private constructor(
      * Returns null when the server named no WebSocket, or when the connection did not open.
      * Closing the returned handle closes the socket.
      */
-    val hasPush: Boolean get() = pushUrl.isNotBlank()
+    override val hasPush: Boolean get() = pushUrl.isNotBlank()
 
-    fun watch(onChange: () -> Unit, onGone: () -> Unit): AutoCloseable? {
+    override fun watch(onChange: () -> Unit, onGone: () -> Unit): AutoCloseable? {
         if (pushUrl.isBlank()) return null
         val socket = runCatching {
             http.newWebSocketBuilder()
@@ -484,7 +484,7 @@ class Jmap private constructor(
     }
 
     /** The out of office reply as the server has it, or null when it does not do them. */
-    internal fun vacation(): Vacation? = runCatching {
+    override fun vacation(): Vacation? = runCatching {
         val list = call(
             invoke("VacationResponse/get", "v") { put("ids", JsonNull) },
             also = VACATION,
@@ -492,7 +492,7 @@ class Jmap private constructor(
         list.firstOrNull()?.jsonObject?.let(::vacationOf)
     }.getOrNull()
 
-    internal fun setVacation(value: Vacation) {
+    override fun setVacation(value: Vacation) {
         call(
             invoke("VacationResponse/set", "v") {
                 putJsonObject("update") { put("singleton", vacationPatch(value)) }
@@ -501,7 +501,7 @@ class Jmap private constructor(
         )
     }
 
-    fun attachments(emailId: String): List<Attachment> {
+    override fun attachments(emailId: String): List<Attachment> {
         val email = call(
             invoke("Email/get", "a") {
                 putJsonArray("ids") { add(emailId) }
@@ -540,7 +540,7 @@ class Jmap private constructor(
      * Streams the blob into [into]. The body is never held in memory: a mail
      * attachment can be hundreds of megabytes.
      */
-    fun download(attachment: Attachment, into: Path): Path {
+    override fun download(attachment: Attachment, into: Path): Path {
         if (downloadUrl.isBlank()) {
             throw JmapError("This server did not say how to download attachments.")
         }
@@ -571,7 +571,7 @@ class Jmap private constructor(
         return dest
     }
 
-    fun identities(): List<Identity> =
+    override fun identities(): List<Identity> =
         call(invoke("Identity/get", "i") { put("ids", JsonNull) })[0].list().map {
             val o = it.jsonObject
             Identity(
@@ -589,7 +589,7 @@ class Jmap private constructor(
      * Checked against the live server, on a spare identity that was put back afterwards:
      * the HTML comes back byte for byte, including a data URI image.
      */
-    fun setSignature(identityId: String, text: String, html: String) {
+    override fun setSignature(identityId: String, text: String, html: String) {
         val response = call(
             invoke("Identity/set", "u") {
                 putJsonObject("update") {
@@ -712,9 +712,9 @@ class Jmap private constructor(
     data class SieveInfo(val id: String, val name: String, val active: Boolean, val blobId: String)
 
     /** Whether this server takes Sieve at all, so the UI can say so rather than fail. */
-    fun hasSieve(): Boolean = capabilities.any { it.endsWith(":sieve") }
+    override fun hasSieve(): Boolean = capabilities.any { it.endsWith(":sieve") }
 
-    fun sieveScripts(): List<SieveInfo> = call(
+    override fun sieveScripts(): List<SieveInfo> = call(
         invoke("SieveScript/get", "s") { put("ids", JsonNull) },
         also = SIEVE,
     )[0].list().map {
@@ -735,9 +735,9 @@ class Jmap private constructor(
      * unknownMethod and are not a fallback worth having, because no server offers one
      * without the other.
      */
-    fun hasContacts(): Boolean = capabilities.any { it.endsWith(":contacts") }
+    override fun hasContacts(): Boolean = capabilities.any { it.endsWith(":contacts") }
 
-    internal fun addressBooks(): List<ContactBook> = call(
+    override fun addressBooks(): List<ContactBook> = call(
         invoke("AddressBook/get", "a") { put("ids", JsonNull) },
         also = CONTACTS,
     )[0].list().map {
@@ -761,13 +761,13 @@ class Jmap private constructor(
      * The raw object is kept so a save can be built on top of it and not destroy the
      * properties this build does not draw.
      */
-    internal fun contacts(): List<Pair<Contact, JsonObject>> = call(
+    override fun contacts(): List<Pair<Contact, JsonObject>> = call(
         invoke("ContactCard/get", "c") { put("ids", JsonNull) },
         also = CONTACTS,
     )[0].list().map { contactOf(it.jsonObject) to it.jsonObject }
 
     /** Creates or updates one card, and returns its id. */
-    internal fun saveContact(contact: Contact, original: JsonObject? = null): String {
+    override fun saveContact(contact: Contact, original: JsonObject?): String {
         val card = merged(contact, original)
         val response = call(
             invoke("ContactCard/set", "c") {
@@ -792,7 +792,7 @@ class Jmap private constructor(
         return contact.id
     }
 
-    fun deleteContact(id: String) {
+    override fun deleteContact(id: String) {
         val response = call(
             invoke("ContactCard/set", "c") { putJsonArray("destroy") { add(id) } },
             also = CONTACTS,
@@ -803,7 +803,7 @@ class Jmap private constructor(
     }
 
     /** The script's text. Empty when the server gave it no blob, which means no script yet. */
-    fun sieveText(script: SieveInfo): String {
+    override fun sieveText(script: SieveInfo): String {
         if (script.blobId.isBlank() || downloadUrl.isBlank()) return ""
         val url = downloadUrl
             .replace("{accountId}", pct(accountId))
@@ -825,7 +825,7 @@ class Jmap private constructor(
      * and the script then points at it. Activating in the same call rather than a second one
      * means a refused script never becomes the active script.
      */
-    fun saveSieve(name: String, text: String, existing: SieveInfo? = null) {
+    override fun saveSieve(name: String, text: String, existing: SieveInfo?) {
         if (uploadUrl.isBlank()) throw JmapError("This server did not say where to upload files.")
         val upload = http.send(
             HttpRequest.newBuilder(URI.create(uploadUrl.replace("{accountId}", pct(accountId))))
@@ -869,7 +869,7 @@ class Jmap private constructor(
         if (!ok) throw JmapError(refusal(response, field, "The server rejected these filters"))
     }
 
-    fun upload(file: Path): Attachment {
+    override fun upload(file: Path): Attachment {
         if (uploadUrl.isBlank()) throw JmapError("This server did not say where to upload files.")
         val size = Files.size(file)
         if (maxUpload in 1 until size) {
@@ -976,7 +976,7 @@ class Jmap private constructor(
      * one call is what stops a dropped connection leaving two copies of the same draft.
      * Create is processed before destroy, so the new one exists before the old one goes.
      */
-    fun saveDraft(draft: Draft, identity: Identity, draftsMailboxId: String, replacing: String?): String {
+    override fun saveDraft(draft: Draft, identity: Identity, draftsMailboxId: String, replacing: String?): String {
         val response = call(
             invoke("Email/set", "d") {
                 putJsonObject("create") { putJsonObject("m") { emailObject(draft, identity, draftsMailboxId) } }
@@ -987,7 +987,7 @@ class Jmap private constructor(
             ?: throw JmapError(refusal(response, "notCreated", "The server would not store the draft"))
     }
 
-    fun send(draft: Draft, identity: Identity, draftsMailboxId: String, sentMailboxId: String?) {
+    override fun send(draft: Draft, identity: Identity, draftsMailboxId: String, sentMailboxId: String?) {
         // Only on the way out. A draft keeps the base64 in it, which is what makes the
         // picture still visible when the draft is reopened.
         val ready = withInlineSignature(draft)
@@ -1035,7 +1035,7 @@ class Jmap private constructor(
      * usable until this returns: creating one and guessing where it went is how the sidebar
      * ends up showing something the server does not have.
      */
-    fun createMailbox(name: String, parentId: String? = null): String {
+    override fun createMailbox(name: String, parentId: String?): String {
         val response = call(
             invoke("Mailbox/set", "c") {
                 putJsonObject("create") {
@@ -1057,7 +1057,7 @@ class Jmap private constructor(
      * means "move it to the top level". Two different things that would otherwise be the
      * same argument, which is how a rename quietly moves a folder to the root.
      */
-    fun updateMailbox(id: String, name: String? = null, parentId: String? = null, reparent: Boolean = false) {
+    override fun updateMailbox(id: String, name: String?, parentId: String?, reparent: Boolean) {
         val response = call(
             invoke("Mailbox/set", "u") {
                 putJsonObject("update") {
@@ -1080,7 +1080,7 @@ class Jmap private constructor(
      * which is the answer we want: the caller can then say how many messages there are and
      * ask, rather than deleting somebody's mail because they clicked Delete on a folder.
      */
-    fun destroyMailbox(id: String, withMail: Boolean = false) {
+    override fun destroyMailbox(id: String, withMail: Boolean) {
         val response = call(
             invoke("Mailbox/set", "d") {
                 putJsonArray("destroy") { add(id) }
@@ -1091,7 +1091,7 @@ class Jmap private constructor(
         if (!gone) throw JmapError(refusal(response, "notDestroyed", "That folder could not be deleted"))
     }
 
-    fun markSeen(id: String) {
+    override fun markSeen(id: String) {
         setKeyword(listOf(id), "\$seen", true)
     }
 
@@ -1146,7 +1146,7 @@ class Jmap private constructor(
         return responses.map { it.jsonArray }
     }
 
-    fun move(ids: List<String>, toMailboxId: String) {
+    override fun move(ids: List<String>, toMailboxId: String) {
         if (ids.isEmpty()) return
         call(invoke("Email/set", "m") {
             putJsonObject("update") {
@@ -1159,7 +1159,7 @@ class Jmap private constructor(
         })
     }
 
-    fun setKeyword(ids: List<String>, keyword: String, on: Boolean) {
+    override fun setKeyword(ids: List<String>, keyword: String, on: Boolean) {
         if (ids.isEmpty()) return
         call(invoke("Email/set", "k") {
             putJsonObject("update") {
@@ -1172,14 +1172,14 @@ class Jmap private constructor(
         })
     }
 
-    fun destroy(ids: List<String>) {
+    override fun destroy(ids: List<String>) {
         if (ids.isEmpty()) return
         call(invoke("Email/set", "d") {
             putJsonArray("destroy") { ids.forEach { add(it) } }
         })
     }
 
-    fun search(text: String, mailboxId: String? = null, limit: Int = 100): List<Summary> {
+    override fun search(text: String, mailboxId: String?, limit: Int): List<Summary> {
         val responses = call(
             invoke("Email/query", "q") {
                 val filter = buildJsonObject {

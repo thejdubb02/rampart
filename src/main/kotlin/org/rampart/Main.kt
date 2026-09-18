@@ -190,7 +190,7 @@ internal fun UpdateCard(
 }
 
 /** One signed in mailbox. Several of these is the point; the password is in none of them. */
-internal class Session(val account: SavedAccount, val jmap: Jmap) {
+internal class Session(val account: SavedAccount, val jmap: MailBackend) {
     val key: String get() = "${account.email}@${account.server}"
 
     /**
