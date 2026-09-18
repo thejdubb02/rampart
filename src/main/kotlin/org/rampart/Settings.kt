@@ -155,6 +155,11 @@ object Settings {
 
     fun setTintRowsByTag(value: Boolean) = write { put("tintRowsByTag", JsonPrimitive(value)) }
 
+    /** Which loader is drawn while Rampart waits. Kept apart from the theme, like the icons. */
+    fun loader(): String = read()["loader"]?.jsonPrimitive?.contentOrNull.orEmpty()
+
+    fun setLoader(value: String) = write { put("loader", JsonPrimitive(value)) }
+
     /** Which icon pack, kept apart from the theme so the two can be chosen separately. */
     fun iconPack(): String = read()["iconPack"]?.jsonPrimitive?.contentOrNull.orEmpty()
 

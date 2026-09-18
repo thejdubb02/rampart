@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -56,7 +55,7 @@ internal fun FiltersPage(
     }
     if (script == null) {
         Section("Filters", "Rules run on the server, so they work with Rampart closed.")
-        CircularProgressIndicator(Modifier.height(20.dp))
+        Spinner(Modifier.height(20.dp))
         return
     }
 
@@ -116,7 +115,7 @@ internal fun FiltersPage(
         TextButton(onClick = { raw = sieveOf(script.copy(rules = rules)) }) { Text("Show the script") }
         if (saving) {
             Spacer(Modifier.width(4.dp))
-            CircularProgressIndicator(Modifier.height(18.dp))
+            Spinner(Modifier.height(18.dp))
         }
     }
     error?.let {

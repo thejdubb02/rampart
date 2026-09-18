@@ -21,7 +21,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -618,7 +617,7 @@ internal fun Composer(
 
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (sending) {
-                    CircularProgressIndicator(Modifier.align(Alignment.Center))
+                    Spinner(Modifier.align(Alignment.Center))
                 } else {
                     BasicTextField(
                         value = body,

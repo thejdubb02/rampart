@@ -48,7 +48,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -381,7 +380,7 @@ private fun App(
                 contentDescription = null,
                 modifier = Modifier.size(64.dp),
             )
-            CircularProgressIndicator()
+            Spinner()
         }
         return
     }
@@ -668,6 +667,7 @@ private fun Reader(
     var folded by remember { mutableStateOf(Settings.collapsedSections()) }
     var tintRows by remember { mutableStateOf(Settings.tintRowsByTag()) }
     var undoBarSeconds by remember { mutableStateOf(Settings.undoBarSeconds()) }
+    var loader by remember { mutableStateOf(Loader.of(Settings.loader())) }
     /** The meeting this message is about, when it is about one. */
     var invitation by remember { mutableStateOf<Invitation?>(null) }
     /** What the answer being sent was, so the buttons say so and cannot be pressed twice. */
@@ -2110,6 +2110,7 @@ private fun Reader(
             LocalSenderPhotos provides senderPhotos,
             LocalTagColours provides tagColours,
             LocalTintRowsByTag provides tintRows,
+            LocalLoader provides loader,
         ) {
         Row(Modifier.fillMaxSize()) {
             Sidebar(
@@ -2266,6 +2267,7 @@ private fun Reader(
                     quotas = quotas,
                     onTintRowsByTag = { tintRows = it },
                     onUndoBarSeconds = { undoBarSeconds = it },
+                    onLoader = { loader = it },
                     vacation = vacation,
                     vacationError = vacationError,
                     onVacation = { wanted ->
@@ -3557,7 +3559,7 @@ internal fun MessageList(
         LaunchedEffect(wantsMore) { if (wantsMore) onNeedMore() }
         Box(Modifier.fillMaxSize()) {
             when {
-                loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                loading -> Spinner(Modifier.align(Alignment.Center))
                 emails.isEmpty() -> Text(
                     if (unreadOnly) "Nothing unread here." else "Nothing here.",
                     style = MaterialTheme.typography.bodyMedium,
@@ -3583,9 +3585,10 @@ internal fun MessageList(
                     if (loadingMore) {
                         item {
                             Box(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
-                                CircularProgressIndicator(
-                                    Modifier.align(Alignment.Center).size(18.dp),
-                                    strokeWidth = 2.dp,
+                                Spinner(
+                                    Modifier.align(Alignment.Center),
+                                    size = 18.dp,
+                                    thickness = 2.dp,
                                 )
                             }
                         }
@@ -4517,7 +4520,7 @@ internal fun Message(
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.error,
                             )
-                            body == null -> CircularProgressIndicator()
+                            body == null -> Spinner()
                             else -> Text("This message has no readable body.")
                         }
                     } else {

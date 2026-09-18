@@ -17,7 +17,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -133,7 +132,7 @@ internal fun ContactsPane(
 
         Spacer(Modifier.height(12.dp))
         when {
-            loading && contacts.isEmpty() -> CircularProgressIndicator()
+            loading && contacts.isEmpty() -> Spinner()
             onSave == null -> Unit
             shown.isEmpty() -> Text(
                 if (contacts.isEmpty()) "No contacts yet." else "Nobody matches that.",

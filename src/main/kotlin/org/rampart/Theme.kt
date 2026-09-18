@@ -127,6 +127,15 @@ internal val LocalTagColours = staticCompositionLocalOf { emptyMap<String, Long>
  */
 internal val LocalTintRowsByTag = staticCompositionLocalOf { false }
 
+/**
+ * Which loader is drawn while Rampart waits.
+ *
+ * A local for the same reason as the two above: spinners appear in a dozen places, most of
+ * them several functions deep, and threading a choice through all of them would be a
+ * parameter on everything between here and there.
+ */
+internal val LocalLoader = staticCompositionLocalOf { Loader.RING }
+
 /** The picture for [email], or null. Case is not part of an address. */
 @Composable
 internal fun photoFor(email: String): ImageBitmap? =

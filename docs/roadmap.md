@@ -515,6 +515,12 @@ taken off it, for the reason above.
   feature is gone through one at a time in `open-tracking.md`, including the ones we are
   not doing: link rewriting, PDF page analytics, campaigns, and per-recipient identity
   inside a group send.
+- **Five loaders, themed** (2026-09-18). Drawn rather than borrowed: the good ones on the
+  web are CSS, and a `@keyframes` rule has no equivalent in a desktop toolkit, so each of
+  these is a `Canvas` and an infinite transition. Every one takes its colour from the theme,
+  which is the point of having them at all when the app ships eighteen themes. Chosen on the
+  Themes page, where all five run at once, because a still picture of a loader tells you
+  nothing about whether you want it. `Loaders.kt`.
 - **The undo strip drains** (2026-09-18). It used to sit there until dismissed, so after
   a few archives it was furniture: present, ignored, and covering the top of the list. It
   now expires, and the countdown is drawn as a fill receding across the Undo button itself,

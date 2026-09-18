@@ -84,6 +84,8 @@ internal fun SettingsPane(
     onTintRowsByTag: (Boolean) -> Unit = {},
     /** Told when the undo strip's lifetime changes, so the next one uses it. */
     onUndoBarSeconds: (Int) -> Unit = {},
+    /** Told when the loader changes, so every spinner in the app switches at once. */
+    onLoader: (Loader) -> Unit = {},
     onRestart: () -> Unit,
     /** Null while the server's filter script is still being read. */
     filters: Script?,
@@ -129,7 +131,7 @@ internal fun SettingsPane(
                             supported = filtersSupported,
                             onSave = onFilters,
                         )
-                        "themes" -> ThemesPage(onTheme, iconPack, onIconPack, onTintRowsByTag)
+                        "themes" -> ThemesPage(onTheme, iconPack, onIconPack, onTintRowsByTag, onLoader)
                         "identities" -> IdentitiesPage(
                             identities, signatureError, onSignature, onPickSignatureImage,
                         )
@@ -203,6 +205,7 @@ private fun ThemesPage(
     iconPack: IconPack,
     onIconPack: (IconPack) -> Unit,
     onTintRowsByTag: (Boolean) -> Unit = {},
+    onLoader: (Loader) -> Unit = {},
 ) {
     val current = LocalRampartTheme.current
     Section("Theme", "Ported from Clique, so the ones you already picked there are here.")
@@ -250,6 +253,47 @@ private fun ThemesPage(
         }
     }
 
+    Spacer(Modifier.height(18.dp))
+    Section(
+        "While it is loading",
+        "Each one is drawn from your theme's own colour, so it matches whatever you picked above.",
+    )
+    var loader by remember { mutableStateOf(Loader.of(Settings.loader())) }
+    // Every one running at once, because a loader is motion and a still picture of one
+    // tells you nothing about whether you want it.
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+        Loader.entries.forEach { each ->
+            val picked = each == loader
+            Column(
+                Modifier.weight(1f)
+                    .clip(MaterialTheme.shapes.medium)
+                    .background(
+                        if (picked) MaterialTheme.colorScheme.primaryContainer
+                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    )
+                    .clickable {
+                        loader = each
+                        Settings.setLoader(each.name)
+                        onLoader(each)
+                    }
+                    .padding(vertical = 14.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Spinner(which = each, size = 30.dp)
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    each.label,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (picked) MaterialTheme.colorScheme.onPrimaryContainer
+                    else MaterialTheme.colorScheme.outline,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+
+    Spacer(Modifier.height(18.dp))
     var tint by remember { mutableStateOf(Settings.tintRowsByTag()) }
     Section(
         "Tags in the list",

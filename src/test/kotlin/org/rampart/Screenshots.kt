@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.material3.Surface
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
@@ -119,6 +120,20 @@ class Screenshots {
                 "</blockquote></div></div>"
         shoot("plain-reply-dark", 900, 420, dark) {
             Message(summary = MESSAGES[1], body = Body(plainReply, null), onLink = {})
+        }
+        // All five, on a dark theme and a light one, because the only question about a
+        // loader is whether it reads against the surface it is on.
+        listOf("loaders" to null, "loaders-dark" to dark).forEach { (name, which) ->
+            shoot(name, 700, 110, which ?: theme("rampart-light")) {
+                Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+                    Loader.entries.forEach { each ->
+                        Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                            Spinner(which = each, size = 34.dp)
+                            Text(each.label, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
         }
         shoot("report", 980, 640) {
             Message(summary = MESSAGES[0], body = Body(report, null), onLink = {})
