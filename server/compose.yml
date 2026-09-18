@@ -1,0 +1,34 @@
+# Rampart's companion server.
+#
+#   1. Put a token in .env:   echo "RAMPART_TRACKER_TOKEN=$(openssl rand -base64 32)" > .env
+#   2. docker compose up -d
+#   3. Put a hostname in front of it with TLS, and that URL plus the token into Rampart.
+#
+# It refuses to start without a token, on purpose: a tracking log with no token on the
+# read-back is readable by anyone who finds the hostname, and it fails silently.
+services:
+  tracker:
+    build: .
+    restart: unless-stopped
+    environment:
+      RAMPART_TRACKER_TOKEN: ${RAMPART_TRACKER_TOKEN:?set RAMPART_TRACKER_TOKEN in .env}
+      # How long the server keeps a fetch before throwing it away. The client keeps its own
+      # copy of everything it has read, so this is a handover buffer, not the record.
+      RAMPART_TRACKER_KEEP_DAYS: ${RAMPART_TRACKER_KEEP_DAYS:-400}
+    volumes:
+      - tracker-data:/data
+    ports:
+      # Loopback only. Put nginx, Caddy or your own proxy in front to terminate TLS.
+      # Never expose this port straight to the internet: it would be served over plain
+      # HTTP, and a tracking pixel fetched over HTTP is one a network can read.
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      # Never gate /health behind anything. A gate answers a machine caller with a 302
+      # that reads as success, so the check passes while the service is unreachable.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  tracker-data:

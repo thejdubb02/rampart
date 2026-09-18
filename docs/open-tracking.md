@@ -5,7 +5,18 @@ it, so the reversal is recorded here rather than quietly edited: the reason for 
 it was that the feature spec warned against copying competitors blindly, and "the business
 runs on knowing whether outreach was read" is a better reason than that was.
 
-Not built. This is the design.
+**The server half is built** (2026-09-18) and lives in `server/`, with its own README, a
+Dockerfile and a compose file. It serves the pixel, keeps the log and answers the read-back.
+The client half, which is the composer toggle, the pixel in the outgoing message, the local
+record and the marking of the Sent copy, is still the design below.
+
+Two things were settled by building it rather than by reasoning about it:
+
+- **The GIF is 42 bytes, not the 43 this file used to say.** Both sizes exist; ours has the
+  trailer and a strict decoder accepts it, which there is a test for.
+- **The server refuses to start without a token.** Written as a design note, it would have
+  been a README line somebody skipped, and the failure it prevents is silent: the service
+  works perfectly and the log is readable by anyone who finds the hostname.
 
 ---
 
@@ -81,7 +92,7 @@ be pointed at it:
 | | |
 |---|---|
 | URL | `https://<the host you run>/o/<id>.gif` |
-| Answers | a 1x1 transparent GIF, 43 bytes, `Cache-Control: no-store` |
+| Answers | a 1x1 transparent GIF, 42 bytes, `Cache-Control: no-store` |
 | Records | the id, the time, the user agent, the requesting network, nothing else |
 | Auth | a token Rampart holds, on the read-back call only. The GIF itself is public, because the recipient's mail client has to be able to fetch it |
 | Gated | **never** put the GIF behind an SSO gate. A gate answers a machine caller with a 302 that reads as success |

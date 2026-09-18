@@ -31,7 +31,8 @@ IMAP. That is why it ships ahead of open tracking rather than behind it.
 
 ## Class 2: needs the companion server
 
-One optional service, in `server/` in this repo, with a Dockerfile and a compose file. One
+One optional service, in `server/` in this repo, with a Dockerfile and a compose file.
+**Built on 2026-09-18**; `server/README.md` is how to run one. One
 container, one hostname, one setting in Rampart. **There is one companion, not one per
 feature**, and everything that needs it lights up together when you point Rampart at it.
 Five separate addons would mean nobody runs any of them.
