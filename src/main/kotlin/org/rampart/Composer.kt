@@ -1,5 +1,6 @@
 package org.rampart
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,6 +27,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -191,6 +193,34 @@ private fun plainTextOf(body: Body?): String =
         ?: ""
 
 /**
+ * The panel the composer sits in, over the mail rather than instead of it.
+ *
+ * Its own surface, a border and a shadow, because no one of the three is enough across
+ * eighteen themes. It was drawn in `surface`, which is the colour of the mail behind it,
+ * and a drop shadow is a dark smudge nobody can see on a dark background, so what you got
+ * was text floating over other text with no edge anywhere.
+ *
+ * `surfaceBright` is the lightest surface a theme has, which is what a compose window is in
+ * Gmail: the panel stands off the page rather than sitting in it. The hairline does the
+ * work in a dark theme and the shadow does it in a light one.
+ *
+ * Shared with the screenshot harness on purpose. This frame used to be written out twice,
+ * once here and once in the test, which is exactly why a picture of it never showed that
+ * the panel had no edge.
+ */
+@Composable
+internal fun ComposerFrame(full: Boolean = false, content: @Composable () -> Unit) {
+    Surface(
+        shape = if (full) RectangleShape else MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceBright,
+        shadowElevation = if (full) 0.dp else 16.dp,
+        border = if (full) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier.fillMaxSize(),
+        content = content,
+    )
+}
+
+/**
  * The compose pane. Owns what the writer has typed and nothing else: sending, saving and
  * closing are the caller's, so the same pane serves a new message, a reply and a reopened
  * draft without knowing which it is.
@@ -301,11 +331,17 @@ internal fun Composer(
 
     Surface(
         Modifier.fillMaxSize().onPreviewKeyEvent(::typed),
-        color = MaterialTheme.colorScheme.surface,
+        // The lightest surface the theme has, matching the panel this sits inside. Left as
+        // `surface` it painted over that panel with the colour of the mail behind it.
+        color = MaterialTheme.colorScheme.surfaceBright,
     ) {
         Column(Modifier.fillMaxSize()) {
+            // A title bar, a shade off the panel it caps, the way a compose window has one
+            // in every webmail. It is what tells you where the thing you are writing starts.
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp),
+                Modifier.fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                    .padding(horizontal = 20.dp, vertical = 14.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {

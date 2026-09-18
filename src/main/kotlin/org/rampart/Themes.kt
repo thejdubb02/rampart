@@ -68,8 +68,15 @@ data class Theme(
             surfaceContainer = surface,
             surfaceContainerHigh = surfaceVariant,
             surfaceContainerHighest = surfaceVariant,
-            surfaceBright = surface,
-            surfaceDim = background,
+            /*
+             * Brightest and dimmest, and which colour that is depends on the theme. In a
+             * dark theme surfaceVariant is the lightest of the three; in a light theme it
+             * is the darkest. Getting these the wrong way round is how a panel meant to
+             * stand off the page ends up the same colour as it, which is what happened to
+             * the composer.
+             */
+            surfaceBright = if (dark) surfaceVariant else surface,
+            surfaceDim = if (dark) surface else surfaceVariant,
             inverseSurface = text,
             inverseOnSurface = background,
             scrim = Color(0x99000000),

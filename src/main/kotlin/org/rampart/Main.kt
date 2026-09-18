@@ -2,6 +2,7 @@ package org.rampart
 
 import kotlinx.serialization.json.JsonObject
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -2221,12 +2222,7 @@ private fun Reader(
                         else Modifier.padding(16.dp).width(620.dp).heightIn(max = 620.dp).fillMaxHeight(0.8f),
                     ),
             ) {
-                Surface(
-                    shape = if (composeFull) RectangleShape else MaterialTheme.shapes.medium,
-                    color = MaterialTheme.colorScheme.surface,
-                    shadowElevation = if (composeFull) 0.dp else 12.dp,
-                    modifier = Modifier.fillMaxSize(),
-                ) {
+                ComposerFrame(full = composeFull) {
                     ComposerPanel(draft)
                 }
             }

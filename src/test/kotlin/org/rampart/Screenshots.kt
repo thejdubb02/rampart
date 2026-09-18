@@ -133,28 +133,34 @@ class Screenshots {
         // Both states of the row at once: the pointer is over every row in the second,
         // so the two can be laid side by side and nothing should have moved.
         // The composer as it actually opens: a panel over the mail, not a screen.
-        shoot("compose-panel", 1400, 900, dark) {
-            Box(Modifier.fillMaxSize()) {
-                Panes()
-                Box(
-                    Modifier.align(Alignment.BottomEnd)
-                        .padding(16.dp).width(620.dp).heightIn(max = 620.dp).fillMaxHeight(0.8f),
-                ) {
-                    Surface(
-                        shape = MaterialTheme.shapes.medium,
-                        color = MaterialTheme.colorScheme.surface,
-                        shadowElevation = 12.dp,
-                        modifier = Modifier.fillMaxSize(),
+        /*
+         * Both themes, because the panel that had no edge had one picture and it was the
+         * dark one. A composer drawn in the same colour as the mail behind it looks fine
+         * until you see it next to a light theme where the shadow is doing the work.
+         */
+        listOf("rampart-light" to "compose-panel-light", "rampart-dark" to "compose-panel").forEach { (key, name) ->
+            shoot(name, 1400, 900, theme(key)) {
+                Box(Modifier.fillMaxSize()) {
+                    Panes()
+                    Box(
+                        Modifier.align(Alignment.BottomEnd)
+                            .padding(16.dp).width(620.dp).heightIn(max = 620.dp).fillMaxHeight(0.8f),
                     ) {
-                        Composer(
-                            identities = listOf("you@example.org"),
-                            initial = replyTo(MESSAGES[1], Body(null, "Could you confirm the start time?"), "you@example.org")
-                                .copy(body = "Yes, **ten past nine** works.\n"),
-                            sending = false,
-                            error = null,
-                            onDiscard = {},
-                            onSend = {},
-                        )
+                        // The same frame the app uses, so this picture cannot flatter it.
+                        ComposerFrame {
+                            Composer(
+                                identities = listOf("you@example.org"),
+                                initial = replyTo(
+                                    MESSAGES[1],
+                                    Body(null, "Could you confirm the start time?"),
+                                    "you@example.org",
+                                ).copy(body = "Yes, **ten past nine** works.\n"),
+                                sending = false,
+                                error = null,
+                                onDiscard = {},
+                                onSend = {},
+                            )
+                        }
                     }
                 }
             }
