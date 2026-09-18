@@ -2062,6 +2062,10 @@ private fun Reader(
             if (dashboardOpen) {
                 DashboardPane(
                     stats = stats,
+                    unavailable = if (sessions.any { it.store != null }) "" else
+                        "There is no local copy of this mailbox on this machine, and every " +
+                            "figure here is counted from one. Rampart runs without it where " +
+                            "there is nowhere safe to keep the key that encrypts it.",
                     accountName = (here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key)
                         ?.let { key -> sessions.firstOrNull { it.key == key } }
                         ?.let { shortAccountName(it.account.name, it.account.email) }.orEmpty(),

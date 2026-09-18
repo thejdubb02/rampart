@@ -43,6 +43,15 @@ import androidx.compose.ui.unit.dp
 internal fun DashboardPane(
     stats: MailStats?,
     accountName: String,
+    /**
+     * Why there are no figures, when there are not going to be any.
+     *
+     * Blank means they are still being counted. There is a real case behind this: where
+     * there is nowhere safe to keep a key, Rampart runs with no local copy at all, and
+     * everything on this screen is a query over that copy. "Counting." forever would be the
+     * wrong answer to a question that has already been settled.
+     */
+    unavailable: String = "",
     onOpen: (Summary) -> Unit,
 ) {
     Column(
@@ -51,7 +60,12 @@ internal fun DashboardPane(
         Text("How your mail is going", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(4.dp))
         Text(
-            if (stats == null) "Counting." else "$accountName, the last 30 days, from the ${stats.kept} messages kept on this machine.",
+            when {
+                stats != null ->
+                    "$accountName, the last 30 days, from the ${stats.kept} messages kept on this machine."
+                unavailable.isNotBlank() -> unavailable
+                else -> "Counting."
+            },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.outline,
         )
