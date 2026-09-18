@@ -340,8 +340,8 @@ name, and the list and the palette are built from one source so they cannot disa
 
 The point at which Rampart stops being a client for one server.
 
-**Built 2026-09-18, in the working tree, not yet released.** The backend is finished and
-the sign-in screen is not, so none of it is reachable from the app yet.
+**Built 2026-09-18, not yet released.** Finished and reachable: an address and a password
+is the whole sign-in.
 
 #### Finding the server
 
@@ -437,21 +437,60 @@ Folder create, rename and delete were exercised against the server, with a folde
 deleted again in the same run. RENAME is how IMAP moves a folder as well as how it renames
 one, so there is no separate move command to go looking for.
 
+Moving, starring and deleting a message were done on a message sent for the purpose: it left
+the inbox, arrived in Archive with an id naming its new folder, took a star, and was deleted
+again. Sending was proved the same way, with the copy filed in Sent being the bytes that
+actually went out.
+
+#### Conversations, and the search that could not find a subject
+
+**Walking `References` client side does not work on this server, and finding that out cost
+the first attempt.** The plan was to take the root Message-ID and ask for it by header.
+Checked term by term against our own Stalwart: `SUBJECT` finds the message, `HEADER
+Subject` finds the message, and `HEADER Message-ID` finds nothing at all, not for the exact
+id, not for its domain, not for any token in it. The search returns an empty result rather
+than an error, so the first version looked like a parsing bug.
+
+THREAD (RFC 5256) is what the extension is for, Stalwart advertises `THREAD=REFERENCES` and
+implements it, and Angus does not expose it, so the command is sent directly and the
+grouping is the server's own. A server without the extension gets the one message, which is
+what it actually knows.
+
+**Unlike JMAP this is one folder.** A JMAP thread id spans the account; THREAD does not, and
+matching a group in Sent to one in the inbox needs exactly the Message-ID lookup this server
+will not answer. A reply of your own sitting in Sent is not shown beside the message it
+answers.
+
+The same pass fixed search. The query went to the server whole, and searching for the whole
+of a subject the server holds returns nothing while two adjacent words from it return the
+message. Pasting a subject line is the commonest way to look for a conversation, so search
+was broken on the thing people use it for. Every word now has to appear, each in the
+subject, the sender or the body, with a leading `Re:` or `Fwd:` taken off first.
+
+#### Push, and the version of it that did nothing
+
+IDLE runs on its own connection, because the command blocks the one it runs on. One folder,
+the inbox: IDLE is per mailbox and a connection each is how a client ends up holding fifteen
+sockets against somebody's server. The poll underneath still covers the rest and must not be
+removed.
+
+**The notification arrives through a listener, not by `idle()` returning.** The first version
+connected, reported push, stopped cleanly in 7ms and left no thread behind, and sat through a
+message being delivered without waking once in forty five seconds. Push that reports itself
+as connected and does nothing is worse than no push, and nothing short of a real server and a
+real message would have caught it. With the listener it wakes in 315ms.
+
 #### What is still open
 
-- **The sign-in screen**, without which none of this is reachable.
 - **OAuth2 with PKCE, deliberately not being done yet.** Decided 2026-09-18. Gmail and
   Microsoft both require it and both require us to register as an application with them
   first, which is a signup, a verification process and an ongoing relationship with two
   companies, not a piece of code. Everything else on this card works against any server
   that takes a password, which is every self-hosted mailbox and most providers. Revisit
   when somebody actually wants to point Rampart at Gmail.
-- **IDLE**, so an IMAP account learns about new mail rather than waiting for the poll.
-  `hasPush` is false and `watch` returns null today, which is correct and slow. The poll
-  underneath the WebSocket push exists for exactly this and must not be removed.
-- **Threading by walking `References`**, rather than refusing with `SERVER_THREADS`.
-- **Move and delete of a message, verified live.** Everything else in the backend has been.
-  Those two are not things to try out on somebody's real mail.
+
+Nothing else. Move, delete, flags, folder create, rename and delete, sending, filing the
+sent copy, threading, search and push have each been run against the live server.
 
 **Done when:** a generic IMAP account reads, sends, files, stars and searches; special
 folders are found through SPECIAL-USE; and every capability IMAP lacks degrades with a
