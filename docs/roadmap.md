@@ -136,10 +136,15 @@ JMAP WebSocket, eighteen themes, self-updating, passwords in the operating syste
 credential store.
 
 **What that adds up to: a client a working day can be spent in, against one server.** The
-rest of this file is the distance between that and a client anybody can install. The next
-two are the local store, which is what makes search instant and offline possible and gates
-everything in tiers 3 and 4, and then IMAP and SMTP, which is what "anybody" actually turns
-on.
+rest of this file is the distance between that and a client anybody can install.
+
+The local store is done, which is what makes search instant and offline possible and gates
+everything in tiers 3 and 4. **The IMAP and SMTP backend is done too, as of 2026-09-18, and
+is the half that makes "anybody" real.** Reading, writing flags, moving, deleting, folder
+management, attachments, sending, and finding the server from the address alone. It is not
+reachable from the app yet: the sign-in screen still asks for a JMAP hostname, and that is
+the next piece. Section 2.7 has what it does, what it refuses and why, and the three faults
+that only a live server showed.
 
 **A logo in a signature has to be hosted, not carried.** Stalwart stores at most 2047
 characters in `htmlSignature` and refuses 2048 with `invalidProperties` and no description.
@@ -335,22 +340,101 @@ name, and the list and the palette are built from one source so they cannot disa
 
 The point at which Rampart stops being a client for one server.
 
-Two things that must be got right rather than discovered:
+**Built 2026-09-18, in the working tree, not yet released.** The backend is finished and
+the sign-in screen is not, so none of it is reachable from the app yet.
 
-- **Folder roles.** IMAP has no JMAP `role`. It has SPECIAL-USE flags (RFC 6154):
-  `\Archive`, `\Drafts`, `\Junk`, `\Sent`, `\Trash`, `\All`. `Folders.kt` already falls
-  back to the folder's name when a server declares nothing, and SPECIAL-USE slots in as a
-  third source ahead of that. The rule does not change: the server's own declaration
-  wins, the name is a last resort, and a folder already claimed for something else is
-  never taken by name.
-- **What IMAP cannot do**, each of which has to degrade rather than break: threading
-  (walk `References` client-side, or use the THREAD extension), keywords (not every
-  server keeps custom ones), push (IDLE, one connection per folder), blob upload, and
-  Sieve (ManageSieve, a different protocol on a different port). The poll underneath the
-  WebSocket push exists for exactly this and must not be removed.
+#### Finding the server
 
-SMTP submission comes with it, and so does OAuth2 with PKCE, without which Gmail and
-Microsoft are closed to us.
+Nobody knows their own IMAP hostname. Asking for one is how a mail client ends up being set
+up by whoever installed it and by nobody else, so the address has to be enough.
+`routesFor(email)` turns an address into an ordered list of ways to try, best first: the
+`_jmap._tcp` SRV record, which is the only thing that can say a domain's JMAP server lives
+somewhere other than the domain (RFC 8620 section 2.2); the well-known path on the domain
+itself; `_imaps._tcp` and `_submission._tcp` (RFC 6186), asked separately because a domain
+that publishes where to read but not where to send is ordinary rather than broken; then
+`imap.`, `mail.` and the domain itself.
+
+JMAP before IMAP wherever both answer. A server offering both offers strictly more through
+JMAP: push, threading, search across folders, a blob store. That is not a tie.
+
+Every step is a guess that is then tried, never a claim, which is why the server fields stay
+on the sign-in screen. A domain that publishes nothing still has an owner who knows.
+
+Checked against live DNS rather than reasoned about. Gmail publishes both records; Fastmail
+publishes JMAP at `api.fastmail.com` on 443, which is why a record on 443 must not carry its
+port into the URL and one on 8443 must; our own domains publish nothing and fall through to
+the guesses, which is worth fixing on our side.
+
+A target of a single dot is the published way to say a service is deliberately not offered
+(RFC 2782). Read as a hostname it becomes an empty name that then gets guessed at, which is
+the opposite of what the domain went to the trouble of saying.
+
+#### The seam
+
+`MailBackend` is not a designed interface. It is exactly the thirty-five members the app
+already asked of `Jmap`, with their existing signatures, so `Jmap` satisfies it by adding
+the word `override` and all sixty-two call sites compile unchanged. An interface extracted
+from what is already called cannot be wrong about what is needed, and cannot quietly grow a
+member nobody uses.
+
+`Unsupported` carries the `Lacks` entry rather than a message written where it is thrown, so
+the sentence somebody reads is the same wherever they meet it, and adding a third backend
+means adding reasons rather than hunting for strings.
+
+#### Folder roles
+
+IMAP has no JMAP `role`. It has SPECIAL-USE flags (RFC 6154): `\Archive`, `\Drafts`,
+`\Junk`, `\Sent`, `\Trash`, `\All`. The rule did not change: the server's own declaration
+wins and the name is a last resort. Our own server is the argument for it, and it is not a
+hypothetical one. Stalwart calls them "Deleted Items", "Junk Mail" and "Sent Items", so a
+client matching on "Trash" and "Spam" would have found neither, and a French mailbox would
+have found none of them.
+
+#### The id has to say where it lives
+
+A UID is unique inside a folder and nowhere else: the inbox and Sent can both hold a message
+numbered 4231. Every call site in Rampart passes ids around with no folder beside them,
+because a JMAP id is unique across the account, so an IMAP id that could not say where it
+lives would have meant widening the interface for the sake of one backend.
+
+An IMAP id is therefore the UID, a space, and the folder. A space because a UID is always
+digits and a folder name may contain nearly anything else, including the slash it uses for
+its own hierarchy, so the split needs no escaping and the id stays printable, which matters
+because it is also the key in the local store. A selection spanning folders groups itself
+and acts on each.
+
+#### What the live server found that the tests could not
+
+Three things, none of which a test suite with no server behind it can see:
+
+- **Four messages came back with no body at all.** They are DMARC aggregate reports whose
+  entire message is one `application/zip` with `Content-Disposition: attachment`, so no body
+  is the correct answer and the MIME walk was right. Recorded here so the next person to
+  see an empty message does not go looking for a fault that is not there.
+- **A message that is itself one attachment listed no attachments.** The walk skipped
+  position zero to avoid listing a multipart container as a file, and the filename and
+  Content-ID test it already did was enough on its own.
+- **Sizes were the wire figure, not the file.** IMAP reports the encoded length and base64 is
+  four bytes on the wire for every three in the file, so every attachment was overstated by a
+  third while the JMAP side reported the real number. Worse on a message that is one
+  attachment, where the size reported is the whole message including its headers: 5,464 bytes
+  claimed for a 729 byte file.
+
+Folder create, rename and delete were exercised against the server, with a folder made and
+deleted again in the same run. RENAME is how IMAP moves a folder as well as how it renames
+one, so there is no separate move command to go looking for.
+
+#### What is still open
+
+- **The sign-in screen**, without which none of this is reachable.
+- **OAuth2 with PKCE**, without which Gmail and Microsoft are closed to us. Blocked on a
+  registered OAuth client, which is a decision rather than code.
+- **IDLE**, so an IMAP account learns about new mail rather than waiting for the poll.
+  `hasPush` is false and `watch` returns null today, which is correct and slow. The poll
+  underneath the WebSocket push exists for exactly this and must not be removed.
+- **Threading by walking `References`**, rather than refusing with `SERVER_THREADS`.
+- **Move and delete of a message, verified live.** Everything else in the backend has been.
+  Those two are not things to try out on somebody's real mail.
 
 **Done when:** a Gmail account added through OAuth and a generic IMAP account both read,
 send, file, star and search; special folders are found through SPECIAL-USE; and every
