@@ -344,7 +344,7 @@ private fun App(
         sessions = withContext(Dispatchers.IO) {
             Accounts.read().mapNotNull { account ->
                 val password = Secrets.load(account) ?: return@mapNotNull null
-                runCatching { Session(account, Jmap.connect(account.server, account.email, password)) }.getOrNull()
+                runCatching { Session(account, openSaved(account, password)) }.getOrNull()
             }
         }
         restoring = false
@@ -389,13 +389,15 @@ internal fun Connect(
     saved: List<SavedAccount> = remember { Accounts.read() },
     canRemember: Boolean = remember { Secrets.available() },
     onCancel: (() -> Unit)? = null,
-    onConnected: (SavedAccount, Jmap) -> Unit,
+    onConnected: (SavedAccount, MailBackend) -> Unit,
 ) {
     var server by remember { mutableStateOf(saved.firstOrNull()?.server ?: "") }
     var user by remember { mutableStateOf(saved.firstOrNull()?.email ?: "") }
     var password by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
+    var trying by remember { mutableStateOf("") }
+    var serverOpen by remember { mutableStateOf(false) }
     var rememberPassword by remember { mutableStateOf(canRemember) }
     val storeProblem = remember { Secrets.unavailableReason() }
     val scope = rememberCoroutineScope()
@@ -447,8 +449,12 @@ internal fun Connect(
             }
         }
 
-        OutlinedTextField(server, { server = it }, label = { Text("Server") }, singleLine = true, modifier = Modifier.width(380.dp))
-        OutlinedTextField(user, { user = it }, label = { Text("Email address") }, singleLine = true, modifier = Modifier.width(380.dp))
+        OutlinedTextField(
+            user, { user = it },
+            label = { Text("Email address") },
+            singleLine = true,
+            modifier = Modifier.width(380.dp),
+        )
         OutlinedTextField(
             password, { password = it },
             label = { Text("App password") },
@@ -456,6 +462,34 @@ internal fun Connect(
             visualTransformation = PasswordVisualTransformation(),
             modifier = Modifier.width(380.dp),
         )
+        // Closed by default and marked as a disclosure rather than a grey line that happens
+        // to be clickable. Somebody who needs it is somebody whose domain published nothing,
+        // and they have to be able to find it.
+        Row(
+            Modifier.width(380.dp).clickable { serverOpen = !serverOpen },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (serverOpen) RampartIcons.Collapse else RampartIcons.Expand,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                "Server settings",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+        if (serverOpen) {
+            OutlinedTextField(
+                server, { server = it },
+                label = { Text("Server") },
+                singleLine = true,
+                modifier = Modifier.width(380.dp),
+            )
+        }
         if (canRemember) {
             Row(
                 Modifier.width(380.dp).clickable { rememberPassword = !rememberPassword },
@@ -468,32 +502,75 @@ internal fun Connect(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (onCancel != null) TextButton(onClick = onCancel, enabled = !busy) { Text("Cancel") }
             Button(
-                enabled = !busy && server.isNotBlank() && user.isNotBlank() && password.isNotBlank(),
+                enabled = !busy && user.isNotBlank() && password.isNotBlank(),
                 onClick = {
                     busy = true
                     error = ""
+                    trying = ""
                     scope.launch {
                         try {
-                            val jmap = withContext(Dispatchers.IO) { Jmap.connect(server, user, password) }
-                            val account = SavedAccount(user.trim(), server.trim(), user.trim())
-                            // Only after a sign-in that worked, so a typo is never saved.
-                            runCatching { Accounts.remember(account) }
-                            if (rememberPassword) {
-                                // Signing in worked, so this is not a failure worth refusing
-                                // the session over. It is worth saying out loud.
-                                Secrets.store(account, password)?.let { error = "Signed in. $it" }
-                            } else {
-                                Secrets.forget(account)
+                            val email = user.trim()
+                            val typed = server.trim()
+                            // A saved account already told us which protocol worked. Using
+                            // that skips a JMAP wait on an IMAP host, which is 15 seconds of
+                            // looking hung.
+                            val known = saved.firstOrNull {
+                                it.email == email && it.server == typed
+                            }?.protocol.orEmpty()
+                            val routes = routesToTry(email, typed, known)
+                            if (routes.isEmpty()) {
+                                serverOpen = true
+                                error = noServerFor(email)
+                                return@launch
                             }
-                            onConnected(account, jmap)
+                            for (route in routes) {
+                                trying = lookingFor(route)
+                                try {
+                                    val backend = withContext(Dispatchers.IO) {
+                                        openRoute(route, email, password)
+                                    }
+                                    val account = accountFor(route, email)
+                                    // Only after a sign-in that worked, so a typo is never saved.
+                                    runCatching { Accounts.remember(account) }
+                                    if (rememberPassword) {
+                                        // Signing in worked, so this is not a failure worth refusing
+                                        // the session over. It is worth saying out loud.
+                                        Secrets.store(account, password)?.let { error = "Signed in. $it" }
+                                    } else {
+                                        Secrets.forget(account)
+                                    }
+                                    onConnected(account, backend)
+                                    return@launch
+                                } catch (e: Exception) {
+                                    if (e is CancellationException) throw e
+                                    if (passwordRejected(e)) {
+                                        error = "The server did not accept that email address and password."
+                                        return@launch
+                                    }
+                                    // Anything else is the wrong host. Shown only if none
+                                    // work, so a timeout on the first guess is not the
+                                    // message the person reads.
+                                }
+                            }
+                            serverOpen = true
+                            error = noServerFor(email)
                         } catch (e: Exception) {
                             error = whyFailed(e)
                         } finally {
                             busy = false
+                            trying = ""
                         }
                     }
                 },
             ) { Text(if (busy) "Connecting" else "Connect") }
+        }
+        if (trying.isNotBlank()) {
+            Text(
+                trying,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.width(380.dp),
+            )
         }
         if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.width(380.dp))
         if (storeProblem != null) {
