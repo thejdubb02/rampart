@@ -723,6 +723,17 @@ private fun Reader(
     fun writingAccount(): String? = accountOf(selected) ?: sessions.firstOrNull()?.key
 
     /**
+     * The address to write as, given the message being answered.
+     *
+     * The account's first identity for a new message, and for a reply or a forward the one
+     * the message was actually addressed to. See [identityFor].
+     */
+    fun writingIdentity(body: Body?): String {
+        val mine = identities[writingAccount()].orEmpty().map { it.email }
+        return identityFor(body, mine, mine.firstOrNull().orEmpty())
+    }
+
+    /**
      * Where these messages are now, which is what undo puts them back into. In a real folder
      * that is the folder on screen. In the merged inbox it is that account's own inbox,
      * which is the only folder a message in there can have come from.
@@ -1360,7 +1371,7 @@ private fun Reader(
                 scope.launch {
                     val ours = identities[key].orEmpty().map { it.email }
                     val text = io { session(key).jmap.body(message.id) }
-                    composing = replyTo(message, text, ours.firstOrNull().orEmpty(), all, ours.toSet())
+                    composing = replyTo(message, text, writingIdentity(text), all, ours.toSet())
                 }
             }
         },
@@ -1368,8 +1379,12 @@ private fun Reader(
             val key = accountOf(message)
             if (key != null) {
                 scope.launch {
-                    val from = identities[key].orEmpty().firstOrNull()?.email.orEmpty()
-                    composing = forwardOf(message, io { session(key).jmap.body(message.id) }, from)
+                    // This message's own body, not whatever is open in the reader. Forwarding
+                    // from a row while looking at something else would otherwise answer as
+                    // the identity the other message was addressed to.
+                    val forwarded = io { session(key).jmap.body(message.id) }
+                    val mine = identities[key].orEmpty().map { it.email }
+                    composing = forwardOf(message, forwarded, identityFor(forwarded, mine, mine.firstOrNull().orEmpty()))
                 }
             }
         },
@@ -1437,9 +1452,9 @@ private fun Reader(
         val from = ours.firstOrNull().orEmpty()
         when (id) {
             "compose" -> { sendError = null; composing = Draft(from = from) }
-            "reply" -> selected?.let { composing = replyTo(it, body, from) }
-            "reply-all" -> selected?.let { composing = replyTo(it, body, from, true, ours) }
-            "forward" -> selected?.let { composing = forwardOf(it, body, from) }
+            "reply" -> selected?.let { composing = replyTo(it, body, writingIdentity(body)) }
+            "reply-all" -> selected?.let { composing = replyTo(it, body, writingIdentity(body), true, ours) }
+            "forward" -> selected?.let { composing = forwardOf(it, body, writingIdentity(body)) }
             "archive" -> actions.archive?.invoke()
             "trash" -> actions.trash?.invoke()
             // One command, and it does whichever of the two is the one on offer, so the
@@ -1532,13 +1547,19 @@ private fun Reader(
             Key.F5 -> { scope.launch { refreshNow() }; true }
             Key.C -> { sendError = null; composing = Draft(from = identities[writingAccount()].orEmpty().firstOrNull()?.email.orEmpty()); true }
             Key.U -> { run("unread-only"); true }
-            Key.R -> { selected?.let { m -> composing = replyTo(m, body, identities[writingAccount()].orEmpty().firstOrNull()?.email.orEmpty()) }; true }
-            Key.F -> { selected?.let { m -> composing = forwardOf(m, body, identities[writingAccount()].orEmpty().firstOrNull()?.email.orEmpty()) }; true }
+            Key.R -> {
+                selected?.let { m -> composing = replyTo(m, body, writingIdentity(body)) }
+                true
+            }
+            Key.F -> {
+                selected?.let { m -> composing = forwardOf(m, body, writingIdentity(body)) }
+                true
+            }
             Key.A -> {
                 selected?.let { m ->
                     val ours = identities[writingAccount()].orEmpty().map { it.email }.toSet()
                     if (hasOtherRecipients(m, body, ours)) {
-                        composing = replyTo(m, body, ours.firstOrNull().orEmpty(), true, ours)
+                        composing = replyTo(m, body, writingIdentity(body), true, ours)
                     }
                 }
                 true
@@ -2076,7 +2097,7 @@ private fun Reader(
                     val message = selected ?: return@Message
                     val ours = identities[writingAccount()].orEmpty().map { it.email }.toSet()
                     sendError = null
-                    composing = replyTo(message, body, ours.firstOrNull().orEmpty(), all, ours)
+                    composing = replyTo(message, body, writingIdentity(body), all, ours)
                 },
                 replyAll = selected?.let {
                     hasOtherRecipients(it, body, identities[writingAccount()].orEmpty().map { id -> id.email }.toSet())
@@ -2085,7 +2106,7 @@ private fun Reader(
                     val message = selected ?: return@Message
                     val from = identities[writingAccount()].orEmpty().firstOrNull()?.email.orEmpty()
                     sendError = null
-                    composing = forwardOf(message, body, from)
+                    composing = forwardOf(message, body, writingIdentity(body))
                 },
                 onLink = { confirm = it },
                 remoteImages = remoteImages,

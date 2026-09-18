@@ -841,3 +841,26 @@ internal fun pickFiles(): List<Path> {
     dialog.isVisible = true
     return dialog.files.orEmpty().map { it.toPath() }
 }
+
+/**
+ * Which of your addresses a message was sent to, and therefore which to answer as.
+ *
+ * **One account can hold several identities, and picking the first of them is wrong most of
+ * the time.** A reply to mail addressed to one of your other domains going out under the
+ * first address on the list is the kind of mistake the recipient sees and you do not, and
+ * it is the reason a client stops being trusted.
+ *
+ * To before Cc, because being written to directly is a better claim than being copied. An
+ * address that matched nothing falls back to [fallback], which is the account's first
+ * identity and the right answer for a message that reached you by an alias or a list we
+ * cannot see.
+ */
+internal fun identityFor(body: Body?, mine: List<String>, fallback: String): String {
+    if (mine.isEmpty()) return fallback
+    val known = mine.associateBy { it.trim().lowercase() }
+    fun match(addresses: List<String>): String? = addresses.asSequence()
+        // The header carries "Name <address>" as often as a bare address.
+        .mapNotNull { known[it.substringAfterLast('<').substringBefore('>').trim().lowercase()] }
+        .firstOrNull()
+    return match(body?.to.orEmpty()) ?: match(body?.cc.orEmpty()) ?: fallback
+}
