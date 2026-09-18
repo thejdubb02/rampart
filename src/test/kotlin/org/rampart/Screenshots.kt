@@ -98,6 +98,16 @@ class Screenshots {
             """<tr><td>Brendan Goodwin</td><td>13</td><td>Arriving around 12p, white Subaru.</td></tr>""" +
             """<tr><td>Melissa OBrien</td><td>4</td><td>In town for a wedding, sent winery list.</td></tr>""" +
             """</table></td></tr></table>"""
+        // The undo strip, which now drains. Shot at the start of the drain, so what this
+        // proves is that the fill sits behind the label rather than over it.
+        shoot("undo-bar", 700, 120) {
+            Column {
+                UndoBar(text = "1 message archived.", seconds = 30, restartOn = "a", onUndo = {}, onDismiss = {})
+                UndoBar(text = "Sending.", seconds = 30, restartOn = "b", onUndo = {})
+                // Zero seconds is the "until I dismiss it" choice: no fill at all.
+                UndoBar(text = "12 messages moved to Archive.", seconds = 0, restartOn = "c", onUndo = {}, onDismiss = {})
+            }
+        }
         shoot("report", 980, 640) {
             Message(summary = MESSAGES[0], body = Body(report, null), onLink = {})
         }

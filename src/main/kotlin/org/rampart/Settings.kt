@@ -172,6 +172,20 @@ object Settings {
     fun setUndoSeconds(value: Int) = write { put("undoSeconds", JsonPrimitive(value)) }
 
     /**
+     * How long the "archived" strip stays up offering to take it back, in seconds.
+     *
+     * A different number from [undoSeconds] and deliberately so. That one is how long a
+     * message is physically held before it goes, and it costs something: every send waits.
+     * This one is only how long an offer stays on screen, and the move it offers to reverse
+     * can still be reversed by hand afterwards, so it can be generous.
+     *
+     * Zero means it stays until dismissed, which is what it did before there was a choice.
+     */
+    fun undoBarSeconds(): Int = read()["undoBarSeconds"]?.jsonPrimitive?.intOrNull ?: 8
+
+    fun setUndoBarSeconds(value: Int) = write { put("undoBarSeconds", JsonPrimitive(value)) }
+
+    /**
      * Senders whose pictures may be fetched from the web. Domains, not addresses: see
      * [imageSenderKey].
      */

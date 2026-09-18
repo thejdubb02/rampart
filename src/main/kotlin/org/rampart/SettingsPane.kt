@@ -82,6 +82,8 @@ internal fun SettingsPane(
     quotas: Map<String, List<MailQuota>> = emptyMap(),
     /** Told when the row tinting is switched, so the list redraws without reopening. */
     onTintRowsByTag: (Boolean) -> Unit = {},
+    /** Told when the undo strip's lifetime changes, so the next one uses it. */
+    onUndoBarSeconds: (Int) -> Unit = {},
     onRestart: () -> Unit,
     /** Null while the server's filter script is still being read. */
     filters: Script?,
@@ -117,7 +119,7 @@ internal fun SettingsPane(
                     when (page) {
                         "accounts" -> AccountsPage(accounts, onAddAccount, quotas)
                         "notifications" -> NotificationsPage(notifyOnArrival, onNotifyOnArrival)
-                        "reading" -> ReadingPage()
+                        "reading" -> ReadingPage(onUndoBarSeconds)
                         "filters" -> FiltersPage(
                             script = filters,
                             // Only real folders, so nobody files into one that does not exist.
@@ -283,7 +285,7 @@ private fun ThemesPage(
  * guess at something they can only judge by feel.
  */
 @Composable
-private fun ReadingPage() {
+private fun ReadingPage(onUndoBarSeconds: (Int) -> Unit = {}) {
     var delay by remember { mutableStateOf(Settings.markReadDelay()) }
     Section(
         "Marking as read",
@@ -329,6 +331,33 @@ private fun ReadingPage() {
                 RadioButton(selected = undo == value, onClick = {
                     undo = value
                     Settings.setUndoSeconds(value)
+                })
+                Spacer(Modifier.width(8.dp))
+                Text(label, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+
+    Spacer(Modifier.height(18.dp))
+    Section(
+        "How long the undo strip stays",
+        "After archiving or moving something. Different from the number above: that one " +
+            "holds every message you send, this one is only how long the offer is on screen.",
+    )
+    var undoBar by remember { mutableStateOf(Settings.undoBarSeconds()) }
+    listOf(5 to "5 seconds", 8 to "8 seconds", 15 to "15 seconds", 0 to "Until I dismiss it")
+        .forEach { (value, label) ->
+            Row(
+                Modifier.fillMaxWidth().clickable {
+                    undoBar = value
+                    Settings.setUndoBarSeconds(value)
+                    onUndoBarSeconds(value)
+                }.padding(vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(selected = undoBar == value, onClick = {
+                    undoBar = value
+                    Settings.setUndoBarSeconds(value)
+                    onUndoBarSeconds(value)
                 })
                 Spacer(Modifier.width(8.dp))
                 Text(label, style = MaterialTheme.typography.bodyMedium)

@@ -515,6 +515,13 @@ taken off it, for the reason above.
   feature is gone through one at a time in `open-tracking.md`, including the ones we are
   not doing: link rewriting, PDF page analytics, campaigns, and per-recipient identity
   inside a group send.
+- **The undo strip drains** (2026-09-18). It used to sit there until dismissed, so after
+  a few archives it was furniture: present, ignored, and covering the top of the list. It
+  now expires, and the countdown is drawn as a fill receding across the Undo button itself,
+  so the thing you would press is the thing showing how long you can press it for. Two
+  separate numbers, because they are two different things: how long a sent message is held
+  (every send waits for it) and how long the offer stays on screen (nothing waits, and the
+  move can still be reversed by hand afterwards).
 - **Undo-send**, held in the client. **Scheduled send is not possible against this
   server**: Stalwart advertises `urn:ietf:params:jmap:submission` with no
   `maxDelayedSend`, which per RFC 8621 means zero, so a future `sendAt` is refused.

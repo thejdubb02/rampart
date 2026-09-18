@@ -24,6 +24,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.ui.draw.rotate
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.widthIn
@@ -662,6 +667,7 @@ private fun Reader(
     var tagColours by remember { mutableStateOf(Settings.tagColours()) }
     var folded by remember { mutableStateOf(Settings.collapsedSections()) }
     var tintRows by remember { mutableStateOf(Settings.tintRowsByTag()) }
+    var undoBarSeconds by remember { mutableStateOf(Settings.undoBarSeconds()) }
     /** The meeting this message is about, when it is about one. */
     var invitation by remember { mutableStateOf<Invitation?>(null) }
     /** What the answer being sent was, so the buttons say so and cannot be pressed twice. */
@@ -2021,31 +2027,23 @@ private fun Reader(
         // Offered in the same place as the other undo, because they are the same promise:
         // the thing you just did can be taken back without going and finding it.
         undoSend?.let { cancel ->
-            Row(
-                Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
-                    .padding(start = 14.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "Sending.",
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = cancel) { Text("Undo") }
-            }
+            // The drain here is the real deadline rather than a display choice: the message
+            // is being held for exactly this long and then it goes. No Dismiss, because
+            // dismissing the offer would not stop the send, and a button that looks like it
+            // might is worse than no button.
+            UndoBar(
+                text = "Sending.",
+                seconds = Settings.undoSeconds(),
+                restartOn = cancel,
+                onUndo = cancel,
+            )
         }
         undo?.let { last ->
-            Row(
-                Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
-                    .padding(start = 14.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    movedNotice(last.count, last.what),
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = {
+            UndoBar(
+                text = movedNotice(last.count, last.what),
+                seconds = undoBarSeconds,
+                restartOn = last,
+                onUndo = {
                     scope.launch {
                         // Every account is put back, and the notice only clears if they all
                         // did. One that failed leaves the offer up rather than pretending.
@@ -2060,11 +2058,12 @@ private fun Reader(
                             refreshNow()
                         }
                     }
-                }) { Text("Undo", style = MaterialTheme.typography.bodySmall) }
-                TextButton(onClick = { undo = null }) {
-                    Text("Dismiss", style = MaterialTheme.typography.bodySmall)
-                }
-            }
+                },
+                // Only this one expires. The move can still be undone by hand afterwards,
+                // so the offer running out costs nothing.
+                onExpire = { undo = null },
+                onDismiss = { undo = null },
+            )
         }
         if (error.isNotBlank()) {
             // Dismissible, because an error that can only be cleared by succeeding at
@@ -2266,6 +2265,7 @@ private fun Reader(
                     identities = identities[settingsAccount()].orEmpty(),
                     quotas = quotas,
                     onTintRowsByTag = { tintRows = it },
+                    onUndoBarSeconds = { undoBarSeconds = it },
                     vacation = vacation,
                     vacationError = vacationError,
                     onVacation = { wanted ->
@@ -4791,6 +4791,57 @@ internal data class Move(val accountKey: String, val ids: List<String>, val from
  * A list of moves rather than one, because a batch picked out of the merged inbox can span
  * accounts, and putting half of it back is worse than offering no undo at all.
  */
+/**
+ * The strip that offers to take back what just happened, and drains while it does.
+ *
+ * **A bar that never goes away stops being read.** It sat there until dismissed, so after
+ * a few archives it was furniture: present, ignored, and covering the top of the list.
+ * Auto-dismissing fixes that and raises a new question, which is how long is left, and the
+ * answer belongs on the button rather than beside it. The fill recedes across Undo, so the
+ * thing you would press is the thing showing how long you can press it for.
+ *
+ * [seconds] of zero means it stays until dismissed, which is the old behaviour kept for
+ * anyone who wants it.
+ */
+@Composable
+internal fun UndoBar(
+    text: String,
+    seconds: Int,
+    /** Changes when a new thing happens, which is what restarts the drain. */
+    restartOn: Any?,
+    onUndo: () -> Unit,
+    /** Called when the time runs out. Null where something else takes the bar away. */
+    onExpire: (() -> Unit)? = null,
+    onDismiss: (() -> Unit)? = null,
+) {
+    val left = remember(restartOn) { Animatable(1f) }
+    LaunchedEffect(restartOn, seconds) {
+        if (seconds <= 0) return@LaunchedEffect
+        left.snapTo(1f)
+        // Linear, because this is a clock. Any easing makes the last second look longer
+        // than the first, which is the one thing a countdown must not do.
+        left.animateTo(0f, tween(durationMillis = seconds * 1000, easing = LinearEasing))
+        onExpire?.invoke()
+    }
+    Row(
+        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(start = 14.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+        val drain = MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+        TextButton(
+            onClick = onUndo,
+            modifier = Modifier.clip(MaterialTheme.shapes.small).drawBehind {
+                if (seconds > 0) drawRect(drain, size = Size(size.width * left.value, size.height))
+            },
+        ) { Text("Undo", style = MaterialTheme.typography.bodySmall) }
+        onDismiss?.let {
+            TextButton(onClick = it) { Text("Dismiss", style = MaterialTheme.typography.bodySmall) }
+        }
+    }
+}
+
 internal data class Undoable(
     val moves: List<Move>,
     /** What to call it on screen, already in the past tense. */
