@@ -21,6 +21,11 @@ kotlin {
     jvmToolchain(21)
 }
 
+val javafxVersion = "21.0.5"
+// web is the engine; swing is the bridge into a Compose window; the other three are what
+// web itself requires.
+val javafx = listOf("base", "graphics", "controls", "media", "swing", "web")
+
 dependencies {
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
@@ -49,6 +54,30 @@ dependencies {
     // Reaches Windows DPAPI, so a remembered password is encrypted by the operating
     // system against the logged in user rather than by anything we wrote.
     implementation("net.java.dev.jna:jna-platform:5.17.0")
+
+    /*
+     * A real engine for message HTML.
+     *
+     * Rampart drew HTML itself until now: parse, reduce to a list of blocks, lay them out
+     * in Compose. That works for a written message and cannot work for a designed one. A
+     * marketing email is a nest of tables carrying inline CSS, media queries, background
+     * images and widths, and matching it means implementing a browser. Every version of
+     * the hand renderer was one CSS feature short of the next email.
+     *
+     * So the same answer webmail gets for free: sanitise, then hand it to an engine. Ours
+     * is JavaFX's WebKit, which is the light one. Chromium through JCEF would be the other
+     * choice and costs three times the download for accuracy no email needs.
+     *
+     * Only the `web` module is large (31 MB on Windows); the rest are a few MB together.
+     */
+    javafx.forEach { module ->
+        // The classifier is the platform, and there is no neutral one. Linux is what this
+        // box compiles and tests against; Windows is what actually ships.
+        compileOnly("org.openjfx:javafx-$module:$javafxVersion:linux")
+        testImplementation("org.openjfx:javafx-$module:$javafxVersion:linux")
+        windowsAmd64("org.openjfx:javafx-$module:$javafxVersion:win")
+        linuxAmd64("org.openjfx:javafx-$module:$javafxVersion:linux")
+    }
 
     // Skiko ships a different native library per platform, so packaging for Windows from
     // Linux means naming all of them rather than relying on compose.desktop.currentOs.

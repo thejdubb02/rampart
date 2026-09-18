@@ -4,6 +4,7 @@ import kotlinx.serialization.json.JsonObject
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -78,6 +79,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
@@ -219,6 +221,8 @@ internal data class AccountMailboxes(
 fun main() {
     // Before anything is drawn, so a second copy costs a moment rather than a window.
     if (!SingleInstance.claim()) return
+    // Before the first window, because it is read once when the scene is made.
+    enableWebBody()
     application { Rampart() }
 }
 
@@ -687,7 +691,9 @@ private fun Reader(
     var thread by remember { mutableStateOf<List<Summary>>(emptyList()) }
     var bodyError by remember { mutableStateOf<String?>(null) }
     var inlineImages by remember { mutableStateOf<Map<String, ImageBitmap>>(emptyMap()) }
-    var remoteImages by remember { mutableStateOf<Map<String, ImageBitmap>>(emptyMap()) }
+    // The same parts undecoded, for the engine, which wants the bytes rather than a bitmap.
+    var inlineBytes by remember { mutableStateOf<Map<String, ByteArray>>(emptyMap()) }
+    var showRemote by remember { mutableStateOf(false) }
     var unsubscribed by remember { mutableStateOf<String?>(null) }
     var source by remember { mutableStateOf<String?>(null) }
     var picked by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -1093,7 +1099,8 @@ private fun Reader(
         body = null
         bodyError = null
         inlineImages = emptyMap()
-        remoteImages = emptyMap()
+        inlineBytes = emptyMap()
+        showRemote = false
         unsubscribed = null
         source = null
         attachments = emptyList()
@@ -1125,23 +1132,26 @@ private fun Reader(
         // whole difference between these and the remote ones that stay blocked.
         val embedded = attachments.filter { it.inline && it.type.startsWith("image/") }
         if (embedded.isNotEmpty()) {
-            inlineImages = withContext(Dispatchers.IO) {
+            val fetched = withContext(Dispatchers.IO) {
                 embedded.mapNotNull { part ->
                     val bytes = runCatching { session(key).jmap.blob(part) }.getOrNull()
                         ?: return@mapNotNull null
-                    // A part that claims to be an image and is not must not take the pane
-                    // down with it.
-                    val bitmap = runCatching { Image.makeFromEncoded(bytes).toComposeImageBitmap() }
-                        .getOrNull() ?: return@mapNotNull null
-                    part.blobId to bitmap
+                    part.blobId to bytes
                 }.toMap()
             }
+            inlineBytes = fetched
+            inlineImages = fetched.mapNotNull { (blobId, bytes) ->
+                // A part that claims to be an image and is not must not take the pane
+                // down with it.
+                runCatching { Image.makeFromEncoded(bytes).toComposeImageBitmap() }
+                    .getOrNull()?.let { blobId to it }
+            }.toMap()
         }
         if (thread.isEmpty()) thread = io { session(key).jmap.thread(message.threadId) } ?: emptyList()
 
         // Already answered for this sender, so it is not asked again. The question is
         // whether to tell them the message was opened, and that was settled the first time.
-        if (imageSenderKey(message.fromEmail) in allowedSenders) remoteImages = fetchRemote(body)
+        if (imageSenderKey(message.fromEmail) in allowedSenders) showRemote = true
 
         // A draft is not something to read. Clicking one puts it back in the composer,
         // under the id it is already saved at, so carrying on writing replaces that copy
@@ -2109,7 +2119,7 @@ private fun Reader(
                     composing = forwardOf(message, body, writingIdentity(body))
                 },
                 onLink = { confirm = it },
-                remoteImages = remoteImages,
+                showRemote = showRemote,
                 unsubscribed = unsubscribed,
                 inContacts = selected?.fromEmail?.let { from ->
                     contacts.any { it.first.emails.any { e -> e.equals(from, ignoreCase = true) } }
@@ -2198,11 +2208,12 @@ private fun Reader(
                             Settings.allowImagesFrom(key)
                             allowedSenders = allowedSenders + key
                         }
-                        scope.launch { remoteImages = fetchRemote(body) }
+                        showRemote = true
                     }
                 },
                 bodyError = bodyError,
                 images = inlineImages,
+                imageBytes = inlineBytes,
                 thread = thread,
                 onPick = { selected = it },
                 actions = actions,
@@ -3331,8 +3342,11 @@ internal fun Message(
     bodyError: String? = null,
     /** Decoded images the message carries, by blob id. */
     images: Map<String, ImageBitmap> = emptyMap(),
+    /** The same parts as they arrived, for the engine, which takes bytes rather than a bitmap. */
+    imageBytes: Map<String, ByteArray> = emptyMap(),
     /** Pictures fetched from the web once the reader said to, by the address they came from. */
-    remoteImages: Map<String, ImageBitmap> = emptyMap(),
+    /** Whether the reader has agreed to let this message fetch its pictures. */
+    showRemote: Boolean = false,
     onShowImages: (always: Boolean) -> Unit = {},
     /** What happened to an unsubscribe that was pressed, when one was. */
     unsubscribed: String? = null,
@@ -3371,9 +3385,31 @@ internal fun Message(
     // it is used. Part of the remember key: the same message on a different theme is a
     // different answer about which of its colours can be read.
     val bodyPaper = MaterialTheme.colorScheme.surface
-    val rendered = remember(body, linkColor, bodyPaper) {
+    /*
+     * The same join, but as bytes rather than a decoded picture, because the engine wants
+     * a `data:` URI where the block renderer wanted a bitmap. The bytes are already here:
+     * these are parts of the message, fetched over the account's own connection, so putting
+     * one in the page tells nobody anything.
+     */
+    val carriedData = remember(attachments, imageBytes) {
+        attachments.mapNotNull { part ->
+            val cid = part.cid?.trim()?.trim('<', '>')?.ifBlank { null } ?: return@mapNotNull null
+            imageBytes[part.blobId]?.let { cid to dataUri(part.type, it) }
+        }.toMap()
+    }
+    // What the window is, not what the operating system says: the theme picker can put a
+    // dark theme on a light desktop and the message has to match the window it is in.
+    val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    val page = remember(body, carriedData, showRemote, dark) {
+        body?.html?.let { emailDocument(it, carriedData, showRemote, dark) }
+    }
+    val engineDraws = page != null && webEngineWorks
+    val rendered = remember(body, linkColor, bodyPaper, engineDraws) {
         body?.let {
             when {
+                // Nothing to build: the engine is drawing this one. Still not null, because
+                // null here means the message has no body at all rather than no blocks.
+                engineDraws -> HtmlDoc(emptyList(), emptyList())
                 it.html != null -> htmlBlocks(it.html, linkColor, quoteColor, bodyPaper, onLink)
                 // Plain text has no structure to keep, so it is one block and the same
                 // drawing code handles both rather than there being two ways down.
@@ -3526,15 +3562,20 @@ internal fun Message(
                 return@Column
             }
 
+            // Hoisted, because the engine below swallows its own wheel events and has to
+            // hand them back to this: see WebBody's onScroll.
+            val bodyScroll = rememberScrollState()
+            val bodyScope = rememberCoroutineScope()
             Column(
-                Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                Modifier.fillMaxSize().verticalScroll(bodyScroll)
                     .padding(horizontal = 20.dp, vertical = 26.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                // Capped, because a paragraph set across a whole desktop window is a line
-                // length nobody can follow back to the start of.
+                // The whole window, not a column down the middle of it. A capped measure is
+                // easier to read a paragraph in, and it was capped at 660 for that reason,
+                // but it wastes most of a wide window and a designed message brings its own
+                // width anyway.
                 Paper(paper) {
-                Column(Modifier.widthIn(max = 660.dp).fillMaxWidth()) {
+                Column(Modifier.fillMaxWidth()) {
                     // The subject heads the conversation rather than the message: in a
                     // thread every message carries the same one with more Re: in front.
                     Text(summary.subject, style = MaterialTheme.typography.titleLarge)
@@ -3793,7 +3834,7 @@ internal fun Message(
                             }
                         }
                     }
-                    if (rendered.blockedImages > 0 && remoteImages.isEmpty()) {
+                    if ((page?.blocked ?: rendered.blockedImages) > 0 && !showRemote) {
                         Spacer(Modifier.height(16.dp))
                         Row(
                             Modifier.fillMaxWidth()
@@ -3803,8 +3844,8 @@ internal fun Message(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                if (rendered.blockedImages == 1) "1 picture is held back."
-                                else "${rendered.blockedImages} pictures are held back.",
+                                if ((page?.blocked ?: rendered.blockedImages) == 1) "1 picture is held back."
+                                else "${page?.blocked ?: rendered.blockedImages} pictures are held back.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.outline,
                                 modifier = Modifier.weight(1f),
@@ -3826,7 +3867,19 @@ internal fun Message(
                         }
                     }
                     Spacer(Modifier.height(20.dp))
-                    HtmlBody(rendered, carried, remoteImages)
+                    /*
+                     * The engine for HTML, the block renderer for everything else.
+                     *
+                     * Not a fallback: a plain text message has no layout to get right and
+                     * drawing it in Compose keeps it selectable, themed and part of the
+                     * same scroll as the rest of the pane, with no engine to start.
+                     */
+                    if (engineDraws) WebBody(
+                        page.document,
+                        onLink = onLink,
+                        onScroll = { dy -> bodyScope.launch { bodyScroll.scrollBy(dy) } },
+                    )
+                    else HtmlBody(rendered, carried, emptyMap())
                     }
 
                     // Only the ones the body did not already put on screen. A picture with

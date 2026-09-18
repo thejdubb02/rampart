@@ -47,11 +47,11 @@ Android hands every mail client a WebView. The JVM does not. The options:
 | JavaFX WebView (WebKit) | Smaller, ships with some JDKs, an older engine, and still a browser to keep patched. |
 | Sanitise, then render in Compose | No script engine in the process at all, so the entire class of HTML mail exploits disappears. Newsletters look wrong. |
 
-**Decided: the third.** Sanitise to a restricted subset and draw it ourselves. There
-is no script engine in the process, so the whole class of HTML mail exploit does not
-apply to us. The cost is that a marketing email loses its layout, which for a
-self-hoster's mail is a fair trade: the failure mode is an ugly newsletter, not a
-breach. Revisit only if it turns out to be unusable.
+**Decided: the third, and reversed on 2026-09-18. See below.** The original reasoning
+was that sanitising to a restricted subset and drawing it ourselves puts no script
+engine in the process, so the whole class of HTML mail exploit does not apply, and the
+cost is only that a marketing email loses its layout. That was a fair trade on paper.
+It did not survive contact with actual mail.
 
 The parser is jsoup, cleaned through a `Safelist` that drops every tag and attribute
 we did not name, restricts `a[href]` to ftp/http/https/mailto (which is what kills
@@ -66,7 +66,71 @@ sender, `cid:` images served from the local blob, every link click confirmed, an
 renderer treated as hostile input at all times.
 
 The per-sender allow list and `cid:` images are built. So is the block renderer
-below, which is what made a picture drawable at all.
+below, which is what made a picture drawable at all, and which is now the fallback
+rather than the answer.
+
+### Reversed: the engine, after all (2026-09-18)
+
+"Revisit only if it turns out to be unusable" was the escape clause, and it was
+reached. Every round of this went the same way: a screenshot of a real message beside
+webmail's version of it, one more CSS feature implemented, a better but still wrong
+result. Widths, then centring, then `display:none`, then buttons, then background
+colours. A designed email is nested tables carrying inline CSS, media queries,
+background images and fixed widths, and matching it is writing a browser. The renderer
+was always one property short of the next newsletter, and the list of properties does
+not end.
+
+Webmail does not have this problem because it hands the HTML to the browser it is
+already inside. Bulwark sanitises with DOMPurify and drops the result into a sandboxed
+`srcdoc` iframe under a strict content security policy. That is the whole trick.
+
+So Rampart does the same thing with the engine it has to bring itself: **JavaFX's
+WebKit**, in a `JFXPanel` inside the Compose window. Chromium through JCEF was the
+other candidate and is three times the download for accuracy no email needs. The `web`
+module is 31 MB on Windows and the rest are a few MB together, so the package goes from
+roughly 84 MB to roughly 120 MB.
+
+What did not change is where the security boundary is. **The clean still happens
+first, in jsoup, before the engine sees a byte**, and it is still the thing that has to
+be right. `EmailDocument.kt` is that step and `EmailDocumentTest.kt` is the check that
+has to bite: script, iframe, object, embed, form, input, base and svg dropped; every
+`on*` handler gone with them; `javascript:` unreachable; remote pictures replaced by a
+blank and counted; background pictures in attributes and in CSS neutralised the same
+way.
+
+Three things back it up rather than replace it:
+
+- A content security policy of `default-src 'none'` in the document itself. No script,
+  no frame, no font, no fetch, no form post, whatever the cleaner may have missed. With
+  pictures allowed it becomes `img-src data: http: https:` and nothing else moves.
+- The engine gets no navigation. A click on a link is caught in the page and handed
+  back to Rampart to open in the reader's own browser: this view has no address bar, no
+  back button and no profile, so a message that could navigate it is a message that
+  could show you a login page.
+- Nothing script-shaped is ever part of the message's own HTML. The two things the page
+  does, reporting its height and handing back link clicks and wheel turns, are injected
+  after it loads.
+
+`<style>` is now carried over, which the old safelist could not do: jsoup's cleaner
+keeps a `<style>` element and throws away everything inside it, because a safelist
+describes tags and attributes and a stylesheet is neither. It is copied across by hand
+with `@import`, `expression(`, `behavior:`, `-moz-binding`, `javascript:` and `</style`
+taken out. The message's own `<body>` styling is carried the same way and for the same
+reason: the cleaner builds its own document, so without this every message lost the
+sender's page background and font.
+
+Two things the engine does not get to decide. It is sized to its content and put in the
+pane's scroll rather than scrolling itself, so the header, the tags and the attachments
+scroll with the message; the page hands its wheel events back for that, because a real
+component swallows its own input and the pane would otherwise stop scrolling wherever
+the pointer happened to be. And in a dark window the page is inverted and its pictures
+inverted back, unless the sender wrote a `prefers-color-scheme: dark` rule themselves,
+in which case they meant it and it is left alone.
+
+The block renderer stays. Plain text still goes through it, because a written message
+has no layout to get right and drawing it in Compose keeps it selectable, themed and
+part of the same scroll with no engine to start. It is also what runs if the engine
+cannot start at all, which is asked once by starting one and seeing.
 
 ### The renderer returns blocks, not one string (2026-09-17)
 

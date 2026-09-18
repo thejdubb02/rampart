@@ -40,9 +40,11 @@ offline reading and search. Folder management with a real tree. The message-list
 right-click menus, hover actions, five sort orders, a mark-as-read delay, paging. A
 command palette. Recipient autocomplete from your own mail. Templates, read receipts and
 undo-send. Contacts from the server's own address book. Sender marks and contact photos.
-The message header with the routing, authentication and identifiers behind it. HTML
-tables drawn as layouts, with backgrounds, alignment and the sender's colours where they
-can be read, and a link the sender made into a button drawn as one.
+The message header with the routing, authentication and identifiers behind it. Reply-To
+answered rather than the From address, and a `+tag` address recognised as yours. A choice
+of where the sign-off sits. **And the message body drawn by a real engine**, which is the
+reversal recorded in `architecture.md` and the end of the run of hand-drawn HTML work
+listed in the paragraph this one replaced.
 
 **And a second backend.** IMAP and SMTP, with the server found from the email address
 alone, so Rampart is no longer a client for one server. Everything IMAP cannot do is
@@ -134,31 +136,27 @@ yet.
 - **Demo mode on fixture data.** The screenshot tests already render every screen from
   fixtures, which is the part that was actually useful.
 - **Anonymous telemetry.** No.
-- **An embedded browser engine for HTML mail.** Settled in `architecture.md` and not
-  reopened by this comparison. No script engine in the process is the single largest
-  security decision in this application, and a newsletter that looks plain is the price.
+- **Anything that needs its own login.** Tinyauth or the mailbox, nothing else.
 
 ---
 
 ## 4. Order of work
 
-Items 1 to 7 of the original order shipped between 2026-09-17 and 2026-09-18. What is
-left, in the order it will be missed:
+Items 1 to 7 of the original order shipped between 2026-09-17 and 2026-09-18, and
+identities and sending finished on 2026-09-18 with Reply-To, sub-addressing and the
+sign-off position. What is left, in the order it will be missed:
 
-1. **Identities and sending, finished** (2.9). Reply-To, overriding From, sub-addressing,
-   and where the signature sits relative to the quote. Small, and every one of them is
-   noticed daily by somebody sending from more than one address.
-2. **Tags, finished** (2.8). A colour you choose rather than one derived from the name,
+1. **Tags, finished** (2.8). A colour you choose rather than one derived from the name,
    nesting, and dragging a message onto a tag. Bulwark keeps its tag colours in per-user
    files on the server rather than in the mailbox, so matching it means reading those,
    and the result is the same colours in both clients.
-3. **Calendar invitations** (2.12). A `text/calendar` part drawn as an event with Accept,
+2. **Calendar invitations** (2.12). A `text/calendar` part drawn as an event with Accept,
    Tentative and Decline. Works against any server and against IMAP, and it is the part of
    a calendar that actually happens inside a mail client.
-4. **The mailbox dashboard.** Not a Bulwark feature at all, and the first place Rampart
+3. **The mailbox dashboard.** Not a Bulwark feature at all, and the first place Rampart
    goes past it. Every number comes out of the local store, so it needs no server, no
    setting and no model.
-5. **Encryption** (2.10). S/MIME and PGP. Last on purpose, and the one place where a
+4. **Encryption** (2.10). S/MIME and PGP. Last on purpose, and the one place where a
    half-built implementation is worse than none.
 
 The original note about IMAP sitting at 5 rather than 1 held: every feature above it was
