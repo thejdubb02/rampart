@@ -50,9 +50,10 @@ internal fun routesFor(email: String, lookup: (String) -> List<Srv> = ::srv): Li
     // almost always is, and costs one request that 404s when it is not.
     routes += Route.Jmap(domain)
 
-    // RFC 6186. Both are asked for because they are answered separately, and a domain that
-    // publishes where to read but not where to send is ordinary rather than broken.
-    val submission = lookup("_submission._tcp.$domain").firstOrNull()
+    // RFC 6186 for reading, and for sending the two labels that exist. Both are asked for
+    // separately from the reading one, because a domain that publishes where to read but not
+    // where to send is ordinary rather than broken.
+    val submission = submissionFor(domain, lookup)
     val imaps = lookup("_imaps._tcp.$domain")
     imaps.forEach {
         routes += Route.Imap(it.host, it.port, submission?.host ?: it.host, submission?.port ?: 587)
@@ -68,7 +69,11 @@ internal fun routesFor(email: String, lookup: (String) -> List<Srv> = ::srv): Li
             sendPort = submission?.port ?: 587,
         )
     }
-    routes += Route.Imap(domain, sendHost = submission?.host ?: domain)
+    routes += Route.Imap(
+        host = domain,
+        sendHost = submission?.host ?: domain,
+        sendPort = submission?.port ?: 587,
+    )
 
     return routes.distinct()
 }
@@ -118,3 +123,19 @@ internal fun parseSrv(record: String): Srv? {
     val port = parts[2].toIntOrNull() ?: return null
     return Srv(target, port, parts[0].toIntOrNull() ?: 0, parts[1].toIntOrNull() ?: 0)
 }
+
+/**
+ * Where to send, from the two labels a domain can use to say so.
+ *
+ * `_submissions` (RFC 8314) is implicit TLS on 465 and `_submission` (RFC 6186) is STARTTLS
+ * on 587. The first wins where a domain publishes both, because implicit TLS cannot be
+ * stripped on the way to the upgrade, and a server that offers both offers the same service
+ * either way.
+ *
+ * This is not a theoretical preference. Our own server has 465 open and 587 closed, so a
+ * client reading only the older label finds where to read, finds nothing about where to
+ * send, falls back to 587 and fails on a port nothing is listening on.
+ */
+internal fun submissionFor(domain: String, lookup: (String) -> List<Srv>): Srv? =
+    lookup("_submissions._tcp.$domain").firstOrNull()
+        ?: lookup("_submission._tcp.$domain").firstOrNull()

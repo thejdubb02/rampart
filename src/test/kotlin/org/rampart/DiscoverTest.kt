@@ -111,4 +111,45 @@ class DiscoverTest {
         )
         assertEquals(routes.size, routes.distinct().size)
     }
+
+    @Test
+    fun `implicit TLS submission wins over the STARTTLS label`() {
+        // Not a theoretical preference. Our own server has 465 open and 587 closed, so a
+        // client reading only the older label finds where to read, learns nothing about
+        // where to send and fails on a port nothing is listening on.
+        val routes = routesFor(
+            "someone@example.com",
+            resolver(
+                "_submissions._tcp.example.com" to listOf(Srv("out.example.com", 465, 0, 1)),
+                "_submission._tcp.example.com" to listOf(Srv("old.example.com", 587, 0, 1)),
+            ),
+        )
+        val imap = routes.filterIsInstance<Route.Imap>().first()
+        assertEquals("out.example.com", imap.sendHost)
+        assertEquals(465, imap.sendPort)
+    }
+
+    @Test
+    fun `the older submission label is still read when it is the only one`() {
+        val routes = routesFor(
+            "someone@example.com",
+            resolver("_submission._tcp.example.com" to listOf(Srv("old.example.com", 587, 0, 1))),
+        )
+        val imap = routes.filterIsInstance<Route.Imap>().first()
+        assertEquals("old.example.com", imap.sendHost)
+        assertEquals(587, imap.sendPort)
+    }
+
+    @Test
+    fun `every guessed route carries the published send server, not just the first`() {
+        // The last fallback dropped the port and sent to 587 on a server that publishes 465.
+        val routes = routesFor(
+            "someone@example.com",
+            resolver("_submissions._tcp.example.com" to listOf(Srv("out.example.com", 465, 0, 1))),
+        )
+        routes.filterIsInstance<Route.Imap>().forEach {
+            assertEquals(465, it.sendPort, "sendPort on ${it.host}")
+            assertEquals("out.example.com", it.sendHost, "sendHost on ${it.host}")
+        }
+    }
 }
