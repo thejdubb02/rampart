@@ -277,7 +277,20 @@ internal class Imap private constructor(
         }
     }
 
-    override fun thread(threadId: String): List<Summary> = throw Unsupported(Lacks.SERVER_THREADS)
+    /**
+     * The one message, because on IMAP a message is its own conversation.
+     *
+     * [SERVER_THREADS][Lacks.SERVER_THREADS] is the honest reason and refusing outright is
+     * the wrong way to give it: the reader calls this every time a message is opened, so a
+     * refusal here is not a missing feature, it is a mail client that cannot open mail.
+     * One message is what a server with no threading actually knows, and walking References
+     * is the thing that will improve it.
+     */
+    override fun thread(threadId: String): List<Summary> =
+        useFolder(folderOf(threadId), Folder.READ_ONLY) { folder ->
+            val message = folder.getMessageByUID(uidOf(threadId)) as? MimeMessage
+            listOfNotNull(message?.let { summaryOf(it, folder) })
+        }
 
     // ---- folders --------------------------------------------------------------------
 
@@ -463,6 +476,9 @@ internal class Imap private constructor(
             // The UID, not the sequence number. A sequence number is only meaningful while
             // the folder is open and shifts under you the moment anything is deleted.
             id = runCatching { imapId(folder.getUID(message), folder.fullName) }.getOrDefault(""),
+            // Its own id. IMAP has no thread id to give, and the reader asks for the thread
+            // of every message it opens, so this has to point back at something real.
+            threadId = runCatching { imapId(folder.getUID(message), folder.fullName) }.getOrDefault(""),
             from = sender?.personal?.takeIf { it.isNotBlank() } ?: sender?.address.orEmpty(),
             fromEmail = sender?.address.orEmpty(),
             subject = runCatching { message.subject }.getOrNull().orEmpty(),
