@@ -1189,6 +1189,25 @@ internal class Jmap private constructor(
         })
     }
 
+    override fun withKeyword(keyword: String, limit: Int): List<Summary> {
+        val responses = call(
+            invoke("Email/query", "q") {
+                putJsonObject("filter") { put("hasKeyword", keyword) }
+                putJsonArray("sort") {
+                    add(buildJsonObject { put("property", "receivedAt"); put("isAscending", false) })
+                }
+                put("limit", limit)
+            },
+            invoke("Email/get", "g") {
+                putJsonObject("#ids") { put("resultOf", "q"); put("name", "Email/query"); put("path", "/ids") }
+                putJsonArray("properties") {
+                    emailGetProperties.forEach { add(it) }
+                }
+            },
+        )
+        return responses[1].list().map { jsonToSummary(it.jsonObject) }
+    }
+
     override fun search(text: String, mailboxId: String?, limit: Int): List<Summary> {
         val responses = call(
             invoke("Email/query", "q") {

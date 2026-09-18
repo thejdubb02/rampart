@@ -214,6 +214,45 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         }
     }
 
+    /**
+     * Every tag anywhere in this account's local copy.
+     *
+     * The local store rather than the server, because neither protocol will answer it:
+     * JMAP has no method that lists the keywords in use and IMAP only reports the flags of
+     * a folder you have already opened. What is here is what has been read, which is what
+     * a person has actually seen and tagged.
+     */
+    fun keywords(): Set<String> = connection.prepareStatement(
+        "SELECT DISTINCT keywords FROM message WHERE keywords <> ''",
+    ).use { s ->
+        s.executeQuery().use { rows ->
+            val found = sortedSetOf<String>(String.CASE_INSENSITIVE_ORDER)
+            while (rows.next()) {
+                rows.getString(1).split(' ').filterTo(found) { it.isNotBlank() }
+            }
+            found
+        }
+    }
+
+    /**
+     * The local copy of every message carrying [keyword], newest first.
+     *
+     * Answered from here when the server cannot be reached, the same way search is. The
+     * keyword is padded on both sides before matching so `work` does not also find
+     * `workshop`.
+     */
+    fun withKeyword(keyword: String, limit: Int = 200): List<Summary> =
+        connection.prepareStatement(
+            "SELECT * FROM message WHERE ' ' || keywords || ' ' LIKE ? " +
+                "ORDER BY receivedAt DESC LIMIT ?",
+        ).use { s ->
+            s.setString(1, "% " + keyword + " %")
+            s.setInt(2, limit)
+            s.executeQuery().use { rows ->
+                buildList { while (rows.next()) add(summaryOf(rows)) }
+            }
+        }
+
     fun putBody(id: String, body: Body) {
         connection.prepareStatement(
             "INSERT INTO body (id, html, text) VALUES (?,?,?) " +

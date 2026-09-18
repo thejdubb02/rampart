@@ -108,6 +108,16 @@ internal fun Avatar(
  */
 internal val LocalSenderPhotos = staticCompositionLocalOf { emptyMap<String, ImageBitmap>() }
 
+/**
+ * The colour chosen for each tag, by lowercased keyword.
+ *
+ * A composition local for the same reason the photos are one: tags are drawn on a list
+ * row, in the reader and in the sidebar, and threading a colour map through every one of
+ * those is a parameter on a dozen functions that do not otherwise care. Empty is the
+ * normal case and means every tag keeps the colour derived from its name.
+ */
+internal val LocalTagColours = staticCompositionLocalOf { emptyMap<String, Long>() }
+
 /** The picture for [email], or null. Case is not part of an address. */
 @Composable
 internal fun photoFor(email: String): ImageBitmap? =

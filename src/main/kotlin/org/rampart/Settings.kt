@@ -108,6 +108,27 @@ object Settings {
     fun setSignatureAboveQuote(value: Boolean) =
         write { put("signatureAboveQuote", JsonPrimitive(value)) }
 
+    /**
+     * The colour chosen for each tag, by lowercased keyword.
+     *
+     * Kept here rather than on the server because there is nowhere on the server to keep
+     * it: webmail's colours are in per-user encrypted files only it can open, and the
+     * mailbox itself has no place for a client's furniture. A tag with nothing stored uses
+     * the colour derived from its name, which is what everyone starts with.
+     */
+    fun tagColours(): Map<String, Long> =
+        (read()["tagColours"] as? JsonObject)?.mapNotNull { (key, value) ->
+            value.jsonPrimitive.longOrNull?.let { key to it }
+        }?.toMap() ?: emptyMap()
+
+    /** [colour] null puts a tag back to the colour derived from its name. */
+    fun setTagColour(keyword: String, colour: Long?) = write {
+        val current = (this["tagColours"] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
+        val key = keyword.lowercase()
+        if (colour == null) current.remove(key) else current[key] = JsonPrimitive(colour)
+        put("tagColours", JsonObject(current))
+    }
+
     /** Which icon pack, kept apart from the theme so the two can be chosen separately. */
     fun iconPack(): String = read()["iconPack"]?.jsonPrimitive?.contentOrNull.orEmpty()
 

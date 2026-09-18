@@ -78,6 +78,12 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -640,6 +646,28 @@ private fun Reader(
     var update by remember { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf("") }
     var showingResults by remember { mutableStateOf(false) }
+    /**
+     * The tag being looked at, and whose account, or null for an ordinary folder view.
+     *
+     * A third kind of list beside a folder and a search result. It is not a folder: the
+     * messages in it are wherever they were filed, which is the point of a tag.
+     */
+    var viewingTag by remember { mutableStateOf<Pair<String, String>?>(null) }
+    /** Every tag each account has, read out of its local copy. */
+    var tagsSeen by remember { mutableStateOf<Map<String, List<String>>>(emptyMap()) }
+    var tagColours by remember { mutableStateOf(Settings.tagColours()) }
+    /** The message being dragged onto a tag, while it is being dragged. */
+    var dragging by remember { mutableStateOf<Summary?>(null) }
+    /** Where the pointer is during that drag, in window coordinates. */
+    var dragAt by remember { mutableStateOf<Offset?>(null) }
+    /**
+     * Where each tag row is on screen.
+     *
+     * A plain map rather than state: it is written during layout and only read when a drag
+     * ends, so making it state would recompose the whole window every time the sidebar
+     * moved a pixel.
+     */
+    val tagBounds = remember { mutableMapOf<Pair<String, String>, Rect>() }
     // Any text field, not just search: a bare letter is a shortcut only when nothing
     // is being typed into. Tagging a message shares this for the same reason.
     var typing by remember { mutableStateOf(false) }
@@ -872,7 +900,7 @@ private fun Reader(
          * spinner over mail we already hold is the thing a local store exists to stop. A
          * folder read once opens instantly and corrects itself a moment later.
          */
-        val plain = key != ALL_ACCOUNTS && !showingResults
+        val plain = key != ALL_ACCOUNTS && !showingResults && viewingTag == null
         val cached = if (!plain) emptyList()
         else io { session(key).store?.messages(mailbox.id, unreadOnly = unreadOnly) }.orEmpty()
         if (cached.isNotEmpty()) emails = cached
@@ -916,13 +944,18 @@ private fun Reader(
             // rather than out here: the others still show.
             withContext(Dispatchers.IO) { everyInbox() }
         } else {
+            val tag = viewingTag?.second
             io {
-                if (showingResults && query.isNotBlank()) session(key).jmap.search(query, mailbox.id)
-                else session(key).jmap.emails(mailbox.id, unreadOnly = unreadOnly)
+                when {
+                    tag != null -> session(key).jmap.withKeyword(tag)
+                    showingResults && query.isNotBlank() -> session(key).jmap.search(query, mailbox.id)
+                    else -> session(key).jmap.emails(mailbox.id, unreadOnly = unreadOnly)
+                }
             }
                 // The server is still the authority on search, because it can see mail we
                 // have never fetched. The local copy is the answer when it cannot be
                 // reached, which is the difference between "no results" and "no network".
+                ?: tag?.let { io { session(key).store?.withKeyword(it) } }
                 ?: io { session(key).store?.search(query) }.takeIf { showingResults && query.isNotBlank() }
                 ?: emptyList()
         }
@@ -1084,12 +1117,57 @@ private fun Reader(
         vacation = withContext(Dispatchers.IO) { runCatching { session(key).jmap.vacation() }.getOrNull() }
     }
 
+    /*
+     * The account's tags, re-read whenever its local copy might have gained one.
+     *
+     * Keyed on the list rather than on a timer, because the only way a tag appears is a
+     * message carrying it arriving in the copy, and that is exactly when this changes.
+     */
+    LaunchedEffect(emails, sessions) {
+        val onScreen = emails.groupBy { accountOf(it) }.mapValues { (_, list) -> list.flatMap { it.keywords } }
+        tagsSeen = withContext(Dispatchers.IO) {
+            sessions.associate { open ->
+                // The list that is open as well as the copy on disk, so tags exist on the
+                // first run and on a machine where there is nowhere safe to keep a store.
+                val kept = runCatching { open.store?.keywords() }.getOrNull().orEmpty()
+                open.key to (kept + onScreen[open.key].orEmpty()).distinct()
+            }
+        }
+    }
+
+    /** Puts a tag on a message, wherever the message is, and remembers it locally. */
+    fun tagMessage(message: Summary, keyword: String) {
+        val key = accountOf(message) ?: return
+        scope.launch {
+            if (keyword in message.keywords) return@launch
+            val keywords = message.keywords + keyword
+            emails = emails.map { if (it.id == message.id) it.copy(keywords = keywords) else it }
+            if (selected?.id == message.id) selected = selected?.copy(keywords = keywords)
+            if (io { session(key).jmap.setKeyword(listOf(message.id), keyword, true) } == null) {
+                emails = emails.map { if (it.id == message.id) it.copy(keywords = message.keywords) else it }
+                if (selected?.id == message.id) selected = selected?.copy(keywords = message.keywords)
+            }
+        }
+    }
+
+    /** Opens a tag: the same list pane, showing everything carrying that keyword. */
+    fun openTag(key: String, keyword: String) {
+        selected = null
+        body = null
+        query = ""
+        showingResults = false
+        viewingTag = key to keyword
+        // here has not changed, so nothing else will start the load.
+        scope.launch { reload() }
+    }
+
     LaunchedEffect(here) {
         here ?: return@LaunchedEffect
         selected = null
         body = null
         query = ""
         showingResults = false
+        viewingTag = null
         reload()
     }
     LaunchedEffect(selected) {
@@ -1810,7 +1888,10 @@ private fun Reader(
                 }
             }
         }
-        CompositionLocalProvider(LocalSenderPhotos provides senderPhotos) {
+        CompositionLocalProvider(
+            LocalSenderPhotos provides senderPhotos,
+            LocalTagColours provides tagColours,
+        ) {
         Row(Modifier.fillMaxSize()) {
             Sidebar(
                 search = {
@@ -1833,6 +1914,21 @@ private fun Reader(
                     AccountMailboxes(it.key, it.account.name, it.account.email, mailboxes[it.key].orEmpty())
                 },
                 here = here,
+                tags = remember(tagsSeen, tagColours) {
+                    tagsSeen.mapValues { (_, keywords) -> tagRows(keywords, tagColours) }
+                },
+                hereTag = viewingTag,
+                onSelectTag = { key, keyword ->
+                    settingsOpen = false
+                    contactsOpen = false
+                    openTag(key, keyword)
+                },
+                onTagColour = { keyword, colour ->
+                    Settings.setTagColour(keyword, colour)
+                    tagColours = Settings.tagColours()
+                },
+                dragAt = dragAt,
+                onTagBounds = { key, keyword, bounds -> tagBounds[key to keyword] = bounds },
                 onSettings = { settingsOpen = !settingsOpen; if (settingsOpen) contactsOpen = false },
                 inSettings = settingsOpen,
                 onContacts = { contactsOpen = !contactsOpen; if (contactsOpen) settingsOpen = false },
@@ -2007,7 +2103,31 @@ private fun Reader(
                 emails = emails,
                 selected = selected,
                 loading = loading,
-                title = here?.second?.name.orEmpty(),
+                title = viewingTag?.second?.let { tagsOf(setOf(it)).firstOrNull()?.label ?: it }
+                    ?: here?.second?.name.orEmpty(),
+                /*
+                 * Dragging a message onto a tag in the sidebar.
+                 *
+                 * The drop is worked out here from where the pointer was let go, not by the
+                 * tag row noticing a pointer over itself, because the row being dragged
+                 * consumes pointer movement for the length of the drag and nothing
+                 * underneath ever hears about it.
+                 */
+                onDrag = { message, at ->
+                    if (at != null) {
+                        dragging = message
+                        dragAt = at
+                    } else {
+                        val where = dragAt
+                        val hit = where?.let { point ->
+                            tagBounds.entries.firstOrNull { it.value.contains(point) }?.key
+                        }
+                        val dropped = dragging
+                        if (hit != null && dropped != null) tagMessage(dropped, hit.second)
+                        dragging = null
+                        dragAt = null
+                    }
+                },
                 // Only in the merged list. Everywhere else the folder says which account it
                 // is, and repeating it on every row would be noise on most screens.
                 accountLabels = if (unified()) {
@@ -2367,6 +2487,17 @@ internal fun Sidebar(
     /** What a right-click on a folder can ask for. Null hides the menu entirely. */
     folderMenu: ((String, Mailbox, FolderJob) -> Unit)? = null,
     onSelect: (String, Mailbox) -> Unit,
+    /** Every tag each account has, by account key. */
+    tags: Map<String, List<TagRow>> = emptyMap(),
+    /** The tag being looked at, and whose account. */
+    hereTag: Pair<String, String>? = null,
+    onSelectTag: (String, String) -> Unit = { _, _ -> },
+    /** A colour chosen for a tag, or null to put it back to the one from its name. */
+    onTagColour: (String, Long?) -> Unit = { _, _ -> },
+    /** Where the pointer is while a message is being dragged, in window coordinates. */
+    dragAt: Offset? = null,
+    /** Where each tag row ended up, so a drag that ends over one can find it. */
+    onTagBounds: (String, String, Rect) -> Unit = { _, _, _ -> },
     /** The search field, drawn at the top. Absent while the sidebar is narrowed. */
     search: @Composable () -> Unit = {},
 ) {
@@ -2454,10 +2585,36 @@ internal fun Sidebar(
                         mailbox = row.mailbox,
                         depth = row.depth,
                         collapsed = collapsed,
-                        selected = here?.first == account.key && here.second.id == row.mailbox.id,
+                        // A tag view is not in any folder, so nothing in the folder list is
+                        // the thing being looked at while one is open.
+                        selected = hereTag == null && here?.first == account.key &&
+                            here.second.id == row.mailbox.id,
                         onClick = { onSelect(account.key, row.mailbox) },
                         onManage = folderMenu?.let { manage -> { what -> manage(account.key, row.mailbox, what) } },
                     )
+                }
+                // Narrowed there is no room for a word, and a column of coloured dots says
+                // nothing, so the tags are simply not there until the sidebar is open.
+                val rows = if (collapsed) emptyList() else tags[account.key].orEmpty()
+                if (rows.isNotEmpty()) {
+                    item(key = "${account.key}/tags-heading") {
+                        Text(
+                            "TAGS",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.fillMaxWidth().padding(start = 10.dp, top = 12.dp, bottom = 4.dp),
+                        )
+                    }
+                    items(rows, key = { "${account.key}/tag/${it.keyword}" }) { row ->
+                        TagLine(
+                            row = row,
+                            selected = hereTag?.first == account.key && hereTag.second == row.keyword,
+                            onClick = { if (row.real) onSelectTag(account.key, row.keyword) },
+                            onColour = { onTagColour(row.keyword, it) },
+                            dragAt = dragAt,
+                            onMeasured = { onTagBounds(account.key, row.keyword, it) },
+                        )
+                    }
                 }
             }
         }
@@ -2644,6 +2801,96 @@ private fun FolderDialog(
         },
         dismissButton = { TextButton(onClick = onClose, enabled = !busy) { Text("Cancel") } },
     )
+}
+
+/**
+ * One tag in the sidebar.
+ *
+ * A dot in the tag's colour and its own level of the name, indented by how deep it is.
+ * Only the last level is written: "Clients / Acme / Renewals" spelled out in full on every
+ * line is three quarters repetition in a 232dp column, and the indent already says whose
+ * it is.
+ *
+ * A level nobody has tagged anything with is a heading rather than a row: it can be dropped
+ * onto, because that is a reasonable thing to mean, but clicking it would open a list that
+ * is empty by definition.
+ */
+@Composable
+@OptIn(ExperimentalComposeUiApi::class)
+private fun TagLine(
+    row: TagRow,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onColour: (Long?) -> Unit,
+    /**
+     * Where the pointer is while a message is being dragged, in window coordinates, or
+     * null when nothing is being dragged.
+     *
+     * A position rather than the usual enter and leave events, because the row being
+     * dragged consumes pointer movement for the length of the drag and nothing underneath
+     * hears about it. [onMeasured] hands this row's rectangle up so the drop can be worked
+     * out where the drag actually ends.
+     */
+    dragAt: Offset? = null,
+    onMeasured: (Rect) -> Unit = {},
+) {
+    var menu by remember { mutableStateOf(false) }
+    var bounds by remember { mutableStateOf(Rect.Zero) }
+    val over = dragAt != null && bounds.contains(dragAt)
+    val background = when {
+        over -> MaterialTheme.colorScheme.secondaryContainer
+        selected -> MaterialTheme.colorScheme.primaryContainer
+        else -> Color.Transparent
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth().height(30.dp)
+            .onGloballyPositioned { bounds = it.boundsInWindow(); onMeasured(bounds) }
+            .clip(MaterialTheme.shapes.small)
+            .background(background)
+            .clickable(onClick = onClick)
+            .onPointerEvent(PointerEventType.Press) { event ->
+                if (event.button == PointerButton.Secondary) menu = true
+            }
+            .padding(start = 10.dp + (row.depth * 12).dp, end = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            Text(
+                "Colour",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.padding(start = 12.dp, top = 6.dp, bottom = 4.dp),
+            )
+            // Six to a row, so twelve colours are two rows rather than a menu twelve items
+            // long that runs off the bottom of a short window.
+            TAG_COLOURS.chunked(6).forEach { chunk ->
+                Row(Modifier.padding(horizontal = 10.dp, vertical = 3.dp)) {
+                    chunk.forEach { colour ->
+                        Box(
+                            Modifier.padding(3.dp).size(20.dp)
+                                .background(Color(colour), CircleShape)
+                                .clickable { menu = false; onColour(colour) },
+                        )
+                    }
+                }
+            }
+            HorizontalDivider()
+            DropdownMenuItem(
+                text = { Text("Back to the colour from its name") },
+                onClick = { menu = false; onColour(null) },
+            )
+        }
+        Box(Modifier.size(10.dp).background(Color(row.color), CircleShape))
+        Spacer(Modifier.width(10.dp))
+        Text(
+            row.label.substringAfterLast('/'),
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (row.real) MaterialTheme.colorScheme.onSurface
+            else MaterialTheme.colorScheme.outline,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
 }
 
 @Composable
@@ -2834,6 +3081,8 @@ internal fun MessageList(
     onOrder: (Order) -> Unit = {},
     /** What a right-click or a hover button on a row can do. */
     rowActions: RowActions = RowActions(),
+    /** Dragging a row onto a tag. See [MessageRow]. */
+    onDrag: ((Summary, Offset?) -> Unit)? = null,
     /** Showing only what has not been read. Asked of the server, not filtered here. */
     unreadOnly: Boolean = false,
     onUnreadOnly: (Boolean) -> Unit = {},
@@ -2977,6 +3226,7 @@ internal fun MessageList(
                             accountLabel = accountLabels[message.account],
                             actions = rowActions,
                             showHover = showHover,
+                            onDrag = onDrag,
                             onSelect = onSelect,
                         )
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -3005,11 +3255,21 @@ private fun MessageRow(
     accountLabel: String? = null,
     actions: RowActions = RowActions(),
     showHover: Boolean = false,
+    /**
+     * Dragging the row onto a tag. Called with where the pointer is, in window
+     * coordinates, and with null when the drag ends.
+     *
+     * Null means the list does not support dragging, which is every list but the mail one.
+     */
+    onDrag: ((Summary, Offset?) -> Unit)? = null,
     onSelect: (Summary, ctrl: Boolean, shift: Boolean) -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
     var pointerOver by remember { mutableStateOf(false) }
     val hovered = pointerOver || showHover
+    // Where this row sits, so the pointer offsets a drag reports (which are relative to
+    // the row) can be turned into a position in the window.
+    var origin by remember { mutableStateOf(Offset.Zero) }
 
     /*
      * Unread rows carry a tint as well as the dot and the weight.
@@ -3030,6 +3290,17 @@ private fun MessageRow(
     Row(
         Modifier.fillMaxWidth()
             .background(background)
+            .onGloballyPositioned { origin = it.boundsInWindow().topLeft }
+            .then(
+                if (onDrag == null) Modifier
+                else Modifier.pointerInput(message.id) {
+                    detectDragGestures(
+                        onDragStart = { at -> onDrag(message, origin + at) },
+                        onDragEnd = { onDrag(message, null) },
+                        onDragCancel = { onDrag(message, null) },
+                    ) { change, _ -> onDrag(message, origin + change.position) }
+                },
+            )
             // The modifier keys have to be read from the press itself. clickable() does not
             // carry them, and holding control to add a second message to a selection is how
             // every desktop list has worked for thirty years.
@@ -3174,7 +3445,7 @@ private fun MessageRow(
                 }
                 // Dots rather than chips: a label is worth seeing at a glance, and four of
                 // them spelt out would push the subject off the row it belongs to.
-                tagsOf(message.keywords).take(4).forEach { tag ->
+                tagsOf(message.keywords, LocalTagColours.current).take(4).forEach { tag ->
                     Spacer(Modifier.width(4.dp))
                     Box(Modifier.size(7.dp).clip(CircleShape).background(Color(tag.color)))
                 }
@@ -3718,7 +3989,8 @@ internal fun Message(
                         Spacer(Modifier.height(10.dp))
                         MessageDetails(summary, body, proof.spamScore)
                     }
-                    val tags = remember(summary.keywords) { tagsOf(summary.keywords) }
+                    val colours = LocalTagColours.current
+                    val tags = remember(summary.keywords, colours) { tagsOf(summary.keywords, colours) }
                     var adding by remember(summary.id) { mutableStateOf<String?>(null) }
                     Spacer(Modifier.height(12.dp))
                     Row(

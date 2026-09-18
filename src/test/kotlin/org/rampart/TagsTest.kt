@@ -156,6 +156,62 @@ class TagsTest {
         validKeyword("\n\r\t")
     }
 
+    @Test
+    fun `a slash makes a tag live inside another one`() {
+        val rows = tagRows(listOf("clients/acme", "clients/borde", "invoices"))
+
+        assertEquals(
+            listOf("clients" to 0, "clients/acme" to 1, "clients/borde" to 1, "invoices" to 0),
+            rows.map { it.keyword to it.depth },
+        )
+        assertEquals(listOf("Clients", "Clients/Acme", "Clients/Borde", "Invoices"), rows.map { it.label })
+    }
+
+    @Test
+    fun `a level nobody tagged anything with is a heading, not a tag`() {
+        // Tagging one message clients/acme without ever making clients is the normal way
+        // this happens, and a tree that skipped the middle would draw Acme at the top.
+        val rows = tagRows(listOf("clients/acme"))
+        assertEquals(false, rows.first { it.keyword == "clients" }.real)
+        assertTrue(rows.first { it.keyword == "clients/acme" }.real)
+    }
+
+    @Test
+    fun `one branch, however the other client spelled it`() {
+        val rows = tagRows(listOf("Clients/Acme", "clients/borde"))
+        assertEquals(1, rows.count { it.depth == 0 }, "two spellings of one parent made two branches")
+    }
+
+    @Test
+    fun `a chosen colour wins, and putting it back is putting it back`() {
+        val derived = colorOf("invoices")
+        assertEquals(0xFF2F5D96L, colorOf("invoices", mapOf("invoices" to 0xFF2F5D96L)))
+        // Stored lowercased, so it applies whichever spelling a message carries.
+        assertEquals(0xFF2F5D96L, colorOf("Invoices", mapOf("invoices" to 0xFF2F5D96L)))
+        assertEquals(derived, colorOf("invoices", mapOf("other" to 0xFF2F5D96L)))
+        assertEquals(derived, colorOf("invoices"))
+    }
+
+    @Test
+    fun `a chosen colour reaches the chips too`() {
+        val tags = tagsOf(setOf("invoices"), mapOf("invoices" to 0xFF7A2E2EL))
+        assertEquals(0xFF7A2E2EL, tags.single().color)
+    }
+
+    @Test
+    fun `a path with a hole in it is not a keyword`() {
+        assertNull(validKeyword("/acme"))
+        assertNull(validKeyword("clients/"))
+        assertNull(validKeyword("clients//acme"))
+        assertEquals("clients/acme", validKeyword("clients/acme"))
+    }
+
+    @Test
+    fun `protocol flags never become a branch`() {
+        val rows = tagRows(listOf("\$seen", "\$flagged", "invoices"))
+        assertEquals(listOf("invoices"), rows.map { it.keyword })
+    }
+
     private fun contrastWithWhite(argb: Long): Double {
         fun channel(value: Int): Double {
             val c = value / 255.0

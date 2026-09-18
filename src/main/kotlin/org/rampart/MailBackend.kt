@@ -53,6 +53,14 @@ internal interface MailBackend {
 
     fun search(text: String, mailboxId: String? = null, limit: Int = 100): List<Summary>
 
+    /**
+     * Every message carrying [keyword], newest first, across the whole account.
+     *
+     * A tag is not a folder and deliberately not asked for one folder at a time: the point
+     * of tagging an invoice is to find it again without remembering where it was filed.
+     */
+    fun withKeyword(keyword: String, limit: Int = 200): List<Summary>
+
     // ---- changing what is there ----------------------------------------------------
 
     fun markSeen(id: String)

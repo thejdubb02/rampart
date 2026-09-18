@@ -267,6 +267,33 @@ internal class Imap private constructor(
 
     override fun markSeen(id: String) = setKeyword(listOf(id), "\$seen", true)
 
+    /**
+     * Every message carrying [keyword], by asking each folder in turn.
+     *
+     * IMAP has no way to ask the account a question, so a tag view means walking the
+     * folders. That is slower than the one JMAP call it replaces and it is the only
+     * honest answer: the point of a tag is to find something without remembering where it
+     * was filed, so searching one folder would defeat it.
+     *
+     * A folder that refuses to open is skipped rather than failing the lot. A shared
+     * mailbox somebody lost access to should not be able to hide every other result.
+     */
+    override fun withKeyword(keyword: String, limit: Int): List<Summary> {
+        val found = ArrayList<Summary>()
+        val term = FlagTerm(flagsFor(keyword), true)
+        for (box in mailboxes()) {
+            if (found.size >= limit) break
+            runCatching {
+                useFolder(box.id, Folder.READ_ONLY) { open ->
+                    open.search(term).filterIsInstance<MimeMessage>().asReversed()
+                        .take(limit - found.size)
+                        .forEach { found.add(summaryOf(it, open)) }
+                }
+            }
+        }
+        return found.sortedByDescending { it.receivedAt }
+    }
+
     override fun search(text: String, mailboxId: String?, limit: Int): List<Summary> {
         // One folder, because IMAP has no way to ask the question of the account. The
         // caller is told so rather than being given the inbox and left to assume it looked

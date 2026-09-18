@@ -208,6 +208,13 @@ class Screenshots {
                     onAddAccount = {},
                     onWrite = {},
                     onSelect = { _, _ -> },
+                    tags = mapOf(
+                        ACCOUNTS[0].key to tagRows(
+                            listOf("invoices", "clients/acme", "clients/borde", "urgent"),
+                            mapOf("urgent" to 0xFFB23A48L),
+                        ),
+                    ),
+                    hereTag = null,
                 )
                 VerticalDivider()
                 MessageList(

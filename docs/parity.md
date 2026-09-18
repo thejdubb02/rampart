@@ -83,15 +83,26 @@ that lives in `roadmap.md` under the matching section number.
 
 ### 2.8 Tags
 
-**Have the substance, need the trimmings.** Tags work and share keywords with Bulwark.
-Missing: choosing a colour rather than deriving one, nesting, drag a message onto a tag,
-and per-tag visibility rules.
+**Have.** Tags are JMAP keywords, so they are the same tags webmail shows. They nest with
+a slash and the sidebar draws the tree, inventing a level wherever one is missing, because
+tagging a message `Clients/Acme` without ever making `Clients` is the normal way a branch
+starts. Clicking one lists everything carrying it, across every folder, which is the point
+of a tag rather than a folder. A message can be dragged onto one.
+
+**The colour is chosen here and kept here, and that is the one place this is not parity.**
+Webmail keeps its tag colours in per-user encrypted files on the server that only it can
+open, so there is nothing for a second client to read, and inventing a place in the mailbox
+to write them would put Rampart's furniture in somebody's mail. The colour derived from
+the tag's name is still the default, and it is stable, so two clients agree until somebody
+changes one.
+
+Still missing: per-tag visibility rules.
 
 ### 2.9 Identities and sending
 
-**Partly have.** Multiple identities with their own signatures work. Missing: Reply-To,
-overriding the From header, sub-addressing (`user+tag@domain`), and the choice of
-signature above or below the quoted text.
+**Have.** Multiple identities with their own signatures, the From header chosen on the
+composer, Reply-To answered rather than the From address, `user+tag@domain` recognised as
+yours, and the sign-off above or below the quoted text.
 
 ### 2.10 Encryption
 
@@ -142,21 +153,17 @@ yet.
 
 ## 4. Order of work
 
-Items 1 to 7 of the original order shipped between 2026-09-17 and 2026-09-18, and
-identities and sending finished on 2026-09-18 with Reply-To, sub-addressing and the
-sign-off position. What is left, in the order it will be missed:
+Items 1 to 7 of the original order shipped between 2026-09-17 and 2026-09-18. On
+2026-09-18 the message body moved to a real engine, identities and sending finished, and
+tags finished. What is left, in the order it will be missed:
 
-1. **Tags, finished** (2.8). A colour you choose rather than one derived from the name,
-   nesting, and dragging a message onto a tag. Bulwark keeps its tag colours in per-user
-   files on the server rather than in the mailbox, so matching it means reading those,
-   and the result is the same colours in both clients.
-2. **Calendar invitations** (2.12). A `text/calendar` part drawn as an event with Accept,
+1. **Calendar invitations** (2.12). A `text/calendar` part drawn as an event with Accept,
    Tentative and Decline. Works against any server and against IMAP, and it is the part of
    a calendar that actually happens inside a mail client.
-3. **The mailbox dashboard.** Not a Bulwark feature at all, and the first place Rampart
+2. **The mailbox dashboard.** Not a Bulwark feature at all, and the first place Rampart
    goes past it. Every number comes out of the local store, so it needs no server, no
    setting and no model.
-4. **Encryption** (2.10). S/MIME and PGP. Last on purpose, and the one place where a
+3. **Encryption** (2.10). S/MIME and PGP. Last on purpose, and the one place where a
    half-built implementation is worse than none.
 
 The original note about IMAP sitting at 5 rather than 1 held: every feature above it was
