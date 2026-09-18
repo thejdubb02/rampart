@@ -57,6 +57,7 @@ import kotlinx.coroutines.launch
 import java.awt.FileDialog
 import java.awt.Frame
 import java.nio.file.Path
+import kotlinx.coroutines.CancellationException
 
 /**
  * A message on its way out, in the terms the writer used: addresses as they typed them,
@@ -248,7 +249,7 @@ internal fun Composer(
         } catch (e: Exception) {
             // Said plainly and left on screen. A draft that silently failed to save is the
             // one thing worse than no autosave at all.
-            "Not saved: ${e.message ?: "the server refused it"}"
+            "Not saved: ${whyFailed(e).ifBlank { "the server refused it" }}"
         }
     }
 
@@ -332,7 +333,7 @@ internal fun Composer(
                                         try {
                                             draft = draft.copy(attachments = draft.attachments + onAttach(chosen))
                                         } catch (e: Exception) {
-                                            attachError = e.message ?: "That file could not be attached."
+                                            attachError = whyFailed(e).ifBlank { "That file could not be attached." }
                                         } finally {
                                             attaching = false
                                         }
@@ -552,7 +553,7 @@ internal fun Composer(
                                                 apply(insertAt(body, "![${put.name}](cid:${inline.cid})"))
                                             }
                                         } catch (e: Exception) {
-                                            attachError = e.message ?: "That picture could not be added."
+                                            attachError = whyFailed(e).ifBlank { "That picture could not be added." }
                                         } finally {
                                             attaching = false
                                         }

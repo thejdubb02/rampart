@@ -124,6 +124,7 @@ import java.net.URI
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.CancellationException
 
 private val WHEN = DateTimeFormatter.ofPattern("d MMM  HH:mm").withZone(ZoneId.systemDefault())
 
@@ -486,7 +487,7 @@ internal fun Connect(
                             }
                             onConnected(account, jmap)
                         } catch (e: Exception) {
-                            error = e.message ?: e.toString()
+                            error = whyFailed(e)
                         } finally {
                             busy = false
                         }
@@ -514,6 +515,24 @@ internal fun Connect(
             color = MaterialTheme.colorScheme.outline,
         )
     }
+}
+
+/**
+ * What to put on screen for a failure. Never returns for a cancellation.
+ *
+ * `catch (e: Exception)` catches [kotlinx.coroutines.CancellationException] along with
+ * everything else, and cancellation is not a fault: it is how a screen says it has stopped
+ * caring about a request it started. Switching folder cancels the load. Closing the
+ * composer cancels the save. Signing out cancels all of it.
+ *
+ * Reported as a failure, the user is shown Compose's own internal wording for it, "The
+ * coroutine scope left the composition", in the same red bar that reports a server
+ * refusing to send their mail. So this rethrows instead, which is what a cancellation is
+ * supposed to do: unwind the coroutine that was cancelled and tell nobody.
+ */
+internal fun whyFailed(e: Exception): String {
+    if (e is CancellationException) throw e
+    return e.message ?: e.toString()
 }
 
 @Composable
@@ -657,7 +676,7 @@ private fun Reader(
         error = ""
         withContext(Dispatchers.IO) { block() }
     } catch (e: Exception) {
-        error = e.message ?: e.toString()
+        error = whyFailed(e)
         null
     }
 
@@ -932,7 +951,7 @@ private fun Reader(
             contacts = withContext(Dispatchers.IO) { session(key).jmap.contacts() }
         } catch (e: Exception) {
             // Never fatal. The address book built from mail is the one that has to work.
-            contactsError = e.message ?: e.toString()
+            contactsError = whyFailed(e)
         } finally {
             contactsLoading = false
         }
@@ -982,7 +1001,7 @@ private fun Reader(
         } catch (e: Exception) {
             // Only a failure when there was nothing kept. Offline, with a copy on disk,
             // is a message that opens rather than an error where the message should be.
-            if (kept == null) bodyError = e.message ?: e.toString()
+            if (kept == null) bodyError = whyFailed(e)
             kept
         }
         attachments = io { session(key).jmap.attachments(message.id) } ?: emptyList()
@@ -1151,7 +1170,7 @@ private fun Reader(
                 }
                 null
             } catch (e: Exception) {
-                e.message ?: "The server would not do that."
+                whyFailed(e).ifBlank { "The server would not do that." }
             }
             refreshFolders(ask.account)
             // A folder that was open and is now gone leaves the list pointing at nothing.
@@ -1216,7 +1235,7 @@ private fun Reader(
                 filters = next
                 null
             } catch (e: Exception) {
-                e.message ?: "The server would not take those filters."
+                whyFailed(e).ifBlank { "The server would not take those filters." }
             }
             filtersSaving = false
             // Re-read rather than trust: the server rewrites nothing, but an activation
@@ -1527,7 +1546,7 @@ private fun Reader(
                             composing = null
                             draftId = null
                         } catch (e: Exception) {
-                            sendError = e.message ?: e.toString()
+                            sendError = whyFailed(e)
                         } finally {
                             sending = false
                         }
@@ -1692,7 +1711,7 @@ private fun Reader(
                                         contacts = jmap.contacts()
                                     }
                                 } catch (e: Exception) {
-                                    contactsError = e.message ?: e.toString()
+                                    contactsError = whyFailed(e)
                                 }
                             }
                         }
@@ -1711,7 +1730,7 @@ private fun Reader(
                                         contacts = jmap.contacts()
                                     }
                                 } catch (e: Exception) {
-                                    contactsError = e.message ?: e.toString()
+                                    contactsError = whyFailed(e)
                                 }
                             }
                         }
@@ -1743,7 +1762,7 @@ private fun Reader(
                                     vacation = wanted
                                     null
                                 } catch (e: Exception) {
-                                    e.message ?: "The server would not save it."
+                                    whyFailed(e).ifBlank { "The server would not save it." }
                                 }
                             }
                         }
@@ -1771,7 +1790,7 @@ private fun Reader(
                                         }
                                         )
                                 } catch (e: Exception) {
-                                    signatureError = e.message ?: e.toString()
+                                    signatureError = whyFailed(e)
                                 }
                             }
                         }
@@ -1785,7 +1804,7 @@ private fun Reader(
                                 signatureError = null
                                 imageDataUri(file)
                             } catch (e: Exception) {
-                                signatureError = e.message ?: e.toString()
+                                signatureError = whyFailed(e)
                                 null
                             }
                         }
@@ -1942,7 +1961,7 @@ private fun Reader(
                                         contacts = jmap.contacts()
                                     }
                                 } catch (e: Exception) {
-                                    contactsError = e.message ?: e.toString()
+                                    contactsError = whyFailed(e)
                                 }
                             }
                         }
