@@ -154,6 +154,24 @@ class Screenshots {
                 onOpen = {},
             )
         }
+        shoot("warned", 900, 520, dark) {
+            Message(
+                summary = MESSAGES[1].copy(
+                    from = "security@paypal.com",
+                    fromEmail = "billing@paypaI.com",
+                    subject = "Your account has been limited",
+                ),
+                body = Body(
+                    """<p>Confirm your details to restore access.</p>""" +
+                        """<form action="https://elsewhere.example">""" +
+                        """<input type="password" name="p"></form>""",
+                    null,
+                    authenticationResults = listOf("mx.example.com; dkim=fail; spf=fail; dmarc=fail"),
+                    replyTo = listOf("recovery@another-domain.example"),
+                ),
+                onLink = {},
+            )
+        }
         shoot("invitation", 900, 620, dark) {
             Message(
                 summary = MESSAGES[1].copy(subject = "Invitation: Quarterly review"),

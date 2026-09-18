@@ -2360,6 +2360,15 @@ private fun Reader(
                 },
                 onLink = { confirm = it },
                 invitation = invitation,
+                /*
+                 * Built from the address book, which already holds everyone corresponded
+                 * with. A lookalike of a household name is caught by the built-in list; a
+                 * lookalike of the client you invoice every month is only catchable from
+                 * what this particular person's mail actually looks like.
+                 */
+                knownDomains = remember(books, sessions) {
+                    books.values.flatten().map { domainOf(it.email) }.filter { it.isNotBlank() }.toSet()
+                },
                 answering = answering,
                 onAnswer = ::answerInvitation,
                 me = writingIdentity(body),
@@ -3760,6 +3769,11 @@ internal fun Message(
     /** The same parts as they arrived, for the engine, which takes bytes rather than a bitmap. */
     imageBytes: Map<String, ByteArray> = emptyMap(),
     /** Pictures fetched from the web once the reader said to, by the address they came from. */
+    /**
+     * The domains this reader actually deals with, so a lookalike of one is caught as well
+     * as a lookalike of a household name.
+     */
+    knownDomains: Set<String> = emptySet(),
     /** The meeting this message is about, drawn above the body when there is one. */
     invitation: Invitation? = null,
     /** The answer currently being sent, so the buttons say so and cannot be pressed twice. */
@@ -4011,6 +4025,44 @@ internal fun Message(
 
                     val proof = remember(body) {
                         authenticityOf(body?.authenticationResults?.joinToString("\n"), body?.spamStatus)
+                    }
+                    /*
+                     * What is wrong with the message, above what failed to vouch for it.
+                     *
+                     * Read from the message's own HTML rather than the cleaned copy, because
+                     * the cleaner removes forms and password fields, which is right for
+                     * drawing it and would hide exactly what this is looking for.
+                     */
+                    val warnings = remember(body, summary, knownDomains) {
+                        warningsFor(
+                            fromEmail = summary.fromEmail,
+                            fromName = summary.from,
+                            html = body?.html,
+                            authenticationResults = body?.authenticationResults?.joinToString("\n"),
+                            replyTo = body?.replyTo.orEmpty(),
+                            known = knownDomains,
+                        )
+                    }
+                    warnings.forEach { warning ->
+                        Column(
+                            Modifier.fillMaxWidth()
+                                .clip(MaterialTheme.shapes.small)
+                                .background(MaterialTheme.colorScheme.errorContainer)
+                                .padding(horizontal = 12.dp, vertical = 9.dp),
+                        ) {
+                            Text(
+                                warning.says,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                            )
+                            Text(
+                                warning.because,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                            )
+                        }
+                        Spacer(Modifier.height(10.dp))
                     }
                     if (proof.worthShowing) {
                         Row(
@@ -4283,9 +4335,27 @@ internal fun Message(
                                 .padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
+                            /*
+                             * Who was asking, not how many were blocked.
+                             *
+                             * Rampart already knew which pictures were remote, because that
+                             * is the decision it makes to block them. Naming the trackers
+                             * among them is what turns a count into something worth reading:
+                             * "3 held back" says something happened, "2 of them are trackers,
+                             * Mailchimp and HubSpot" says who was watching.
+                             */
+                            val blocked = page?.blocked ?: rendered.blockedImages
+                            val trackers = page?.trackers ?: 0
                             Text(
-                                if ((page?.blocked ?: rendered.blockedImages) == 1) "1 picture is held back."
-                                else "${page?.blocked ?: rendered.blockedImages} pictures are held back.",
+                                buildString {
+                                    append(if (blocked == 1) "1 picture is held back." else "$blocked pictures are held back.")
+                                    if (trackers > 0) {
+                                        append(if (trackers == 1) " It is a tracker" else " $trackers of them are trackers")
+                                        trackerLine(page?.held.orEmpty()).takeIf { it.isNotBlank() }
+                                            ?.let { append(": $it") }
+                                        append(".")
+                                    }
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.outline,
                                 modifier = Modifier.weight(1f),

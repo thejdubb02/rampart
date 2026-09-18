@@ -48,6 +48,12 @@ internal fun MessageDetails(
                     summary.from.takeIf { it.isNotBlank() },
                     summary.fromEmail.takeIf { it.isNotBlank() }?.let { "<$it>" },
                 ).joinToString(" "))
+                // Ordinary rather than alarming, which is why it lives here and not in a
+                // banner: every mailing list and every ticketing system sets one. It is
+                // still the address that would receive an answer, so it is worth being able
+                // to look it up.
+                body?.replyTo.orEmpty().filter { it.isNotBlank() }
+                    .forEachIndexed { at, who -> Line(if (at == 0) "Reply to" else "", who) }
                 recipients.forEachIndexed { at, who -> Line(if (at == 0) "To" else "", who) }
                 // Both written out the same way, or the gap between them is not a
                 // comparison, it is two different formats side by side.

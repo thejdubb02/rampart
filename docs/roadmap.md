@@ -591,18 +591,32 @@ off.
 
 Roughly the spec's "trust core", and the part where being wrong is expensive.
 
-- **The authenticity pane.** SPF, DKIM, DMARC are in. Missing: ARC, BIMI, reply-to
-  mismatch, and lookalike-domain detection, said in one sentence rather than as acronyms.
-  The rule learned the hard way on 2026-09-17: a warning that fires on honest mail is
-  worse than no warning, because the next one is not believed either.
-- **On-device phishing signals** that work with AI off: a login form in the HTML, brand
-  impersonation, homoglyph domains.
-- **Naming the trackers in mail we receive.** Rampart already blocks remote images and
-  already knows which images are remote, so saying which of them is a tracking pixel and
-  who it reports to is a short step from where we are. We are building a tracker and a
-  tracker-blocker in one application, and that is the right way round: blocking is the
-  default for everyone, tracking is switched on per message by somebody who knows what it
-  is.
+- **The authenticity pane.** SPF, DKIM, DMARC are in, and so are reply-to mismatch and
+  lookalike domains, done 2026-09-18. Still missing: ARC and BIMI.
+- **On-device phishing signals.** Done 2026-09-18: a password field in the HTML, a display
+  name that is somebody else's address, a domain written in another alphabet, a lookalike
+  of a household name or of one of your own correspondents, and a reply address on another
+  domain when nothing vouched for the message. No lookup, no service, no model.
+
+  The rule learned the hard way on 2026-09-17 is what shaped it: a warning that fires on
+  honest mail is worse than no warning, because the next one is not believed either. So
+  half the tests check that nothing is said, the reply-to signal needs a failed
+  authentication beside it before it speaks at all, and the whole set was run over 88 real
+  messages before it shipped. Nothing was warned about.
+
+  The lookalike warning had to be rewritten once. The first version printed the two domains
+  side by side and left the reader to spot the difference, which is useless: the entire
+  attack is that they look identical on screen. It now names the swapped character in
+  words, because "i in place of l" cannot be misread.
+- **Naming the trackers in mail we receive.** Done 2026-09-18. Rampart already blocked
+  remote images and already knew which were remote, so the held-back banner now says which
+  of them are trackers and who they report to: about fifty sending platforms by name, plus
+  anything one pixel across and anything whose address is shaped like an open-tracking one.
+  Proved on the live mailbox, where it named our own Meridian pixel.
+
+  We are building a tracker and a tracker-blocker in one application, and that is the right
+  way round: blocking is the default for everyone, tracking is switched on per message by
+  somebody who knows what it is.
 - **Encryption at rest**, local store first, and Stalwart's own as a setting.
 - **S/MIME or OpenPGP.** Pick one and finish it. A client that says a message is signed
   when it has not really checked is a lie with consequences, so half of either is worse

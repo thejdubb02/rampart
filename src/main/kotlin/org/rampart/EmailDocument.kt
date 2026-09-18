@@ -23,9 +23,17 @@ import org.jsoup.safety.Safelist
 internal data class EmailPage(
     /** The whole document, ready to be handed to the engine. */
     val document: String,
-    /** How many pictures were held back, so the banner offering to fetch them can say. */
-    val blocked: Int,
-)
+    /**
+     * The pictures that were held back, each already judged.
+     *
+     * The list rather than a count, because the useful thing to say is not how many were
+     * blocked but who was asking: see [picturesIn].
+     */
+    val held: List<RemotePicture>,
+) {
+    val blocked: Int get() = held.size
+    val trackers: Int get() = trackerCount(held)
+}
 
 internal fun emailDocument(
     html: String,
@@ -39,7 +47,7 @@ internal fun emailDocument(
     val source = Jsoup.parse(html)
     val clean = Cleaner(EMAIL_SAFELIST).clean(source)
     clean.outputSettings().prettyPrint(false)
-    val blocked = resolveImages(clean, carried, remoteImages)
+    val held = resolveImages(clean, carried, remoteImages)
     val policy = if (remoteImages) REMOTE_POLICY else LOCAL_POLICY
     val css = stylesheet(source, remoteImages)
     val body = clean.body().html()
@@ -55,7 +63,7 @@ internal fun emailDocument(
 <style>$css</style>
 <style>$BASE_CSS$invert</style>
 </head><body>$body</body></html>""",
-        blocked,
+        held,
     )
 }
 
@@ -118,10 +126,15 @@ private val DANGEROUS_CSS = Regex(
  * element for when they do. Bulwark does the same thing and so does every other client
  * that takes read tracking seriously.
  *
- * Returns how many were held back.
+ * Returns the ones held back, with the size the sender declared, so each can be judged.
  */
-private fun resolveImages(document: Document, carried: Map<String, String>, remoteImages: Boolean): Int {
-    var blocked = 0
+private fun resolveImages(
+    document: Document,
+    carried: Map<String, String>,
+    remoteImages: Boolean,
+): List<RemotePicture> {
+    val held = ArrayList<String>()
+    val sizes = HashMap<String, Pair<Int?, Int?>>()
     document.select("img[src]").forEach { img ->
         val src = img.attr("src").trim()
         when {
@@ -132,7 +145,10 @@ private fun resolveImages(document: Document, carried: Map<String, String>, remo
             src.startsWith("data:", ignoreCase = true) -> Unit
             remoteImages -> Unit
             else -> {
-                blocked++
+                held.add(src)
+                // Kept because a picture the sender declared as one pixel across is not a
+                // picture, and that is judged from the HTML rather than by fetching it.
+                sizes[src] = img.attr("width").toIntOrNull() to img.attr("height").toIntOrNull()
                 img.attr("data-blocked-src", src)
                 img.attr("src", BLANK)
                 // Collapsed rather than left as a gap, or a message built out of sliced
@@ -148,7 +164,7 @@ private fun resolveImages(document: Document, carried: Map<String, String>, remo
             element.attr("style", element.attr("style").replace(URL_IN_CSS, "none"))
         }
     }
-    return blocked
+    return picturesIn(held, sizes)
 }
 
 private val URL_IN_CSS = Regex("""url\(\s*['"]?(?!data:)[^)]*\)""", RegexOption.IGNORE_CASE)
