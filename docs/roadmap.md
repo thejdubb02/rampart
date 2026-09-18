@@ -83,7 +83,7 @@ Nothing below line 5 is scheduled; it is only sorted.
 | 4 | **Folder management** (2.4) | Cannot create, rename or delete a folder today, so filing has to be set up somewhere else. | Create, rename, move, nest and delete, and the sidebar follows without a restart. |
 | 5 | **Sieve filters with a builder** (2.2) | How a mailbox stays usable with nobody tending it. Gates the assistant work. | A rule built in the UI files real mail on the server, survives a round trip through Bulwark, and the raw editor shows the same script. |
 | 6 | **Local store** (2.3) | Offline, instant search, and the place everything later keeps its state. Gates tiers 3 and 4. | Reading and searching a folder works with the network off; a refresh asks only for what changed. |
-| 7 | **IMAP and SMTP with OAuth2** (2.7) | The point Rampart stops being a client for one server, and the point anyone else can use it. | A Gmail account and a generic IMAP account both read, send, file and search, with SPECIAL-USE folders found correctly. |
+| 7 | **IMAP and SMTP** (2.7) | The point Rampart stops being a client for one server, and the point anyone else can use it. | A generic IMAP account reads, sends, files and searches, with SPECIAL-USE folders found correctly. OAuth2, and so Gmail, is off this bar as of 2026-09-18. |
 | 8 | **Open tracking** (2.8, the rest shipped 2026-09-17) | Daily-use features with no model anywhere near them, plus the tracking pixel and its companion server. | A template fills placeholders and sends; an MDN is requested and answered; a send can be taken back; a tracked message shows opened, and a scanner fetch does not. |
 | 9 | **Mailbox dashboard** (2.11) | Volume, junk, who you talk to, what is waiting on you. Genuinely useful, and explicitly a nice to have. | Sent and received volume, junk share, top senders, unanswered mail and reply times, computed offline. |
 | 10 | **Thread summaries** (tier 4) | The first assistant feature, and the one with nothing to go wrong. | A twenty-message thread summarises in a side pane, off by default, with the packet viewable before it is sent. |
@@ -360,10 +360,23 @@ JMAP: push, threading, search across folders, a blob store. That is not a tie.
 Every step is a guess that is then tried, never a claim, which is why the server fields stay
 on the sign-in screen. A domain that publishes nothing still has an owner who knows.
 
+Two labels exist for where to send. `_submissions._tcp` (RFC 8314) is implicit TLS on 465
+and `_submission._tcp` (RFC 6186) is STARTTLS on 587, and the first wins where a domain
+publishes both: TLS that is there from the first byte cannot be stripped on the way to an
+upgrade.
+
 Checked against live DNS rather than reasoned about. Gmail publishes both records; Fastmail
 publishes JMAP at `api.fastmail.com` on 443, which is why a record on 443 must not carry its
-port into the URL and one on 8443 must; our own domains publish nothing and fall through to
-the guesses, which is worth fixing on our side.
+port into the URL and one on 8443 must.
+
+**Our own domains published nothing, and now do.** On 2026-09-18 both willhitestrategy.com
+and .org gained `_jmap._tcp`, `_imaps._tcp` and `_submissions._tcp` pointing at
+mail.willhitestrategy.org on 443, 993 and 465. Before that, typing an address at this
+domain found a web server on Cloudflare and nothing else, because the mailbox lives on the
+.org host while the address is at the .com. With them, an address alone signs in over JMAP
+with push, and the IMAP route resolves to the same host on 993 sending through 465. Every
+client that reads RFC 6186 gets the same benefit, Thunderbird, Apple Mail and Outlook
+included.
 
 A target of a single dot is the published way to say a service is deliberately not offered
 (RFC 2782). Read as a hostname it becomes an empty name that then gets guessed at, which is
@@ -427,8 +440,12 @@ one, so there is no separate move command to go looking for.
 #### What is still open
 
 - **The sign-in screen**, without which none of this is reachable.
-- **OAuth2 with PKCE**, without which Gmail and Microsoft are closed to us. Blocked on a
-  registered OAuth client, which is a decision rather than code.
+- **OAuth2 with PKCE, deliberately not being done yet.** Decided 2026-09-18. Gmail and
+  Microsoft both require it and both require us to register as an application with them
+  first, which is a signup, a verification process and an ongoing relationship with two
+  companies, not a piece of code. Everything else on this card works against any server
+  that takes a password, which is every self-hosted mailbox and most providers. Revisit
+  when somebody actually wants to point Rampart at Gmail.
 - **IDLE**, so an IMAP account learns about new mail rather than waiting for the poll.
   `hasPush` is false and `watch` returns null today, which is correct and slow. The poll
   underneath the WebSocket push exists for exactly this and must not be removed.
@@ -436,9 +453,10 @@ one, so there is no separate move command to go looking for.
 - **Move and delete of a message, verified live.** Everything else in the backend has been.
   Those two are not things to try out on somebody's real mail.
 
-**Done when:** a Gmail account added through OAuth and a generic IMAP account both read,
-send, file, star and search; special folders are found through SPECIAL-USE; and every
-capability IMAP lacks degrades with a visible reason rather than an error.
+**Done when:** a generic IMAP account reads, sends, files, stars and searches; special
+folders are found through SPECIAL-USE; and every capability IMAP lacks degrades with a
+visible reason rather than an error. Gmail through OAuth was the original bar and has been
+taken off it, for the reason above.
 
 ### 2.8 Templates, read receipts, undo-send
 
