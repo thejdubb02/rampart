@@ -120,12 +120,26 @@ somebody other than Justin uses this.
 
 ### 2.12 Calendar, and files
 
-**Calendar: need, and the useful half is small.** Stalwart advertises the JMAP calendar
-capabilities, checked against the live session rather than assumed, so a calendar view is
-possible. It is also a second application. The half that belongs in a mail client is the
-invitation: a `text/calendar` part drawn as who, when and where with Accept, Tentative and
-Decline, and an RSVP going back to the organiser. That works against any server and
-against IMAP, which has no calendar at all.
+**Calendar: the half that belongs in a mail client is done.** An invitation is drawn as
+the meeting rather than as a file called invite.ics: what it is, when, where, who called
+it, who is coming, and Accept, Maybe or Decline. A cancellation says so and offers nothing
+to accept. Somebody else's reply says who answered what. The answer goes back to the
+organiser as a METHOD:REPLY calendar file carrying one attendee, which is the whole
+protocol: nobody has standing to answer for anybody else.
+
+It works against any server, IMAP included, because everything shown came in the message.
+That is why it comes before a calendar view rather than after one.
+
+The traps, each one a real invitation from a real sender: the part carries no filename and
+no Content-ID, so the walk that decides what is an attachment was throwing away exactly the
+part that carries the meeting; a VALARM lives inside the event and has its own SUMMARY, so
+a reminder was becoming the title; Exchange writes timezone names that are not in the IANA
+database; DTEND on an all-day event is the day after the last one; and an all-day date has
+no timezone at all, so converting one puts a birthday on the wrong day.
+
+**A calendar view is still a second application** and stays in tier 5 with contacts and
+files. Stalwart advertises the JMAP calendar capabilities, checked against the live session
+rather than assumed, so it is possible when it is wanted.
 
 **Files: need, low.** Bulwark has it, Stalwart serves it, and nothing about mail wants it
 yet.
@@ -154,16 +168,13 @@ yet.
 ## 4. Order of work
 
 Items 1 to 7 of the original order shipped between 2026-09-17 and 2026-09-18. On
-2026-09-18 the message body moved to a real engine, identities and sending finished, and
-tags finished. What is left, in the order it will be missed:
+2026-09-18 the message body moved to a real engine, and identities and sending, tags, and
+calendar invitations all finished. What is left, in the order it will be missed:
 
-1. **Calendar invitations** (2.12). A `text/calendar` part drawn as an event with Accept,
-   Tentative and Decline. Works against any server and against IMAP, and it is the part of
-   a calendar that actually happens inside a mail client.
-2. **The mailbox dashboard.** Not a Bulwark feature at all, and the first place Rampart
+1. **The mailbox dashboard.** Not a Bulwark feature at all, and the first place Rampart
    goes past it. Every number comes out of the local store, so it needs no server, no
    setting and no model.
-3. **Encryption** (2.10). S/MIME and PGP. Last on purpose, and the one place where a
+2. **Encryption** (2.10). S/MIME and PGP. Last on purpose, and the one place where a
    half-built implementation is worse than none.
 
 The original note about IMAP sitting at 5 rather than 1 held: every feature above it was

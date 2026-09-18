@@ -805,7 +805,7 @@ private fun walk(part: Part, into: FoundBody) {
  * has no blob store and therefore no id of its own to borrow. Position is stable for as
  * long as the message exists, which is as long as the id is any use.
  */
-private fun attachmentsOf(message: MimeMessage, emailId: String): List<Attachment> = buildList {
+internal fun attachmentsOf(message: MimeMessage, emailId: String): List<Attachment> = buildList {
     var at = -1
     fun visit(part: Part) {
         at++
@@ -818,14 +818,25 @@ private fun attachmentsOf(message: MimeMessage, emailId: String): List<Attachmen
         val name = runCatching { part.fileName }.getOrNull()
         val disposition = runCatching { part.disposition }.getOrNull()
         val cid = runCatching { (part as? MimeBodyPart)?.contentID }.getOrNull()?.trim('<', '>')
-        // A part with no filename and no Content-ID is the body in one of its formats, not
-        // something attached. Only files and the pictures the body points at are listed.
-        if (name.isNullOrBlank() && cid.isNullOrBlank()) return
+        val type = runCatching { part.contentType.substringBefore(';').trim() }.getOrDefault("")
+        /*
+         * A part with no filename and no Content-ID is the body in one of its formats, not
+         * something attached. Only files and the pictures the body points at are listed.
+         *
+         * An invitation is the exception and has to be named here. Outlook and Google both
+         * send one as a third format inside multipart/alternative beside the text and the
+         * HTML, with no filename and no Content-ID, so the rule above drops exactly the
+         * part that carries the meeting. JMAP lists it because RFC 8621 counts anything
+         * that is not the text or HTML body as an attachment, so without this the same
+         * message would show an event on one backend and not on the other.
+         */
+        val invitation = type.equals("text/calendar", ignoreCase = true)
+        if (name.isNullOrBlank() && cid.isNullOrBlank() && !invitation) return
         add(
             Attachment(
                 blobId = "$emailId#$here",
-                name = name.orEmpty().ifBlank { cid.orEmpty() },
-                type = runCatching { part.contentType.substringBefore(';').trim() }.getOrDefault(""),
+                name = name.orEmpty().ifBlank { cid.orEmpty() }.ifBlank { "invite.ics" },
+                type = type,
                 size = decodedSize(part),
                 cid = cid?.takeIf { it.isNotBlank() },
                 inline = !cid.isNullOrBlank() || disposition.equals(Part.INLINE, ignoreCase = true),
@@ -863,7 +874,7 @@ private fun decodedSize(part: Part): Long {
 }
 
 /** The part at a position in the same depth-first walk [attachmentsOf] numbered. */
-private fun partAt(message: MimeMessage, wanted: Int): Part? {
+internal fun partAt(message: MimeMessage, wanted: Int): Part? {
     var at = -1
     fun visit(part: Part): Part? {
         at++

@@ -130,6 +130,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import java.awt.Desktop
 import java.net.URI
+import java.nio.file.Files
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -656,6 +657,10 @@ private fun Reader(
     /** Every tag each account has, read out of its local copy. */
     var tagsSeen by remember { mutableStateOf<Map<String, List<String>>>(emptyMap()) }
     var tagColours by remember { mutableStateOf(Settings.tagColours()) }
+    /** The meeting this message is about, when it is about one. */
+    var invitation by remember { mutableStateOf<Invitation?>(null) }
+    /** What the answer being sent was, so the buttons say so and cannot be pressed twice. */
+    var answering by remember { mutableStateOf<Rsvp?>(null) }
     /** The message being dragged onto a tag, while it is being dragged. */
     var dragging by remember { mutableStateOf<Summary?>(null) }
     /** Where the pointer is during that drag, in window coordinates. */
@@ -1150,6 +1155,57 @@ private fun Reader(
         }
     }
 
+    /**
+     * Answers an invitation.
+     *
+     * Its own send rather than the composer's, deliberately. There is no undo window,
+     * because the answer is one button and there is nothing written to regret; nothing is
+     * saved in Drafts, because a reply that is entirely a calendar part is not something
+     * anybody wants to find there; and the answer is not shown for review first, because
+     * a mail client that makes you approve pressing Accept has not saved you from
+     * anything.
+     */
+    fun answerInvitation(answer: Rsvp) {
+        val meeting = invitation ?: return
+        val message = selected ?: return
+        val key = accountOf(message) ?: return
+        val identity = identities[key].orEmpty().let { mine ->
+            mine.firstOrNull { it.email.equals(writingIdentity(body), ignoreCase = true) } ?: mine.firstOrNull()
+        } ?: return
+        val boxes = mailboxes[key].orEmpty()
+        val drafts = folderFor("drafts", boxes) ?: return
+        answering = answer
+        scope.launch {
+            val sent = withContext(Dispatchers.IO) {
+                runCatching {
+                    val ics = rsvpCalendar(meeting, answer, identity.email, identity.name)
+                    val file = Files.createTempFile("rampart-rsvp", ".ics")
+                    try {
+                        Files.writeString(file, ics)
+                        val part = session(key).jmap.upload(file)
+                        val draft = rsvpDraft(meeting, answer, message, body, identity.email)
+                            .copy(attachments = listOf(part.copy(name = rsvpFileName(answer))))
+                        session(key).jmap.send(draft, identity, drafts.id, folderFor("sent", boxes)?.id)
+                    } finally {
+                        Files.deleteIfExists(file)
+                    }
+                }.isSuccess
+            }
+            answering = null
+            if (sent) {
+                // Shown as answered straight away. The organiser's copy is what counts and
+                // it has gone; re-reading our own part would say nothing new.
+                invitation = meeting.copy(
+                    attendees = meeting.attendees.map {
+                        if (it.email.equals(identity.email, ignoreCase = true)) it.copy(status = answer.partstat) else it
+                    },
+                )
+            } else {
+                error = "The answer could not be sent."
+            }
+        }
+    }
+
     /** Opens a tag: the same list pane, showing everything carrying that keyword. */
     fun openTag(key: String, keyword: String) {
         selected = null
@@ -1178,6 +1234,8 @@ private fun Reader(
         bodyError = null
         inlineImages = emptyMap()
         inlineBytes = emptyMap()
+        invitation = null
+        answering = null
         showRemote = false
         unsubscribed = null
         source = null
@@ -1225,6 +1283,22 @@ private fun Reader(
                     .getOrNull()?.let { blobId to it }
             }.toMap()
         }
+        /*
+         * The meeting, when the message carries one.
+         *
+         * Read here rather than from the body, because an invitation is a part of its own:
+         * Outlook and Google both send it as a third format inside multipart/alternative
+         * beside the text and the HTML, and it is small enough that fetching it to find out
+         * costs nothing worth saving.
+         */
+        attachments.firstOrNull { it.type.equals("text/calendar", ignoreCase = true) }?.let { part ->
+            invitation = withContext(Dispatchers.IO) {
+                runCatching {
+                    session(key).jmap.blob(part)?.let { invitationIn(String(it, Charsets.UTF_8)) }
+                }.getOrNull()
+            }
+        }
+
         if (thread.isEmpty()) thread = io { session(key).jmap.thread(message.threadId) } ?: emptyList()
 
         // Already answered for this sender, so it is not asked again. The question is
@@ -2239,6 +2313,10 @@ private fun Reader(
                     composing = forwardOf(message, body, writingIdentity(body))
                 },
                 onLink = { confirm = it },
+                invitation = invitation,
+                answering = answering,
+                onAnswer = ::answerInvitation,
+                me = writingIdentity(body),
                 showRemote = showRemote,
                 unsubscribed = unsubscribed,
                 inContacts = selected?.fromEmail?.let { from ->
@@ -3616,6 +3694,19 @@ internal fun Message(
     /** The same parts as they arrived, for the engine, which takes bytes rather than a bitmap. */
     imageBytes: Map<String, ByteArray> = emptyMap(),
     /** Pictures fetched from the web once the reader said to, by the address they came from. */
+    /** The meeting this message is about, drawn above the body when there is one. */
+    invitation: Invitation? = null,
+    /** The answer currently being sent, so the buttons say so and cannot be pressed twice. */
+    answering: Rsvp? = null,
+    onAnswer: (Rsvp) -> Unit = {},
+    /**
+     * The address this copy was addressed to, which is the one on the guest list.
+     *
+     * Passed in rather than worked out here: which of several identities a message reached
+     * is the composer's question and is already answered there, and asking it twice is how
+     * the card and the answer end up disagreeing about who is replying.
+     */
+    me: String = "",
     /** Whether the reader has agreed to let this message fetch its pictures. */
     showRemote: Boolean = false,
     onShowImages: (always: Boolean) -> Unit = {},
@@ -4056,6 +4147,17 @@ internal fun Message(
                             )
                         }
                     }
+                    invitation?.let { meeting ->
+                        Spacer(Modifier.height(16.dp))
+                        InvitationCard(
+                            invitation = meeting,
+                            // The address this copy was addressed to, which is the one on
+                            // the guest list and the one the answer goes out as.
+                            me = me,
+                            onAnswer = if (answering == null) onAnswer else null,
+                        )
+                    }
+
                     Spacer(Modifier.height(18.dp))
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
@@ -4156,7 +4258,11 @@ internal fun Message(
 
                     // Only the ones the body did not already put on screen. A picture with
                     // no Content-ID is not referred to by the body, so it is a file.
-                    val files = attachments.filter { it.cid?.trim()?.trim('<', '>') !in carried.keys }
+                    val files = attachments
+                        .filter { it.cid?.trim()?.trim('<', '>') !in carried.keys }
+                        // The card above is the invitation. Listing invite.ics underneath it
+                        // offers somebody a file whose entire content is already on screen.
+                        .filter { invitation == null || !it.type.equals("text/calendar", ignoreCase = true) }
                     if (files.isNotEmpty()) {
                         Spacer(Modifier.height(24.dp))
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)

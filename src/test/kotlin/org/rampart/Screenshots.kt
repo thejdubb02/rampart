@@ -118,6 +118,34 @@ class Screenshots {
                 onLink = {},
             )
         }
+        shoot("invitation", 900, 620, dark) {
+            Message(
+                summary = MESSAGES[1].copy(subject = "Invitation: Quarterly review"),
+                body = Body("<p>Looking forward to it.</p>", null),
+                invitation = invitationIn(
+                    listOf(
+                        "BEGIN:VCALENDAR",
+                        "METHOD:REQUEST",
+                        "BEGIN:VEVENT",
+                        "UID:q4-review",
+                        "SUMMARY:Quarterly review",
+                        "LOCATION:Room 4, and on the usual link",
+                        "DTSTART;TZID=Europe/London:20260922T140000",
+                        "DTEND;TZID=Europe/London:20260922T153000",
+                        "RRULE:FREQ=MONTHLY;BYDAY=2TU;COUNT=4",
+                        "ORGANIZER;CN=Dana Whitfield:mailto:dana@example.org",
+                        "ATTENDEE;CN=Justin Willhite;PARTSTAT=NEEDS-ACTION:mailto:justin@example.com",
+                        "ATTENDEE;CN=Sam Okafor;PARTSTAT=ACCEPTED:mailto:sam@example.org",
+                        "ATTENDEE;CN=Priya Raman;PARTSTAT=DECLINED:mailto:priya@example.org",
+                        "ATTENDEE;CN=Tom Reyes;PARTSTAT=NEEDS-ACTION:mailto:tom@example.org",
+                        "END:VEVENT",
+                        "END:VCALENDAR",
+                    ).joinToString("\r\n"),
+                ),
+                me = "justin@example.com",
+                onLink = {},
+            )
+        }
         shoot("body", 820, 1500) {
             Message(
                 summary = MESSAGES[1],
