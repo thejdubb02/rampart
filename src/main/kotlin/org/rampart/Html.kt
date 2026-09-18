@@ -47,6 +47,19 @@ internal val SAFELIST: Safelist = Safelist.basic()
     // data: is here because our own signatures use it. An embedded picture is the safest
     // kind there is: no request leaves the machine, so it cannot report that mail was read.
     .addProtocols("img", "src", "http", "https", "cid", "data")
+    /*
+     * What a layout table needs to still be a layout after cleaning.
+     *
+     * A mail table carries its shape in attributes the cleaner was dropping, so every one
+     * arrived as a bare grid of cells with no widths and no colour. `style` is here for the
+     * same reason and is not applied as CSS: exactly two properties are read out of it,
+     * background-color and width, and everything else in it is ignored. Nothing in a style
+     * string can execute, and the tags it can appear on here hold no behaviour.
+     */
+    .addAttributes("table", "bgcolor", "width", "align", "style", "cellpadding")
+    .addAttributes("tr", "bgcolor", "style")
+    .addAttributes("td", "bgcolor", "width", "align", "colspan", "style")
+    .addAttributes("th", "bgcolor", "width", "align", "colspan", "style")
 
 /** A block ends the line it is on. The tight ones get one newline, the rest get a blank line. */
 private val TIGHT = setOf("div", "li", "tr", "td", "th", "dd", "dt", "center")

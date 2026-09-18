@@ -35,7 +35,33 @@ internal sealed interface Block {
      */
     data class Picture(val src: String, val alt: String, val width: Int?) : Block
 
-    data class Grid(val rows: List<List<AnnotatedString>>) : Block
+    /**
+     * A table, drawn as one.
+     *
+     * Cells hold blocks rather than a flattened string, because a cell in a mail table
+     * routinely holds a figure and a label under it, or a heading and a paragraph, and
+     * flattening that to one run is what turned the morning report into a column of
+     * orphaned numbers.
+     *
+     * [ruled] separates the two things a table is used for. A real data table gets lines
+     * between its rows; a layout table is furniture and gets none, because a border round
+     * somebody's newsletter is not in their design.
+     */
+    data class Layout(val rows: List<Row>, val ruled: Boolean) : Block {
+        data class Row(val cells: List<Cell>, val background: Int? = null)
+
+        /**
+         * [weight] is how much of the width this cell takes against its neighbours. A table
+         * that states widths is followed; one that does not shares evenly, which is what a
+         * browser does with no other instruction.
+         */
+        data class Cell(
+            val blocks: List<Block>,
+            val weight: Float = 1f,
+            val background: Int? = null,
+            val centred: Boolean = false,
+        )
+    }
 
     data object Rule : Block
 }
@@ -46,6 +72,34 @@ internal data class HtmlDoc(val blocks: List<Block>, val remoteImages: List<Stri
 }
 
 /** Blocks that stand on their own. Anything else is inline and joins the run around it. */
+private val BACKGROUND = Regex("background(?:-color)?\\s*:\\s*([^;]+)", RegexOption.IGNORE_CASE)
+private val WIDTH = Regex("(?<!max-)(?<!min-)width\\s*:\\s*([0-9.]+\\s*(?:px|%)?)", RegexOption.IGNORE_CASE)
+
+/**
+ * `#rgb`, `#rrggbb` or `rgb(r, g, b)` as an opaque packed colour, or null.
+ *
+ * Returned as an Int rather than a Compose Color so the block model stays free of the UI,
+ * which is what lets the whole of this file be tested without a screen.
+ */
+internal fun hexColour(raw: String): Int? {
+    val value = raw.trim().lowercase()
+    if (value.startsWith("#")) {
+        val hex = value.drop(1)
+        val full = when (hex.length) {
+            3 -> hex.map { "$it$it" }.joinToString("")
+            6 -> hex
+            8 -> hex.take(6)
+            else -> return null
+        }
+        return full.toIntOrNull(16)?.let { 0xFF000000.toInt() or it }
+    }
+    val parts = Regex("rgba?\\(([^)]*)\\)").find(value)?.groupValues?.get(1)
+        ?.split(',')?.mapNotNull { it.trim().toFloatOrNull()?.toInt() } ?: return null
+    if (parts.size < 3) return null
+    val (r, g, b) = parts.take(3).map { it.coerceIn(0, 255) }
+    return 0xFF000000.toInt() or (r shl 16) or (g shl 8) or b
+}
+
 private val HEADINGS = mapOf("h1" to 1, "h2" to 2, "h3" to 3, "h4" to 4, "h5" to 5, "h6" to 6)
 private val CONTAINERS = setOf(
     "p", "div", "center", "pre", "dl", "dd", "dt", "article", "section",
@@ -176,14 +230,78 @@ private class Cutter(
      * its contents read as ordinary blocks.
      */
     private fun table(element: Element): List<Block> {
-        val rows = element.select("tr").map { row ->
+        // Only this table's own rows. A nested table builds itself when the cell holding it
+        // is walked, and selecting through would steal its rows into the outer one.
+        val rows = element.select("tr").filter { it.parents().firstOrNull { p ->
+            p.tagName() == "table"
+        } === element }
+        val cellsPerRow = rows.map { row ->
             row.children().filter { it.tagName() == "td" || it.tagName() == "th" }
         }
-        val looksLikeData = rows.size >= 2 && rows.count { it.size >= 2 } >= 2
-        // Unwrapped rather than flattened: a layout table is usually where the pictures are,
-        // and reading its cells as text would lose every one of them.
-        if (!looksLikeData) return blocks(element)
-        return listOf(Block.Grid(rows.map { cells -> cells.map { runOf(it) } }))
+
+        /*
+         * One cell holding everything is a wrapper, not a layout.
+         *
+         * This is the shape almost every newsletter starts with, and drawing it as a table
+         * would put a border and a column round the whole message. Unwrapped, its contents
+         * read as ordinary blocks, which is what they are.
+         */
+        val banner = colourOf(element) != null ||
+            cellsPerRow.firstOrNull()?.firstOrNull()?.let { colourOf(it) != null } == true
+        if (!banner && cellsPerRow.size <= 1 && cellsPerRow.sumOf { it.size } <= 1) {
+            return blocks(element)
+        }
+
+        // Lines between rows only when this is a table of data. A single row of six figures
+        // is a layout, and so is a logo beside an address block.
+        val ruled = cellsPerRow.size >= 2 && cellsPerRow.count { it.size >= 2 } >= 2
+
+        val built = cellsPerRow.mapIndexed { _, cells ->
+            Block.Layout.Row(
+                cells = cells.map { cell ->
+                    Block.Layout.Cell(
+                        blocks = blocks(cell),
+                        weight = widthOf(cell) * (cell.attr("colspan").toIntOrNull()?.coerceIn(1, 20) ?: 1),
+                        background = colourOf(cell) ?: colourOf(element),
+                        centred = cell.attr("align").equals("center", ignoreCase = true),
+                    )
+                },
+                background = colourOf(cells.firstOrNull()?.parent()) ?: colourOf(element),
+            )
+        }.filter { it.cells.isNotEmpty() }
+        if (built.isEmpty()) return blocks(element)
+        return listOf(Block.Layout(built, ruled))
+    }
+
+    /**
+     * The background an element asks for, as a packed colour, or null for none.
+     *
+     * `bgcolor` and a `background-color` in a style string say the same thing and both are
+     * in use: the attribute is what mail clients have always understood, the property is
+     * what anything built this decade emits. Named colours are not resolved, because a
+     * layout table naming one is vanishingly rare next to the cost of carrying the list.
+     */
+    private fun colourOf(element: Element?): Int? {
+        element ?: return null
+        val raw = element.attr("bgcolor").ifBlank {
+            BACKGROUND.find(element.attr("style"))?.groupValues?.get(1).orEmpty()
+        }.trim()
+        return hexColour(raw)
+    }
+
+    /**
+     * How wide a cell asks to be, relative to its neighbours.
+     *
+     * A percentage or a pixel count both work as a weight, because only the ratio between
+     * the cells in a row matters here. Anything unparseable is one share, which is what a
+     * browser gives a cell that says nothing.
+     */
+    private fun widthOf(element: Element): Float {
+        val raw = element.attr("width").ifBlank {
+            WIDTH.find(element.attr("style"))?.groupValues?.get(1).orEmpty()
+        }
+        val number = raw.trim().removeSuffix("%").removeSuffix("px").trim().toFloatOrNull()
+        return number?.takeIf { it > 0f }?.coerceIn(1f, 10_000f) ?: 1f
     }
 
     /** Everything under [element] as one run of inline text, structure flattened. */

@@ -61,6 +61,28 @@ class Screenshots {
         // Taller than any window, because the point of this one is the whole body: a
         // heading, a list, a table, a quote, a rule and a picture the message carries.
         shoot("settings-about", 1200, 900, dark) { SettingsScreen(page = "about") }
+        // A layout table doing what a layout table does: a banner, six figures across
+        // with their labels, then a real table of data underneath.
+        val report =
+            """<table width="100%" bgcolor="#F4F1EC"><tr><td>""" +
+            """<table width="100%" bgcolor="#3B1F0B"><tr><td align="center">""" +
+            """<h2>DUCHAMP</h2><div>HEALDSBURG</div></td></tr></table>""" +
+            """<div>MORNING REPORT</div><h3>Friday, September 18, 2026</h3>""" +
+            """<table width="100%"><tr>""" +
+            """<td align="center" bgcolor="#ffffff"><h3>95.0%</h3><div>OCCUPANCY TONIGHT</div></td>""" +
+            """<td align="center" bgcolor="#ffffff"><h3>19/20</h3><div>ROOMS TONIGHT</div></td>""" +
+            """<td align="center" bgcolor="#ffffff"><h3>37</h3><div>GUEST COUNT</div></td>""" +
+            """<td align="center" bgcolor="#ffffff"><h3>9</h3><div>ARRIVALS</div></td>""" +
+            """<td align="center" bgcolor="#ffffff"><h3>5</h3><div>DEPARTURES</div></td>""" +
+            """<td align="center" bgcolor="#ffffff"><h3>10</h3><div>STAYOVERS</div></td>""" +
+            """</tr></table>""" +
+            """<table width="100%"><tr><th>Guest</th><th>Room</th><th>What they asked for</th></tr>""" +
+            """<tr><td>Brendan Goodwin</td><td>13</td><td>Arriving around 12p, white Subaru.</td></tr>""" +
+            """<tr><td>Melissa OBrien</td><td>4</td><td>In town for a wedding, sent winery list.</td></tr>""" +
+            """</table></td></tr></table>"""
+        shoot("report", 980, 640) {
+            Message(summary = MESSAGES[0], body = Body(report, null), onLink = {})
+        }
         shoot("contacts", 1000, 760, dark) {
             ContactsPane(
                 contacts = listOf(

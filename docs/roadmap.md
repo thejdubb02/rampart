@@ -161,6 +161,39 @@ proven, and it is listed that way on the board.
 
 ---
 
+## HTML mail: tables are the layout, not decoration
+
+A mail table is almost never a table of data. It is the only layout tool that works in
+Outlook, so every report, receipt and newsletter is built out of them, and what the table
+says about width and colour **is** the design.
+
+Rampart unwrapped them. Anything that was not at least two rows by two columns had its
+cells read out in sequence as ordinary blocks, which turned a hotel's morning report, six
+figures across with a label under each, into a column of orphaned numbers: "95.0%", then
+"Occupancy tonight", then "19/20", twelve times over. The reasoning behind that rule was
+sound as far as it went, and the comment explaining it is still there: a newsletter is
+usually one cell holding the whole message, and drawing that as a table puts a border round
+the entire email. What it missed is that a one row, six column table is not a wrapper.
+
+Since 2026-09-18 a table is drawn as one, with four things it did not have before:
+
+- **Cells hold blocks, not a line of text.** A cell routinely holds a figure with a label
+  under it, and flattening that to one run is what destroyed the report.
+- **Widths are followed where stated and shared evenly where not**, which is what a browser
+  does with no other instruction.
+- **Backgrounds**, from `bgcolor` or from a `background-color` in a style string, both of
+  which the sanitiser used to drop. A colour on the table reaches the cells that state none,
+  because the banner on every one of these is `<table bgcolor>` with a plain cell inside it.
+- **A text colour chosen from the background**, black or white by perceptual luminance,
+  because Rampart does not read the colour the mail asks for and the theme's own near black
+  was being written onto dark brown.
+
+The one cell wrapper is still unwrapped, unless it carries a colour, in which case it is a
+band and keeping it is the whole point. A nested table draws itself, since that is how all
+of these are built.
+
+---
+
 ## The two things the spec changes about our plan
 
 **1. We are on the right side of the spec's own argument about protocols.** Its build

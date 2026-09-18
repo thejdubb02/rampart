@@ -29,6 +29,10 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.Color
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.text.style.TextAlign
 
 /**
  * The message, drawn where the sender put things.
@@ -53,6 +57,35 @@ internal fun HtmlBody(
     }
 }
 
+/** Whether the cell being drawn asked for its contents to be centred. */
+private val LocalCellCentred = staticCompositionLocalOf { false }
+
+/**
+ * The colour to write in, when the cell underneath has one of its own.
+ *
+ * Unspecified everywhere else, which means the theme decides, which is right for a message
+ * that states no colours. It matters where a cell does: the banner on a hotel report is
+ * white on dark brown, and Rampart does not read text colour, so it wrote the theme's near
+ * black onto the brown and the name of the hotel disappeared.
+ *
+ * Chosen from the background rather than read from the mail, because it cannot be wrong.
+ * A sender who states a colour we ignored still gets readable text; a sender who states
+ * nothing, which is most of them, gets readable text as well.
+ */
+private val LocalCellInk = staticCompositionLocalOf { Color.Unspecified }
+
+/**
+ * Black or white, whichever can be read on [background].
+ *
+ * The weights are the usual perceptual ones: the eye takes far more brightness from green
+ * than from blue, so a flat average calls mid blue light and puts black on it.
+ */
+internal fun inkFor(background: Int): Color {
+    val colour = Color(background)
+    val luminance = 0.299f * colour.red + 0.587f * colour.green + 0.114f * colour.blue
+    return if (luminance > 0.6f) Color(0xFF1A1A1A) else Color(0xFFFAFAFA)
+}
+
 @Composable
 private fun ColumnScope.Draw(
     block: Block,
@@ -63,6 +96,11 @@ private fun ColumnScope.Draw(
         is Block.Words -> Text(
             block.text,
             style = MaterialTheme.typography.bodyLarge,
+            // A Text fills the width it is given, so the column's alignment never reaches
+            // the words inside it. The centring a banner asks for has to be told to the
+            // paragraph itself.
+            textAlign = if (LocalCellCentred.current) TextAlign.Center else null,
+            color = LocalCellInk.current,
             // Headings step down from a size that is clearly a heading to one that is barely
             // one, which is what h1 to h6 mean. Level 0 is ordinary text and keeps its size.
             fontSize = if (block.level == 0) MaterialTheme.typography.bodyLarge.fontSize
@@ -134,21 +172,44 @@ private fun ColumnScope.Draw(
             }
         }
 
-        is Block.Grid -> Column(Modifier.padding(bottom = 10.dp)) {
-            block.rows.forEachIndexed { at, cells ->
+        /*
+         * Cells side by side, each drawing its own blocks.
+         *
+         * Widths come from the table where it states them and are shared evenly where it
+         * does not, which is what a browser does with no other instruction. A cell holds
+         * blocks rather than a line of text, so a figure with a label under it stays a
+         * figure with a label under it, and a nested table inside a cell draws itself.
+         */
+        is Block.Layout -> Column(Modifier.padding(bottom = 10.dp)) {
+            block.rows.forEachIndexed { at, row ->
                 Row(
-                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    Modifier.fillMaxWidth()
+                        .then(row.background?.let { Modifier.background(Color(it)) } ?: Modifier),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    cells.forEach { cell ->
-                        Text(
-                            cell,
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.weight(1f),
-                        )
+                    row.cells.forEach { cell ->
+                        Column(
+                            Modifier.weight(cell.weight)
+                                .then(cell.background?.let { Modifier.background(Color(it)) } ?: Modifier)
+                                .padding(horizontal = 6.dp, vertical = 6.dp),
+                            horizontalAlignment =
+                                if (cell.centred) Alignment.CenterHorizontally else Alignment.Start,
+                        ) {
+                            CompositionLocalProvider(
+                                LocalCellCentred provides cell.centred,
+                                LocalCellInk provides (
+                                    (cell.background ?: row.background)?.let { inkFor(it) }
+                                        ?: LocalCellInk.current
+                                    ),
+                            ) {
+                                cell.blocks.forEach { Draw(it, carried, fetched) }
+                            }
+                        }
                     }
                 }
-                if (at < block.rows.size - 1) {
+                // Only a table of data gets lines. A layout table is furniture, and a border
+                // round somebody's newsletter is not in their design.
+                if (block.ruled && at < block.rows.size - 1) {
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 }
             }
@@ -169,8 +230,11 @@ internal fun flatten(blocks: List<Block>): AnnotatedString = AnnotatedString.Bui
                 is Block.Words -> { append(block.text); append('\n') }
                 is Block.Quote -> walk(block.inner)
                 is Block.Listing -> block.items.forEach { append("- "); append(it); append('\n') }
-                is Block.Grid -> block.rows.forEach { row ->
-                    row.forEachIndexed { at, cell -> if (at > 0) append('\t'); append(cell) }
+                is Block.Layout -> block.rows.forEach { row ->
+                    row.cells.forEachIndexed { at, cell ->
+                        if (at > 0) append('\t')
+                        walk(cell.blocks)
+                    }
                     append('\n')
                 }
                 is Block.Picture -> if (block.alt.isNotBlank()) { append(block.alt); append('\n') }
