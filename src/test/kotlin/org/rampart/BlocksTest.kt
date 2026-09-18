@@ -2,6 +2,7 @@ package org.rampart
 
 import androidx.compose.ui.graphics.Color
 import kotlin.test.Test
+import kotlin.test.assertFalse
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -272,5 +273,54 @@ class TableColourTest {
         assertEquals(0xFF3B1F0B.toInt(), hexColour("rgb(59, 31, 11)"))
         assertEquals(null, hexColour("papayawhip"))
         assertEquals(null, hexColour(""))
+    }
+
+    // Patterns taken from a real newsletter that rendered as prose with everything missing.
+    // Shapes only: no third party markup is kept in this repo.
+
+    @Test
+    fun `a picture inside a link is still a picture`() {
+        // Eight of the nine images in the newsletter that prompted this were wrapped in a
+        // link, because that is what a newsletter is. An `a` was read as a run of text, an
+        // image contributes no characters, and every logo, banner and button disappeared.
+        val doc = cut("""<a href="https://example.org"><img src="https://example.org/logo.png" width="421"></a>""")
+        val pictures = doc.blocks.filterIsInstance<Block.Picture>()
+        assertEquals(1, pictures.size)
+        assertEquals("https://example.org/logo.png", pictures.first().src)
+        assertEquals(421, pictures.first().width)
+    }
+
+    @Test
+    fun `a picture inside a span or a font is still a picture`() {
+        assertEquals(1, cut("""<span><img src="https://example.org/a.png"></span>""").blocks.filterIsInstance<Block.Picture>().size)
+        assertEquals(1, cut("""<font><img src="https://example.org/b.png"></font>""").blocks.filterIsInstance<Block.Picture>().size)
+    }
+
+    @Test
+    fun `a wrapper cell that centres its contents does not lose that when it is unwrapped`() {
+        // A one cell table is a wrapper and is unwrapped, which is right. Its alignment is
+        // not part of the wrapper: it is what the sender said about what is inside.
+        val html = """<table><tr><td align="center"><h1>UrTips</h1></td></tr></table>"""
+        val words = cut(html).blocks.filterIsInstance<Block.Words>()
+        assertEquals(1, words.size)
+        assertTrue(words.first().centred, "a centred wrapper should centre what it holds")
+    }
+
+    @Test
+    fun `text-align counts as much as the align attribute`() {
+        val html = """<table><tr><td style="text-align: center; padding: 10px;"><h2>Centred</h2></td></tr></table>"""
+        assertTrue(cut(html).blocks.filterIsInstance<Block.Words>().first().centred)
+    }
+
+    @Test
+    fun `a picture in a centred wrapper is centred too`() {
+        val html = """<div align="center"><a href="https://example.org"><img src="https://example.org/logo.png"></a></div>"""
+        assertTrue(cut(html).blocks.filterIsInstance<Block.Picture>().first().centred)
+    }
+
+    @Test
+    fun `an uncentred message stays where it is`() {
+        val html = """<table><tr><td><h1>Left</h1></td></tr></table>"""
+        assertFalse(cut(html).blocks.filterIsInstance<Block.Words>().first().centred)
     }
 }

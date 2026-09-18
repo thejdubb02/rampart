@@ -1,6 +1,7 @@
 package org.rampart
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -93,21 +94,27 @@ private fun ColumnScope.Draw(
     fetched: Map<String, ImageBitmap>,
 ) {
     when (block) {
-        is Block.Words -> Text(
+        is Block.Words -> {
+        val centred = LocalCellCentred.current || block.centred
+        Text(
             block.text,
             style = MaterialTheme.typography.bodyLarge,
-            // A Text fills the width it is given, so the column's alignment never reaches
-            // the words inside it. The centring a banner asks for has to be told to the
-            // paragraph itself.
-            textAlign = if (LocalCellCentred.current) TextAlign.Center else null,
+            // Told to the paragraph, because the column's alignment never reaches the words
+            // inside it. **And the paragraph has to be given the width first:** a Text in a
+            // column is only as wide as its own characters, so centring inside it moves a
+            // long paragraph, which already fills the line, and does nothing at all to a
+            // one word heading, which is exactly the case somebody notices.
+            textAlign = if (centred) TextAlign.Center else null,
             color = LocalCellInk.current,
             // Headings step down from a size that is clearly a heading to one that is barely
             // one, which is what h1 to h6 mean. Level 0 is ordinary text and keeps its size.
             fontSize = if (block.level == 0) MaterialTheme.typography.bodyLarge.fontSize
             else (24 - block.level * 2).sp,
             fontWeight = if (block.level == 0) null else FontWeight.SemiBold,
-            modifier = Modifier.padding(bottom = 10.dp),
+            modifier = Modifier.padding(bottom = 10.dp)
+                .then(if (centred) Modifier.fillMaxWidth() else Modifier),
         )
+        }
 
         // IntrinsicSize.Min on the row is what lets the edge be as tall as the quote: a
         // Spacer has no height of its own, so without it the line does not appear at all.
@@ -147,19 +154,31 @@ private fun ColumnScope.Draw(
                 }
             }
             if (bitmap != null) {
-                Image(
-                    bitmap = bitmap,
-                    contentDescription = block.alt.ifBlank { null },
-                    // Inside rather than Fit, so a small logo stays a small logo. Fit blew a
-                    // signature image up to the width of the reading pane.
-                    contentScale = ContentScale.Inside,
-                    modifier = Modifier
-                        .sizeIn(
-                            maxWidth = (block.width ?: 620).coerceAtMost(620).dp,
-                            maxHeight = 520.dp,
-                        )
-                        .padding(bottom = 10.dp),
-                )
+                // A picture is as wide as it is, so centring it has to be done by the box
+                // around it rather than by the image. Told to the image it does nothing,
+                // which is why a centred masthead still sat against the left margin.
+                Box(
+                    Modifier.fillMaxWidth(),
+                    contentAlignment = if (block.centred || LocalCellCentred.current) {
+                        Alignment.TopCenter
+                    } else {
+                        Alignment.TopStart
+                    },
+                ) {
+                    Image(
+                        bitmap = bitmap,
+                        contentDescription = block.alt.ifBlank { null },
+                        // Inside rather than Fit, so a small logo stays a small logo. Fit blew a
+                        // signature image up to the width of the reading pane.
+                        contentScale = ContentScale.Inside,
+                        modifier = Modifier
+                            .sizeIn(
+                                maxWidth = (block.width ?: 620).coerceAtMost(620).dp,
+                                maxHeight = 520.dp,
+                            )
+                            .padding(bottom = 10.dp),
+                    )
+                }
             } else if (block.alt.isNotBlank()) {
                 // Only when the sender wrote one. An empty alt on a held back picture is a
                 // spacer or a tracking pixel, and announcing those is worse than silence.

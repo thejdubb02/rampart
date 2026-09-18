@@ -60,6 +60,31 @@ internal val SAFELIST: Safelist = Safelist.basic()
     .addAttributes("tr", "bgcolor", "style")
     .addAttributes("td", "bgcolor", "width", "align", "colspan", "style")
     .addAttributes("th", "bgcolor", "width", "align", "colspan", "style")
+    /*
+     * Alignment and colour, on the tags that carry them outside a table.
+     *
+     * Same rule as above and worth restating, because widening a safelist is how a sanitiser
+     * stops sanitising: `style` is never applied as CSS. A fixed set of properties is read
+     * out of it by name, text-align and color here, and every other byte of the string is
+     * ignored. None of these tags holds behaviour, so there is nothing for a declaration to
+     * reach even if one were read.
+     *
+     * Without this the attributes were dropped before anything looked at them, and a
+     * newsletter that centres its masthead and colours its headings arrived left aligned
+     * and monochrome.
+     */
+    .addAttributes("div", "align", "style")
+    .addAttributes("p", "align", "style")
+    .addAttributes("span", "style")
+    .addAttributes("a", "style")
+    .addAttributes("img", "align", "style")
+    .addAttributes("center", "style")
+    .addAttributes("h1", "align", "style")
+    .addAttributes("h2", "align", "style")
+    .addAttributes("h3", "align", "style")
+    .addAttributes("h4", "align", "style")
+    .addAttributes("h5", "align", "style")
+    .addAttributes("h6", "align", "style")
 
 /** A block ends the line it is on. The tight ones get one newline, the rest get a blank line. */
 private val TIGHT = setOf("div", "li", "tr", "td", "th", "dd", "dt", "center")
@@ -136,6 +161,12 @@ internal class Walker(
     private val linkColor: Color,
     private val quoteColor: Color,
     private val onLink: (String) -> Unit,
+    /**
+     * What this text will be drawn on, so a colour out of the mail can be checked before it
+     * is used. Unspecified means do not use any, which is what every caller that only wants
+     * the characters passes.
+     */
+    private val background: Color = Color.Unspecified,
 ) {
     private val out = AnnotatedString.Builder()
     private var started = false
@@ -169,6 +200,9 @@ internal class Walker(
 
         var pops = 0
         if (tag == "blockquote") { out.pushStyle(SpanStyle(color = quoteColor)); pops++ }
+        // The sender's own colour, but only when it can be read where it is going. A brand
+        // heading is part of what the message is, and an unreadable one is worse than none.
+        readableColour(e.attr("style"), background)?.let { out.pushStyle(SpanStyle(color = it)); pops++ }
         STYLES[tag]?.let { out.pushStyle(it); pops++ }
         if (tag == "a") {
             val href = e.attr("abs:href").ifBlank { e.attr("href") }.trim()
@@ -214,3 +248,83 @@ internal class Walker(
         out.append(s)
     }
 }
+
+/**
+ * A colour out of a style string, when it can be read against [background].
+ *
+ * **Colour in mail is not advice, it is a guess about somebody else's screen.** A newsletter
+ * written for a white page sets its body text to near black, and drawn on a dark theme that
+ * is a paragraph nobody can see. The rule here was to ignore colour entirely for exactly
+ * that reason, and ignoring it loses the half that carries meaning: a brand heading, a
+ * warning in red, a total in green.
+ *
+ * So the test is contrast rather than trust, and **the bar is invisibility, not
+ * accessibility**. It is not Rampart's place to overrule a designer on whether their own
+ * green is dark enough; every other mail client shows it and so should this one. What
+ * Rampart will not do is draw text that cannot be seen at all.
+ *
+ * One threshold does both jobs, which is why there is one. A brand colour picked to sit on
+ * white clears it on a light theme and is used. The same colour on a dark theme does not,
+ * because a near-black body colour against a near-black background is exactly the case
+ * this exists to catch, and the theme's own ink takes over. Checked against a real
+ * newsletter: its #2fd2a8 heading reads 1.75 against white and 12.6 against our dark
+ * surface, and its #333 body text reads 12.6 against white and 1.2 against the dark one.
+ *
+ * Null when there is no colour, when it cannot be parsed, or when [background] is
+ * unspecified, which is how a caller says it only wants the characters.
+ */
+internal fun readableColour(style: String, background: Color): Color? {
+    if (background == Color.Unspecified || style.isBlank()) return null
+    val raw = COLOUR.find(style)?.groupValues?.get(1)?.trim() ?: return null
+    val colour = parseCssColour(raw) ?: return null
+    return colour.takeIf { contrast(it, background) >= VISIBLE }
+}
+
+/** The WCAG contrast ratio between two opaque colours, 1.0 (identical) to 21.0 (black on white). */
+internal fun contrast(a: Color, b: Color): Double {
+    val first = relativeLuminance(a)
+    val second = relativeLuminance(b)
+    val lighter = maxOf(first, second)
+    val darker = minOf(first, second)
+    return (lighter + 0.05) / (darker + 0.05)
+}
+
+private fun relativeLuminance(colour: Color): Double {
+    fun channel(value: Float): Double {
+        val v = value.toDouble()
+        // The sRGB transfer curve. A plain average reads mid grey as far lighter than an eye
+        // does, and then every mid tone passes a contrast check it should fail.
+        return if (v <= 0.03928) v / 12.92 else Math.pow((v + 0.055) / 1.055, 2.4)
+    }
+    return 0.2126 * channel(colour.red) + 0.7152 * channel(colour.green) + 0.0722 * channel(colour.blue)
+}
+
+/** `#abc`, `#aabbcc` or `rgb(1, 2, 3)`, which is all mail uses. */
+internal fun parseCssColour(raw: String): Color? {
+    val text = raw.trim().removeSuffix(";").trim()
+    if (text.startsWith("#")) {
+        val hex = text.drop(1)
+        val full = when (hex.length) {
+            3 -> hex.map { "$it$it" }.joinToString("")
+            6 -> hex
+            8 -> hex.take(6)
+            else -> return null
+        }
+        return full.toLongOrNull(16)?.let { Color(0xFF000000L or it) }
+    }
+    val numbers = RGB.find(text)?.groupValues?.drop(1)?.mapNotNull { it.toIntOrNull() } ?: return null
+    if (numbers.size < 3) return null
+    return Color(numbers[0].coerceIn(0, 255), numbers[1].coerceIn(0, 255), numbers[2].coerceIn(0, 255))
+}
+
+/**
+ * Where a colour stops being readable at all.
+ *
+ * Well under the WCAG 3:1 for large text, deliberately. The job here is not to grade
+ * somebody else's design, it is to stop a message being drawn in a colour indistinguishable
+ * from what is behind it.
+ */
+private const val VISIBLE = 1.6
+
+private val COLOUR = Regex("(?i)(?:^|;)\\s*color\\s*:\\s*([^;]+)")
+private val RGB = Regex("(?i)rgba?\\(\\s*(\\d+)\\D+(\\d+)\\D+(\\d+)")

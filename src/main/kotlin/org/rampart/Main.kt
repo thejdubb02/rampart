@@ -3300,10 +3300,14 @@ internal fun Message(
 ) {
     val linkColor = MaterialTheme.colorScheme.primary
     val quoteColor = MaterialTheme.colorScheme.outline
-    val rendered = remember(body, linkColor) {
+    // What the body sits on, so a colour the sender chose can be checked against it before
+    // it is used. Part of the remember key: the same message on a different theme is a
+    // different answer about which of its colours can be read.
+    val bodyPaper = MaterialTheme.colorScheme.surface
+    val rendered = remember(body, linkColor, bodyPaper) {
         body?.let {
             when {
-                it.html != null -> htmlBlocks(it.html, linkColor, quoteColor, onLink)
+                it.html != null -> htmlBlocks(it.html, linkColor, quoteColor, bodyPaper, onLink)
                 // Plain text has no structure to keep, so it is one block and the same
                 // drawing code handles both rather than there being two ways down.
                 it.text != null -> HtmlDoc(

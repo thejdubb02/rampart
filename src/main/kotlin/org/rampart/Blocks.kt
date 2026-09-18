@@ -1,6 +1,8 @@
 package org.rampart
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.AnnotatedString
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
@@ -22,7 +24,7 @@ import org.jsoup.safety.Cleaner
  */
 internal sealed interface Block {
     /** A run of text. [level] is 0 for ordinary text and 1 to 6 for a heading. */
-    data class Words(val text: AnnotatedString, val level: Int = 0) : Block
+    data class Words(val text: AnnotatedString, val level: Int = 0, val centred: Boolean = false) : Block
 
     /** Quoted mail, drawn with an edge down the side rather than only a colour. */
     data class Quote(val inner: List<Block>) : Block
@@ -33,7 +35,7 @@ internal sealed interface Block {
      * [src] is either `cid:something`, meaning a part the message carries, or an http URL,
      * meaning a fetch from the sender's server that nobody has agreed to yet.
      */
-    data class Picture(val src: String, val alt: String, val width: Int?) : Block
+    data class Picture(val src: String, val alt: String, val width: Int?, val centred: Boolean = false) : Block
 
     /**
      * A table, drawn as one.
@@ -119,13 +121,15 @@ internal fun htmlBlocks(
     html: String,
     linkColor: Color,
     quoteColor: Color,
+    /** What the body will be drawn on, so a colour out of the mail can be checked first. */
+    background: Color = Color.Unspecified,
     onLink: (String) -> Unit,
 ): HtmlDoc {
     val doc = Jsoup.parse(html)
     doc.select("script, style, noscript, head, title").remove()
     val remote = doc.select("img").mapNotNull { webSrc(it) }
     val clean = Cleaner(SAFELIST).clean(doc)
-    val cutter = Cutter(linkColor, quoteColor, onLink)
+    val cutter = Cutter(linkColor, quoteColor, onLink, background)
     return HtmlDoc(cutter.blocks(clean.body()), remote)
 }
 
@@ -147,16 +151,35 @@ private class Cutter(
     private val linkColor: Color,
     private val quoteColor: Color,
     private val onLink: (String) -> Unit,
+    /** What the body is drawn on, so a colour out of the mail can be checked against it. */
+    private val background: Color = Color.Unspecified,
 ) {
-    /** The children of [parent], as blocks. Recurses, so a quote inside a div still nests. */
-    fun blocks(parent: Element): List<Block> {
+    /**
+     * The children of [parent], as blocks. Recurses, so a quote inside a div still nests.
+     *
+     * [centred] travels down with the walk because alignment in mail is set on a wrapper and
+     * meant for everything inside it. A newsletter centres a div and puts the logo, the
+     * banner and three headings in it, and reading the attribute only on the element that
+     * holds the text finds nothing.
+     */
+    /**
+     * The colour links are drawn in right now.
+     *
+     * The theme's own accent almost everywhere, and the readable ink inside a cell that has
+     * a background. A button in mail is a table cell filled with the brand colour and a link
+     * in the middle of it, and our accent drawn on somebody else's blue is a link nobody can
+     * read. The same [inkFor] the cell's text already uses, so the two agree.
+     */
+    private var linkInk = linkColor
+
+    fun blocks(parent: Element, centred: Boolean = false): List<Block> {
         val out = mutableListOf<Block>()
-        var inline = Walker(linkColor, quoteColor, onLink)
+        var inline = Walker(linkInk, quoteColor, onLink, background)
 
         fun flush() {
             val text = inline.build()
-            if (text.isNotBlank()) out += Block.Words(text)
-            inline = Walker(linkColor, quoteColor, onLink)
+            if (text.isNotBlank()) out += Block.Words(text, centred = centred)
+            inline = Walker(linkInk, quoteColor, onLink, background)
         }
 
         for (node in parent.childNodes()) {
@@ -168,7 +191,7 @@ private class Cutter(
             when (val tag = element.tagName()) {
                 "img" -> {
                     flush()
-                    out += picture(element)
+                    out += picture(element, centred || isCentred(element))
                 }
                 "hr" -> {
                     flush()
@@ -176,7 +199,7 @@ private class Cutter(
                 }
                 "blockquote" -> {
                     flush()
-                    val inner = blocks(element)
+                    val inner = blocks(element, centred)
                     if (inner.isNotEmpty()) out += Block.Quote(inner)
                 }
                 "ul", "ol" -> {
@@ -193,32 +216,50 @@ private class Cutter(
                 in HEADINGS -> {
                     flush()
                     val text = runOf(element)
-                    if (text.isNotBlank()) out += Block.Words(text, HEADINGS.getValue(tag))
+                    if (text.isNotBlank()) {
+                        out += Block.Words(text, HEADINGS.getValue(tag), centred || isCentred(element))
+                    }
                 }
                 in CONTAINERS -> {
                     // A container is only worth breaking on when it holds something that
                     // stands on its own. A div wrapped round three words is not a paragraph,
                     // and treating it as one is how a sentence ends up on four lines.
-                    if (element.select("img, hr, blockquote, ul, ol, table, h1, h2, h3, h4, h5, h6").isEmpty()) {
-                        inline.node(element)
-                    } else {
+                    if (standsAlone(element)) {
                         flush()
-                        out += blocks(element)
+                        out += blocks(element, centred || isCentred(element))
+                    } else {
+                        inline.node(element)
                     }
                 }
-                else -> inline.node(element)
+                /*
+                 * **The same question for every other element, which is where the pictures
+                 * were going.** An `a`, a `span` or a `font` was read as text and nothing
+                 * else, so an image inside a link contributed no characters and disappeared.
+                 * Eight of the nine pictures in a real newsletter are wrapped in a link,
+                 * because that is what a newsletter is, so the message arrived as prose with
+                 * its logo, its banner and every button missing.
+                 */
+                else -> {
+                    if (standsAlone(element)) {
+                        flush()
+                        out += blocks(element, centred || isCentred(element))
+                    } else {
+                        inline.node(element)
+                    }
+                }
             }
         }
         flush()
         return out
     }
 
-    private fun picture(img: Element): Block.Picture = Block.Picture(
+    private fun picture(img: Element, centred: Boolean): Block.Picture = Block.Picture(
         src = webSrc(img) ?: img.attr("src").trim(),
         alt = img.attr("alt").trim(),
         // Ignored when it is silly. A sender is allowed to claim a picture is 9000 wide,
         // and a tracking pixel claims to be 1.
         width = img.attr("width").toIntOrNull()?.takeIf { it in 2..2000 },
+        centred = centred || isCentred(img),
     )
 
     /**
@@ -249,7 +290,11 @@ private class Cutter(
         val banner = colourOf(element) != null ||
             cellsPerRow.firstOrNull()?.firstOrNull()?.let { colourOf(it) != null } == true
         if (!banner && cellsPerRow.size <= 1 && cellsPerRow.sumOf { it.size } <= 1) {
-            return blocks(element)
+            // The wrapper goes, its alignment does not. A newsletter centres its masthead by
+            // centring the one cell it sits in, so unwrapping without carrying that across
+            // is how a centred heading came out against the left margin.
+            val only = cellsPerRow.firstOrNull()?.firstOrNull()
+            return blocks(element, isCentred(element) || (only != null && isCentred(only)))
         }
 
         // Lines between rows only when this is a table of data. A single row of six figures
@@ -259,11 +304,16 @@ private class Cutter(
         val built = cellsPerRow.mapIndexed { _, cells ->
             Block.Layout.Row(
                 cells = cells.map { cell ->
+                    val fill = colourOf(cell) ?: colourOf(element)
+                    val was = linkInk
+                    if (fill != null) linkInk = inkFor(fill)
+                    val inner = blocks(cell, isCentred(cell))
+                    linkInk = was
                     Block.Layout.Cell(
-                        blocks = blocks(cell),
+                        blocks = inner,
                         weight = widthOf(cell) * (cell.attr("colspan").toIntOrNull()?.coerceIn(1, 20) ?: 1),
-                        background = colourOf(cell) ?: colourOf(element),
-                        centred = cell.attr("align").equals("center", ignoreCase = true),
+                        background = fill,
+                        centred = isCentred(cell),
                     )
                 },
                 background = colourOf(cells.firstOrNull()?.parent()) ?: colourOf(element),
@@ -304,10 +354,48 @@ private class Cutter(
         return number?.takeIf { it > 0f }?.coerceIn(1f, 10_000f) ?: 1f
     }
 
-    /** Everything under [element] as one run of inline text, structure flattened. */
+    /**
+     * Everything under [element] as one run of inline text, structure flattened.
+     *
+     * The element's own colour is applied over the result, because only its children are
+     * walked and a heading carries its colour on the heading. A span inside that sets its
+     * own colour still wins for its own characters: an outer style is the default for the
+     * run, not an override of it.
+     */
     private fun runOf(element: Element): AnnotatedString {
-        val walker = Walker(linkColor, quoteColor, onLink)
+        val walker = Walker(linkInk, quoteColor, onLink, background)
         element.childNodes().forEach { walker.node(it as Node) }
-        return walker.build()
+        val run = walker.build()
+        val colour = readableColour(element.attr("style"), background) ?: return run
+        return buildAnnotatedString {
+            pushStyle(SpanStyle(color = colour))
+            append(run)
+            pop()
+        }
     }
 }
+
+/**
+ * Whether an element holds something that stands on its own rather than only words.
+ *
+ * The question that decides between reading an element as a run of text and recursing into
+ * it. Getting it wrong in either direction is visible: too eager and a sentence in three
+ * spans becomes three paragraphs, too shy and a picture inside a link is read for its text,
+ * has none, and is never drawn.
+ */
+private fun standsAlone(element: Element): Boolean =
+    element.select("img, hr, blockquote, ul, ol, table, h1, h2, h3, h4, h5, h6").isNotEmpty()
+
+/**
+ * Whether an element asks to be centred, by either of the two ways mail says so.
+ *
+ * `align` is the old attribute and `text-align` the CSS one, and a message of any age uses
+ * both, often on different elements of the same layout. A `<center>` tag counts as well, and
+ * it is still what a lot of newsletter builders emit.
+ */
+internal fun isCentred(element: Element): Boolean =
+    element.tagName().equals("center", ignoreCase = true) ||
+        element.attr("align").equals("center", ignoreCase = true) ||
+        CENTRED.containsMatchIn(element.attr("style"))
+
+private val CENTRED = Regex("(?i)text-align\\s*:\\s*center")
