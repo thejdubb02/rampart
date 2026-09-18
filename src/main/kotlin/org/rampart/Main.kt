@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.widthIn
@@ -112,6 +113,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.rememberWindowState
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.window.Notification
 import androidx.compose.ui.window.Tray
@@ -133,6 +135,7 @@ import java.net.URI
 import java.nio.file.Files
 import java.time.Instant
 import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.CancellationException
 
@@ -655,8 +658,9 @@ private fun Reader(
      */
     var viewingTag by remember { mutableStateOf<Pair<String, String>?>(null) }
     /** Every tag each account has, read out of its local copy. */
-    var tagsSeen by remember { mutableStateOf<Map<String, List<String>>>(emptyMap()) }
+    var tagsSeen by remember { mutableStateOf<Map<String, Map<String, Int>>>(emptyMap()) }
     var tagColours by remember { mutableStateOf(Settings.tagColours()) }
+    var folded by remember { mutableStateOf(Settings.collapsedSections()) }
     /** The meeting this message is about, when it is about one. */
     var invitation by remember { mutableStateOf<Invitation?>(null) }
     /** What the answer being sent was, so the buttons say so and cannot be pressed twice. */
@@ -900,7 +904,15 @@ private fun Reader(
     }
 
     suspend fun reload() {
-        val (key, mailbox) = here ?: return
+        val (openKey, mailbox) = here ?: return
+        /*
+         * A tag belongs to the account whose sidebar it was clicked in, and that is not
+         * necessarily the account whose folder is open. Opening a tag does not move `here`,
+         * because the folder underneath stays where it was, so taking the account from
+         * `here` asked the wrong server for it: with two accounts signed in, every tag under
+         * the second one came back empty.
+         */
+        val key = viewingTag?.first ?: openKey
         /*
          * What is already on disk goes up first, and the server is asked afterwards.
          *
@@ -1162,8 +1174,12 @@ private fun Reader(
             sessions.associate { open ->
                 // The list that is open as well as the copy on disk, so tags exist on the
                 // first run and on a machine where there is nowhere safe to keep a store.
-                val kept = runCatching { open.store?.keywords() }.getOrNull().orEmpty()
-                open.key to (kept + onScreen[open.key].orEmpty()).distinct()
+                val kept = runCatching { open.store?.keywordCounts() }.getOrNull().orEmpty()
+                // Only tags the store has never heard of are counted from the screen. Adding
+                // the two would count every message in the open folder twice, and the count
+                // beside a tag is worth less than nothing if it is wrong.
+                val unseen = onScreen[open.key].orEmpty().filterNot { it in kept }
+                open.key to (kept + unseen.groupingBy { it }.eachCount())
             }
         }
     }
@@ -1420,6 +1436,80 @@ private fun Reader(
         }
     }
 
+    /**
+     * Puts a message away until later.
+     *
+     * The keyword goes on before the move, and the move is what the other clients see. Both
+     * are on the server, so the phone agrees about where the message is rather than still
+     * showing it in the inbox, which is the failure that makes a snooze worse than none.
+     */
+    fun snooze(message: Summary, until: SnoozeUntil) {
+        val key = accountOf(message) ?: return
+        scope.launch {
+            val boxes = mailboxes[key].orEmpty()
+            val folder = boxes.firstOrNull { it.name.equals(SNOOZE_FOLDER, ignoreCase = true) }?.id
+                ?: io { session(key).jmap.createMailbox(SNOOZE_FOLDER) }?.also { refreshFolders(key) }
+                ?: run { error = "This account would not make a $SNOOZE_FOLDER folder."; return@launch }
+            val due = until.dueAt(ZonedDateTime.now()).toInstant()
+            val from = sourceFolder(key)
+            if (io { session(key).jmap.setKeyword(listOf(message.id), snoozeKeyword(due), true) } == null) return@launch
+            if (io { session(key).jmap.move(listOf(message.id), folder) } == null) return@launch
+            io { session(key).store?.forget(listOf(message.id)) }
+            emails = emails.filterNot { it.id == message.id }
+            if (selected?.id == message.id) {
+                selected = null
+                body = null
+            }
+            undo = from?.let { Undoable(listOf(Move(key, listOf(message.id), it)), "Snoozed") }
+        }
+    }
+
+    /**
+     * Brings back whatever has come due, whenever Rampart happens to be looking.
+     *
+     * ponytail: this is the punctuality ceiling, and it is the protocol's rather than ours.
+     * Neither JMAP nor IMAP can schedule anything and Sieve runs only at delivery, so
+     * nothing on the server can move a message back by itself. The folder is honest while
+     * it waits; a companion server could make it punctual.
+     */
+    suspend fun wakeSnoozed(key: String) {
+        val boxes = mailboxes[key].orEmpty()
+        val folder = boxes.firstOrNull { it.name.equals(SNOOZE_FOLDER, ignoreCase = true) } ?: return
+        val inbox = folderFor("inbox", boxes) ?: return
+        val now = Instant.now()
+        val waiting = io { session(key).jmap.emails(folder.id, limit = 200) }.orEmpty()
+        val due = waiting.filter { dueBack(it.keywords, now) }
+        if (due.isEmpty()) return
+        withContext(Dispatchers.IO) {
+            due.forEach { message ->
+                snoozedIn(message.keywords)?.let {
+                    runCatching { session(key).jmap.setKeyword(listOf(message.id), it.keyword, false) }
+                }
+                // Unread on the way back, because the point of snoozing was to deal with it
+                // later and a message that returns already read returns invisible.
+                runCatching { session(key).jmap.setKeyword(listOf(message.id), "\$seen", false) }
+                runCatching { session(key).jmap.move(listOf(message.id), inbox.id) }
+            }
+        }
+        io { session(key).store?.forget(due.map { it.id }) }
+        refreshFolders(key)
+    }
+
+    /*
+     * Its own round rather than a line inside the poll above, because a local function
+     * cannot be called before it is declared and the poll is written further up.
+     *
+     * A minute is as often as it is worth asking: the messages here are ones somebody
+     * deliberately put down, so a minute either way is nothing, and the folder shows what is
+     * due in the meantime.
+     */
+    LaunchedEffect(sessions) {
+        while (true) {
+            sessions.forEach { runCatching { wakeSnoozed(it.key) } }
+            delay(60_000)
+        }
+    }
+
     /** Starring one message, from the reader or from a row. */
     fun starOne(message: Summary) {
         val key = accountOf(message) ?: return
@@ -1555,6 +1645,7 @@ private fun Reader(
     }
 
     val rowActions = RowActions(
+        snooze = { message, until -> snooze(message, until) },
         reply = { message, all ->
             val key = accountOf(message)
             if (key != null) {
@@ -1604,6 +1695,7 @@ private fun Reader(
         val junked = inJunk(message)
         MessageActions(
             archive = moveTo("archive"),
+            snooze = { until -> snooze(message, until) },
             trash = moveTo("trash"),
             junk = if (junked) null else moveTo("junk"),
             notJunk = if (junked) moveTo("inbox") else null,
@@ -2018,7 +2110,7 @@ private fun Reader(
                 },
                 here = here,
                 tags = remember(tagsSeen, tagColours) {
-                    tagsSeen.mapValues { (_, keywords) -> tagRows(keywords, tagColours) }
+                    tagsSeen.mapValues { (_, counts) -> tagRows(counts.keys, tagColours, counts) }
                 },
                 hereTag = viewingTag,
                 onSelectTag = { key, keyword ->
@@ -2029,6 +2121,11 @@ private fun Reader(
                 onTagColour = { keyword, colour ->
                     Settings.setTagColour(keyword, colour)
                     tagColours = Settings.tagColours()
+                },
+                folded = folded,
+                onFold = { section ->
+                    folded = if (section in folded) folded - section else folded + section
+                    Settings.setCollapsedSections(folded)
                 },
                 dragAt = dragAt,
                 onTagBounds = { key, keyword, bounds -> tagBounds[key to keyword] = bounds },
@@ -2629,6 +2726,10 @@ internal fun Sidebar(
     onSelectTag: (String, String) -> Unit = { _, _ -> },
     /** A colour chosen for a tag, or null to put it back to the one from its name. */
     onTagColour: (String, Long?) -> Unit = { _, _ -> },
+    /** The sections folded away, by the ids [foldFolders], [foldTags] and [foldTag] make. */
+    folded: Set<String> = emptySet(),
+    /** Folds a section away, or opens it again. */
+    onFold: (String) -> Unit = {},
     /** Where the pointer is while a message is being dragged, in window coordinates. */
     dragAt: Offset? = null,
     /** Where each tag row ended up, so a drag that ends over one can find it. */
@@ -2699,23 +2800,19 @@ internal fun Sidebar(
                                 )
                             }
                         } else {
-                            Text(
-                                shortAccountName(account.name, account.email).uppercase(),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.outline,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.fillMaxWidth().padding(
-                                    start = 10.dp,
-                                    end = 10.dp,
-                                    top = if (index == 0) 4.dp else 16.dp,
-                                    bottom = 4.dp,
-                                ),
+                            GroupHeading(
+                                text = shortAccountName(account.name, account.email).uppercase(),
+                                open = foldFolders(account.key) !in folded,
+                                onClick = { onFold(foldFolders(account.key)) },
+                                top = if (index == 0) 4.dp else 16.dp,
                             )
                         }
                     }
                 }
-                items(nested(account.mailboxes), key = { "${account.key}/${it.mailbox.id}" }) { row ->
+                // One account has no heading to fold, so its folders are always shown.
+                val folders = if (accounts.size > 1 && foldFolders(account.key) in folded) emptyList()
+                else nested(account.mailboxes)
+                items(folders, key = { "${account.key}/${it.mailbox.id}" }) { row ->
                     FolderRow(
                         mailbox = row.mailbox,
                         depth = row.depth,
@@ -2733,17 +2830,27 @@ internal fun Sidebar(
                 val rows = if (collapsed) emptyList() else tags[account.key].orEmpty()
                 if (rows.isNotEmpty()) {
                     item(key = "${account.key}/tags-heading") {
-                        Text(
-                            "TAGS",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.fillMaxWidth().padding(start = 10.dp, top = 12.dp, bottom = 4.dp),
+                        GroupHeading(
+                            text = "TAGS",
+                            open = foldTags(account.key) !in folded,
+                            onClick = { onFold(foldTags(account.key)) },
+                            top = 12.dp,
                         )
                     }
-                    items(rows, key = { "${account.key}/tag/${it.keyword}" }) { row ->
+                    val shown = if (foldTags(account.key) in folded) emptyList()
+                    else visibleTags(rows, account.key, folded)
+                    items(shown, key = { "${account.key}/tag/${it.keyword}" }) { row ->
                         TagLine(
                             row = row,
                             selected = hereTag?.first == account.key && hereTag.second == row.keyword,
+                            // A branch with something under it folds when its own chevron is
+                            // clicked, and opens the list when its name is.
+                            open = if (rows.any { it.keyword.startsWith(row.keyword + NEST) }) {
+                                foldTag(account.key, row.keyword) !in folded
+                            } else {
+                                null
+                            },
+                            onFold = { onFold(foldTag(account.key, row.keyword)) },
                             onClick = { if (row.real) onSelectTag(account.key, row.keyword) },
                             onColour = { onTagColour(row.keyword, it) },
                             dragAt = dragAt,
@@ -2956,6 +3063,44 @@ private fun FolderDialog(
     )
 }
 
+/** A section name in the sidebar, with the chevron that folds what is under it. */
+@Composable
+private fun GroupHeading(text: String, open: Boolean, onClick: () -> Unit, top: Dp) {
+    Row(
+        Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).clickable(onClick = onClick)
+            .padding(start = 10.dp, end = 10.dp, top = top, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.outline,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        Spacer(Modifier.width(6.dp))
+        Chevron(open)
+    }
+}
+
+/**
+ * Points down when the section is open and right when it is folded.
+ *
+ * One icon turned rather than two drawn. The pack has a chevron and a quarter turn is what
+ * separates the two states anyway, so a second icon would be the same path with the numbers
+ * swapped, in three packs.
+ */
+@Composable
+private fun Chevron(open: Boolean) {
+    Icon(
+        RampartIcons.Expand,
+        contentDescription = if (open) "Fold away" else "Open",
+        tint = MaterialTheme.colorScheme.outline,
+        modifier = Modifier.size(13.dp).rotate(if (open) 90f else 0f),
+    )
+}
+
 /**
  * One tag in the sidebar.
  *
@@ -2975,6 +3120,9 @@ private fun TagLine(
     selected: Boolean,
     onClick: () -> Unit,
     onColour: (Long?) -> Unit,
+    /** Whether this branch is open, or null on a tag with nothing under it. */
+    open: Boolean? = null,
+    onFold: () -> Unit = {},
     /**
      * Where the pointer is while a message is being dragged, in window coordinates, or
      * null when nothing is being dragged.
@@ -3033,7 +3181,16 @@ private fun TagLine(
                 onClick = { menu = false; onColour(null) },
             )
         }
-        Box(Modifier.size(10.dp).background(Color(row.color), CircleShape))
+        if (open == null) {
+            Box(Modifier.size(10.dp).background(Color(row.color), CircleShape))
+        } else {
+            // The chevron takes the dot's place rather than sitting beside it: a branch is
+            // a heading, and two markers on one row is one more than the row can carry.
+            Box(
+                Modifier.size(15.dp).clip(MaterialTheme.shapes.small).clickable(onClick = onFold),
+                contentAlignment = Alignment.Center,
+            ) { Chevron(open) }
+        }
         Spacer(Modifier.width(10.dp))
         Text(
             row.label.substringAfterLast('/'),
@@ -3042,7 +3199,20 @@ private fun TagLine(
             else MaterialTheme.colorScheme.outline,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
+            // Fills, so the count is pinned to the right edge in the same column the folder
+            // counts are in rather than trailing the word at whatever width it happens to be.
+            modifier = Modifier.weight(1f),
         )
+        // How much is behind the tag, which is what makes it worth clicking. Nothing at all
+        // when it is empty, rather than a zero: a row of noughts is a list of words again.
+        if (row.count > 0) {
+            Spacer(Modifier.width(8.dp))
+            Text(
+                row.count.toString(),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
     }
 }
 
@@ -3721,6 +3891,12 @@ private fun RowMenu(message: Summary, actions: RowActions, open: Boolean, onClos
         }
         actions.star?.let { entry(if (message.flagged) "Remove star" else "Star") { it(message) } }
         actions.archive?.let { entry("Archive") { it(message) } }
+        actions.snooze?.let { put ->
+            // The four named times rather than a submenu with a calendar in it: the whole
+            // value of a snooze is that it is one gesture.
+            HorizontalDivider()
+            SnoozeUntil.entries.forEach { until -> entry(until.label) { put(message, until) } }
+        }
         if (actions.junk != null || actions.notJunk != null || actions.trash != null) {
             HorizontalDivider()
             if (actions.isJunk?.invoke(message) == true) {
@@ -3745,10 +3921,13 @@ internal data class RowActions(
     val trash: ((Summary) -> Unit)? = null,
     val star: ((Summary) -> Unit)? = null,
     val markRead: ((Summary, read: Boolean) -> Unit)? = null,
+    /** Putting it away until later. Null on an account with nowhere to put it. */
+    val snooze: ((Summary, SnoozeUntil) -> Unit)? = null,
 )
 
 internal data class MessageActions(
     val archive: (() -> Unit)? = null,
+    val snooze: ((SnoozeUntil) -> Unit)? = null,
     val trash: (() -> Unit)? = null,
     val junk: (() -> Unit)? = null,
     /** Out of Junk again. Present exactly when [junk] is not, never both and never neither. */
@@ -3936,6 +4115,15 @@ internal fun Message(
                         Icon(RampartIcons.More, contentDescription = "More", modifier = Modifier.size(17.dp))
                     }
                     DropdownMenu(more, onDismissRequest = { more = false }) {
+                        actions.snooze?.let { put ->
+                            SnoozeUntil.entries.forEach { until ->
+                                DropdownMenuItem(
+                                    text = { Text(until.label) },
+                                    onClick = { more = false; put(until) },
+                                )
+                            }
+                            HorizontalDivider()
+                        }
                         DropdownMenuItem(
                             text = { Text(if (source == null) "View source" else "Back to the message") },
                             onClick = { more = false; onSource() },

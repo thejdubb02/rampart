@@ -183,9 +183,9 @@ yet.
 
 Items 1 to 7 of the original order shipped between 2026-09-17 and 2026-09-18. On
 2026-09-18 the message body moved to a real engine, identities and sending, tags and
-calendar invitations all finished, and the mailbox dashboard shipped, which is the first
-screen Rampart has that webmail has no answer to. What is left, in the order it will be
-missed:
+calendar invitations all finished, the mailbox dashboard shipped, which is the first
+screen Rampart has that webmail has no answer to, and then the trust signals and snooze.
+What is left, in the order it will be missed:
 
 1. **Encryption** (2.10). S/MIME and PGP. Last on purpose, and the one place where a
    half-built implementation is worse than none.

@@ -222,13 +222,28 @@ internal class Store(private val connection: Connection) : AutoCloseable {
      * a folder you have already opened. What is here is what has been read, which is what
      * a person has actually seen and tagged.
      */
-    fun keywords(): Set<String> = connection.prepareStatement(
-        "SELECT DISTINCT keywords FROM message WHERE keywords <> ''",
+    fun keywords(): Set<String> = keywordCounts().keys
+
+    /**
+     * Every keyword in the local copy and how many messages carry it.
+     *
+     * A sidebar full of tags that say nothing about how much is behind them is a list of
+     * words, so the count is what makes a tag worth clicking. Counted here rather than with
+     * a query per tag: there is one `keywords` column and thirty tags, so one pass over the
+     * column is thirty round trips saved.
+     *
+     * Case-insensitive, because another client storing `invoices` where this one wrote
+     * `Invoices` is one tag with two spellings, not two tags with half the mail each.
+     */
+    fun keywordCounts(): Map<String, Int> = connection.prepareStatement(
+        "SELECT keywords FROM message WHERE keywords <> ''",
     ).use { s ->
         s.executeQuery().use { rows ->
-            val found = sortedSetOf<String>(String.CASE_INSENSITIVE_ORDER)
+            val found = java.util.TreeMap<String, Int>(String.CASE_INSENSITIVE_ORDER)
             while (rows.next()) {
-                rows.getString(1).split(' ').filterTo(found) { it.isNotBlank() }
+                rows.getString(1).split(' ').forEach { keyword ->
+                    if (keyword.isNotBlank()) found.merge(keyword, 1, Int::plus)
+                }
             }
             found
         }

@@ -562,9 +562,20 @@ than a calendar view, and they work against any server.
 
 ### 2.10 Snooze
 
-Only once it can be made server-truthful, through Sieve or a companion, so the message
-does not come back from the dead on the phone. A snooze that only one device knows about
-is worse than none.
+**Shipped 2026-09-18.** Later today, tomorrow morning, this weekend, next week, from the
+row menu and from the reader. The message moves into a real `Snoozed` folder and carries a
+keyword saying when it is due, so every client agrees about where it is: the condition set
+here was that it must be server-truthful, and a folder plus a keyword is exactly that.
+Verified against Stalwart on 2026-09-18, which stores `$snooze-1789742400` verbatim and
+hands it back unchanged.
+
+It comes back unread, because a message that returns already read returns invisible.
+
+The ceiling is punctuality, and it is the protocol's rather than ours. Neither JMAP nor
+IMAP can schedule anything and Sieve runs only at delivery, so nothing on the server can
+move a message back by itself: Rampart sweeps the folder every minute it is running, and
+anything due while it is shut comes back at the next start. The folder is honest in the
+meantime. A companion server is where punctuality would come from if it is ever wanted.
 
 ### 2.11 The mailbox dashboard
 

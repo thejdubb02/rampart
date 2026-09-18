@@ -223,4 +223,64 @@ class TagsTest {
         val luminance = 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
         return 1.05 / (luminance + 0.05)
     }
+
+    // ---- counts and folding ------------------------------------------------------------
+
+    @Test
+    fun `a tag carries how much mail is behind it, and a branch sums what is under it`() {
+        val rows = tagRows(
+            listOf("Clients/Acme", "Clients/Blossom", "Billing"),
+            counts = mapOf("Clients/Acme" to 4, "Clients/Blossom" to 2, "Billing" to 9),
+        ).associateBy { it.keyword }
+
+        assertEquals(9, rows.getValue("Billing").count)
+        assertEquals(4, rows.getValue("Clients/Acme").count)
+        // Nothing is tagged with the bare word, so the level only exists as a heading. Its
+        // count is still the honest answer to how much client mail there is.
+        assertEquals(6, rows.getValue("Clients").count)
+        assertTrue(!rows.getValue("Clients").real)
+    }
+
+    @Test
+    fun `two spellings of one tag are one tag with one count`() {
+        val rows = tagRows(listOf("Invoices"), counts = mapOf("Invoices" to 3, "invoices" to 2))
+        assertEquals(5, rows.single().count)
+    }
+
+    @Test
+    fun `a tag nobody has used shows no number rather than a nought`() {
+        assertEquals(0, tagRows(listOf("Billing")).single().count)
+    }
+
+    @Test
+    fun `a name that starts the same is not underneath`() {
+        // Clientside is not a child of Clients, and summing on the bare prefix would put
+        // its mail in somebody else's total.
+        val rows = tagRows(
+            listOf("Clients/Acme", "Clientside"),
+            counts = mapOf("Clients/Acme" to 4, "Clientside" to 7),
+        ).associateBy { it.keyword }
+        assertEquals(4, rows.getValue("Clients").count)
+    }
+
+    @Test
+    fun `folding a branch hides everything under it, not only its children`() {
+        val rows = tagRows(listOf("Clients/Acme/Renewals", "Clients/Blossom", "Billing"))
+        assertEquals(5, rows.size)
+
+        val open = visibleTags(rows, "a", emptySet())
+        assertEquals(rows, open)
+
+        val shut = visibleTags(rows, "a", setOf(foldTag("a", "Clients")))
+        // The branch itself stays, so it can be opened again. Two levels below it do not.
+        assertEquals(listOf("Billing", "Clients"), shut.map { it.keyword }.sorted())
+    }
+
+    @Test
+    fun `folding under one account leaves the other account alone`() {
+        val rows = tagRows(listOf("Clients/Acme"))
+        assertEquals(rows.size, visibleTags(rows, "b", setOf(foldTag("a", "Clients"))).size)
+        // And the id is case-insensitive, because the tag's own spelling is.
+        assertEquals(foldTag("a", "Clients"), foldTag("a", "clients"))
+    }
 }

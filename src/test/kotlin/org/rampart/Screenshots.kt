@@ -294,8 +294,13 @@ class Screenshots {
                         ACCOUNTS[0].key to tagRows(
                             listOf("invoices", "clients/acme", "clients/borde", "urgent"),
                             mapOf("urgent" to 0xFFB23A48L),
+                            mapOf("invoices" to 31, "clients/acme" to 12, "clients/borde" to 4, "urgent" to 2),
                         ),
+                        ACCOUNTS[1].key to tagRows(listOf("receipts"), counts = mapOf("receipts" to 7)),
                     ),
+                    // One branch open with its counts, one folded, and the second account's
+                    // folders folded away: the three things the chevrons do, in one frame.
+                    folded = setOf(foldFolders(ACCOUNTS[1].key)),
                     hereTag = null,
                 )
                 VerticalDivider()

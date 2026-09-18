@@ -33,6 +33,14 @@ internal data class TagRow(
     val color: Long,
     val depth: Int,
     val real: Boolean,
+    /**
+     * How much mail carries this tag, a level's own children included.
+     *
+     * A heading that said nothing while everything under it had a number would read as an
+     * empty branch, and summing is also the honest answer: `Clients` is how much client
+     * mail there is, whether or not anything was tagged with the bare word.
+     */
+    val count: Int = 0,
 )
 
 /**
@@ -42,8 +50,15 @@ internal data class TagRow(
  * wherever one is missing. Case-insensitive throughout: another client storing `invoices`
  * where this one wrote `Invoices` must not produce two branches.
  */
-internal fun tagRows(keywords: Collection<String>, chosen: Map<String, Long> = emptyMap()): List<TagRow> {
+internal fun tagRows(
+    keywords: Collection<String>,
+    chosen: Map<String, Long> = emptyMap(),
+    /** How many messages carry each keyword. Absent counts are zero, which draws nothing. */
+    counts: Map<String, Int> = emptyMap(),
+): List<TagRow> {
     val real = keywords.filterNot(::isReserved).associateBy { it.lowercase() }
+    val tally = HashMap<String, Int>(counts.size)
+    counts.forEach { (keyword, n) -> tally.merge(keyword.lowercase(), n, Int::plus) }
     // Every level that has to exist, whether or not anything is tagged with it.
     val levels = sortedSetOf<String>(String.CASE_INSENSITIVE_ORDER)
     real.values.forEach { keyword ->
@@ -58,6 +73,10 @@ internal fun tagRows(keywords: Collection<String>, chosen: Map<String, Long> = e
             color = colorOf(exact ?: path, chosen),
             depth = path.count { it == NEST },
             real = exact != null,
+            count = tally.entries.sumOf { (keyword, n) ->
+                val lower = path.lowercase()
+                if (keyword == lower || keyword.startsWith(lower + NEST)) n else 0
+            },
         )
     }
 }
@@ -70,6 +89,15 @@ private val RESERVED = arrayOf(
     "\$seen", "\$flagged", "\$draft", "\$answered", "\$forwarded",
     "\$junk", "\$notjunk", "\$phishing", "\$deleted", "\$recent",
 )
+
+/**
+ * Keywords that are Rampart's own working, not somebody's label.
+ *
+ * A prefix rather than a name, because the snooze keyword carries its due time in it and
+ * there is therefore a different one on every snoozed message. Shown as a tag it would read
+ * as "Snooze 1789742400", which is furniture leaking onto the furniture.
+ */
+private val MACHINERY = arrayOf("\$snooze-")
 
 /** The user's own tags, in a stable order, from the keywords on a message. */
 internal fun tagsOf(keywords: Collection<String>, chosen: Map<String, Long> = emptyMap()): List<Tag> {
@@ -103,7 +131,8 @@ internal fun validKeyword(text: String): String? {
 }
 
 private fun isReserved(keyword: String): Boolean =
-    RESERVED.any { keyword.equals(it, ignoreCase = true) }
+    RESERVED.any { keyword.equals(it, ignoreCase = true) } ||
+        MACHINERY.any { keyword.startsWith(it, ignoreCase = true) }
 
 /** Each level of the path made readable, the separator kept. */
 private fun labelOf(keyword: String): String =
@@ -149,3 +178,29 @@ internal val TAG_COLOURS = listOf(
     0xFF2F5D96L, 0xFF5B4B94L, 0xFF8A3A72L, 0xFF6B5330L,
     0xFF7A2E2EL, 0xFF3F7A4FL, 0xFF35507AL, 0xFF6E6E6EL,
 )
+
+/*
+ * What a folded section is called, so the same name is written and read in one place.
+ *
+ * The account key is in each of them because two accounts have their own sidebars stacked
+ * in one column: folding the tags under one must not fold the tags under the other.
+ */
+internal fun foldFolders(account: String) = "folders/$account"
+
+internal fun foldTags(account: String) = "tags/$account"
+
+internal fun foldTag(account: String, keyword: String) = "tag/$account/${keyword.lowercase()}"
+
+/**
+ * The tag rows to draw, with anything under a folded branch left out.
+ *
+ * A branch folded two levels up hides everything below it, not only its own children, which
+ * is why this asks about every ancestor of a row rather than only its parent.
+ */
+internal fun visibleTags(rows: List<TagRow>, account: String, folded: Set<String>): List<TagRow> =
+    rows.filter { row ->
+        val parts = row.keyword.split(NEST)
+        (1 until parts.size).none { at ->
+            foldTag(account, parts.take(at).joinToString(NEST.toString())) in folded
+        }
+    }

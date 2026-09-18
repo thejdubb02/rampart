@@ -129,6 +129,21 @@ object Settings {
         put("tagColours", JsonObject(current))
     }
 
+    /**
+     * The sidebar sections that are folded away.
+     *
+     * Kept as the set that is closed rather than the set that is open, so a tag or an
+     * account that appears later is open by default. The other way round, every new tag
+     * would arrive folded and look like it had not arrived at all.
+     */
+    fun collapsedSections(): Set<String> =
+        (read()["collapsedSections"] as? JsonArray)
+            ?.mapNotNull { it.jsonPrimitive.contentOrNull }?.toSet() ?: emptySet()
+
+    fun setCollapsedSections(sections: Set<String>) = write {
+        put("collapsedSections", JsonArray(sections.sorted().map(::JsonPrimitive)))
+    }
+
     /** Which icon pack, kept apart from the theme so the two can be chosen separately. */
     fun iconPack(): String = read()["iconPack"]?.jsonPrimitive?.contentOrNull.orEmpty()
 
