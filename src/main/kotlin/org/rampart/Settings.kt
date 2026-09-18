@@ -97,6 +97,17 @@ object Settings {
 
     fun setArchiveBy(value: String) = write { put("archiveBy", JsonPrimitive(value)) }
 
+    /**
+     * Whether the sign-off goes above the quoted original rather than under all of it.
+     *
+     * Off by default, which is where every sign-off has been until now and where webmail
+     * has it set. See [signed] for what each of the two actually looks like.
+     */
+    fun signatureAboveQuote(): Boolean = read()["signatureAboveQuote"]?.jsonPrimitive?.booleanOrNull ?: false
+
+    fun setSignatureAboveQuote(value: Boolean) =
+        write { put("signatureAboveQuote", JsonPrimitive(value)) }
+
     /** Which icon pack, kept apart from the theme so the two can be chosen separately. */
     fun iconPack(): String = read()["iconPack"]?.jsonPrimitive?.contentOrNull.orEmpty()
 

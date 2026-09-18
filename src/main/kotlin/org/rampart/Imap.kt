@@ -695,6 +695,7 @@ internal fun bodyFromHeaders(headers: List<Pair<String, String>>): Body {
         references = values("References").flatMap(::messageIdsIn),
         to = values("To").flatMap(::addressesFrom),
         cc = values("Cc").flatMap(::addressesFrom),
+        replyTo = values("Reply-To").flatMap(::addressesFrom),
         listUnsubscribe = first("List-Unsubscribe"),
         listUnsubscribePost = first("List-Unsubscribe-Post"),
         authenticationResults = values("Authentication-Results"),

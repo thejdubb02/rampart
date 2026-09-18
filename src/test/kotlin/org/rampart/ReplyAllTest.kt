@@ -76,4 +76,55 @@ class ReplyAllTest {
         assertEquals("<a@x>", draft.inReplyTo)
         assertEquals(listOf("<root@x>", "<a@x>"), draft.references)
     }
+
+    @Test
+    fun `a Reply-To is answered instead of the From address`() {
+        // A mailing list, a ticketing system and a no-reply sender all set this header, and
+        // all three are cases where answering the From address reaches nobody.
+        val list = body.copy(replyTo = listOf("list@example.org"))
+        assertEquals("list@example.org", replyTo(message, list, "justin@willhitestrategy.com").to)
+    }
+
+    @Test
+    fun `Reply all keeps everyone, with the Reply-To first`() {
+        val list = body.copy(replyTo = listOf("list@example.org"))
+        val draft = replyTo(message, list, "justin@willhitestrategy.com", all = true, mine = mine)
+
+        // The sender's own address is deliberately not carried over: they asked to be
+        // answered somewhere else, and the list already reaches them.
+        assertEquals("list@example.org, Alex@Example.org", draft.to)
+        assertEquals("sam@example.org", draft.cc)
+    }
+
+    @Test
+    fun `an empty Reply-To falls back to the sender`() {
+        val blank = body.copy(replyTo = listOf("", "   "))
+        assertEquals("dana@example.org", replyTo(message, blank, "justin@willhitestrategy.com").to)
+    }
+
+    @Test
+    fun `a plus tag does not make an address someone else`() {
+        // Mail to justin+invoices@ is mail to justin@, so it is dropped from Reply all the
+        // same way, and Reply all is not offered on a message that only reached you twice.
+        val tagged = body.copy(
+            to = listOf("justin+invoices@willhitestrategy.com"),
+            cc = listOf("justin@willhitestrategy.com"),
+        )
+        val draft = replyTo(message, tagged, "justin@willhitestrategy.com", all = true, mine = mine)
+
+        assertEquals("dana@example.org", draft.to)
+        assertEquals("", draft.cc)
+        assertFalse(hasOtherRecipients(message, tagged, mine))
+    }
+
+    @Test
+    fun `the address the sender wrote is the address that is used`() {
+        // Matching strips a plus tag; sending never does. Answering a list address that
+        // carries one and dropping it would deliver somewhere the sender never named.
+        val tagged = body.copy(replyTo = listOf("support+ticket-4182@example.org"))
+        assertEquals(
+            "support+ticket-4182@example.org",
+            replyTo(message, tagged, "justin@willhitestrategy.com").to,
+        )
+    }
 }

@@ -126,13 +126,21 @@ internal fun replyTo(
     val quoted = original.trim().lineSequence().joinToString("\n") { if (it.isEmpty()) ">" else "> $it" }
     val subject = summary.subject.trim()
     val answered = body?.messageId?.firstOrNull()
-    val ours = (mine + from).map { it.trim().lowercase() }.filterTo(mutableSetOf()) { it.isNotEmpty() }
+    val ours = (mine + from).map(::forMatching).filterTo(mutableSetOf()) { it.isNotEmpty() }
+    /*
+     * **Reply-To wins over From, because that is what it is for.** A mailing list sets it to
+     * the list, a ticketing system to the address that files the answer against the ticket,
+     * a no-reply sender to the one address that is read. Answering the From address in any
+     * of those sends the reply somewhere nobody looks, and the sender finds out rather than
+     * you.
+     */
+    val answerTo = body?.replyTo.orEmpty().filter { it.isNotBlank() }
+        .ifEmpty { listOf(summary.fromEmail) }
     // Answering your own message is the case where dropping your own address leaves nobody
     // to send to, so the sender goes back in rather than the reply opening addressed to no one.
-    val to = if (!all) listOf(summary.fromEmail)
-    else dedupe(listOf(summary.fromEmail) + body?.to.orEmpty(), ours)
-        .ifEmpty { listOf(summary.fromEmail) }
-    val cc = if (!all) emptyList() else dedupe(body?.cc.orEmpty(), ours + to.map { it.lowercase() })
+    val to = if (!all) answerTo
+    else dedupe(answerTo + body?.to.orEmpty(), ours).ifEmpty { answerTo }
+    val cc = if (!all) emptyList() else dedupe(body?.cc.orEmpty(), ours + to.map(::forMatching))
     return Draft(
         from = from,
         to = to.joinToString(", "),
@@ -151,15 +159,20 @@ internal fun replyTo(
  * second button that does the same thing as the first is a button people click by mistake.
  */
 internal fun hasOtherRecipients(summary: Summary, body: Body?, mine: Set<String>): Boolean {
-    val ours = (mine + summary.fromEmail).map { it.trim().lowercase() }.filter { it.isNotEmpty() }.toSet()
+    val ours = (mine + summary.fromEmail).map(::forMatching).filter { it.isNotEmpty() }.toSet()
     return dedupe(body?.to.orEmpty() + body?.cc.orEmpty(), ours).isNotEmpty()
 }
 
-/** Addresses in the order they were written, without repeats and without [exclude]. */
+/**
+ * Addresses in the order they were written, without repeats and without [exclude].
+ *
+ * Compared through [forMatching], so two spellings of one mailbox count as one. The address
+ * kept is the one the sender actually wrote.
+ */
 private fun dedupe(addresses: List<String>, exclude: Set<String>): List<String> {
     val seen = exclude.toMutableSet()
     return addresses.mapNotNull { address ->
-        val key = address.trim().lowercase()
+        val key = forMatching(address)
         if (key.isEmpty() || !seen.add(key)) null else address.trim()
     }
 }
@@ -766,26 +779,47 @@ internal fun draftOf(summary: Summary, body: Body?, from: String): Draft = Draft
 )
 
 /**
- * Appends the sign-off, after the quoted text.
+ * Puts the sign-off on the draft, under what is being written.
  *
- * Below the quote rather than above it, which is what Justin's webmail is already set to
- * (`signaturePosition = "below_quote"`), and it is also what makes the HTML part possible:
- * a block on the end can be swapped for its HTML version by taking it off the end, where
- * one buried between the reply and the quote would need finding first.
+ * [aboveQuote] decides whether "under" means under the reply or under the whole thing. Both
+ * are in use and neither is wrong: below the quote keeps a long sign-off out of the way,
+ * above it keeps it with the words it belongs to, which is what most people expect on a
+ * reply. Webmail calls the same setting `signaturePosition`, and Rampart reads its own
+ * rather than the server's because it is a preference of the person, not of the mailbox.
  *
  * A reopened draft already has one. Adding another is the copy people then send by mistake.
  */
-internal fun signed(draft: Draft, signature: String, html: String = ""): Draft {
+internal fun signed(
+    draft: Draft,
+    signature: String,
+    html: String = "",
+    aboveQuote: Boolean = false,
+): Draft {
     if (signature.isBlank()) return draft
     if (draft.body.lineSequence().any { it == "-- " }) return draft
+    val quote = if (aboveQuote) quoteStart(draft.body) else -1
     return draft.copy(
-        body = draft.body.trimEnd() + signatureBlock(signature),
+        body = if (quote < 0) draft.body.trimEnd() + signatureBlock(signature)
+        else draft.body.take(quote).trimEnd() + signatureBlock(signature) +
+            "\n\n" + draft.body.substring(quote),
         textSignature = signature.trimEnd(),
         htmlSignature = html,
     )
 }
 
-/** The separator and the sign-off, exactly as [signed] appends it and [htmlBodyOf] removes it. */
+/**
+ * Where the quoted original starts, or -1 when the draft has none.
+ *
+ * Found in the text rather than recorded on the draft, because the only moment it is needed
+ * is the one where the draft was just built and its body is nothing but the quote. Both
+ * builders open the same way: [replyTo] with the attribution line, [forwardOf] with the
+ * forwarded-message rule.
+ */
+internal fun quoteStart(body: String): Int = QUOTE_OPENS.find(body)?.range?.first ?: -1
+
+private val QUOTE_OPENS = Regex("^(.*\\bwrote:|-{3,} Forwarded message -{3,})\\s*$", RegexOption.MULTILINE)
+
+/** The separator and the sign-off, exactly as [signed] writes it and [htmlBodyOf] takes it out. */
 internal fun signatureBlock(signature: String) = "\n\n-- \n" + signature.trimEnd()
 
 /**
@@ -795,15 +829,23 @@ internal fun signatureBlock(signature: String) = "\n\n-- \n" + signature.trimEnd
  * neither is sent as text alone, which is the right shape for a one line reply and is what
  * every mail client does.
  *
- * The text sign-off is taken back off the end and the HTML one put in its place, so the two
+ * The text sign-off is taken back out and the HTML one put **where it was**, so the two
  * parts say the same thing rather than one carrying a formatted block and the other a copy
- * of it in plain text underneath.
+ * of it in plain text somewhere else. Where it was is not always the end: see [signed].
+ *
+ * With no HTML sign-off there is nothing to swap, and the text one stays where it is. It
+ * used to be cut out and never put back, which sent an HTML part that was the message minus
+ * its sign-off while the text part had one.
  */
 internal fun htmlBodyOf(body: String, textSignature: String, htmlSignature: String): String? {
-    val typed = if (textSignature.isBlank()) body
-    else body.removeSuffix(signatureBlock(textSignature))
-    if (htmlSignature.isBlank() && markupToPlain(typed) == typed) return null
-    return htmlOf(typed) + htmlSignature
+    val block = if (textSignature.isBlank()) "" else signatureBlock(textSignature)
+    val at = if (block.isEmpty()) -1 else body.indexOf(block)
+    if (htmlSignature.isBlank()) {
+        val typed = if (at < 0) body else body.removeRange(at, at + block.length)
+        return if (markupToPlain(typed) == typed) null else htmlOf(body)
+    }
+    if (at < 0) return htmlOf(body) + htmlSignature
+    return htmlOf(body.take(at)) + htmlSignature + htmlOf(body.substring(at + block.length))
 }
 
 /**
@@ -857,10 +899,27 @@ internal fun pickFiles(): List<Path> {
  */
 internal fun identityFor(body: Body?, mine: List<String>, fallback: String): String {
     if (mine.isEmpty()) return fallback
-    val known = mine.associateBy { it.trim().lowercase() }
-    fun match(addresses: List<String>): String? = addresses.asSequence()
-        // The header carries "Name <address>" as often as a bare address.
-        .mapNotNull { known[it.substringAfterLast('<').substringBefore('>').trim().lowercase()] }
-        .firstOrNull()
+    val known = mine.associateBy(::forMatching)
+    fun match(addresses: List<String>): String? =
+        addresses.asSequence().mapNotNull { known[forMatching(it)] }.firstOrNull()
     return match(body?.to.orEmpty()) ?: match(body?.cc.orEmpty()) ?: fallback
+}
+
+/**
+ * An address reduced to what makes it yours, for comparing two of them.
+ *
+ * Takes the address out of "Name <address>", which is how a header writes it as often as
+ * not, lowercases it because case is not part of an address, and **drops a `+tag` suffix**.
+ *
+ * Sub-addressing is the whole reason for that last part. Mail to `you+invoices@example.org`
+ * is mail to you, and a client that cannot see that answers it as the wrong identity and
+ * then copies you in on your own reply. Only for matching: the address is never rewritten,
+ * so a reply still goes to exactly what the sender wrote.
+ */
+internal fun forMatching(address: String): String {
+    val bare = address.substringAfterLast('<').substringBefore('>').trim().lowercase()
+    val at = bare.lastIndexOf('@')
+    if (at <= 0) return bare
+    val local = bare.substring(0, at).substringBefore('+')
+    return local + bare.substring(at)
 }

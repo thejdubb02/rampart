@@ -302,6 +302,32 @@ private fun ReadingPage() {
 
     Spacer(Modifier.height(18.dp))
     Section(
+        "Where your sign-off goes",
+        "On a reply or a forward. A new message has no quote, so it makes no difference there.",
+    )
+    var aboveQuote by remember { mutableStateOf(Settings.signatureAboveQuote()) }
+    listOf(
+        false to "Under everything, below the quoted message",
+        true to "Under what I wrote, above the quoted message",
+    ).forEach { (value, label) ->
+        Row(
+            Modifier.fillMaxWidth().clickable {
+                aboveQuote = value
+                Settings.setSignatureAboveQuote(value)
+            }.padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(selected = aboveQuote == value, onClick = {
+                aboveQuote = value
+                Settings.setSignatureAboveQuote(value)
+            })
+            Spacer(Modifier.width(8.dp))
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+
+    Spacer(Modifier.height(18.dp))
+    Section(
         "Archiving",
         "A folder with fifteen years of mail in it is a folder nobody opens.",
     )

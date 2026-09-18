@@ -132,6 +132,15 @@ data class Body(
     /** Everyone the message was addressed to, which is what Reply all needs. */
     val to: List<String> = emptyList(),
     val cc: List<String> = emptyList(),
+    /**
+     * Where the sender asked to be answered, when that is not where it came from.
+     *
+     * Ignoring this sends the reply to the wrong place, and the sender is the one who finds
+     * out. A mailing list sets it to the list. A ticketing system sets it to the address
+     * that files the answer against the ticket. A no-reply sender sets it to the one address
+     * that is read. In every one of those the From address is not the answer.
+     */
+    val replyTo: List<String> = emptyList(),
     /** The raw List-Unsubscribe header, when the sender offered a way off the list. */
     val listUnsubscribe: String? = null,
     val listUnsubscribePost: String? = null,
@@ -349,7 +358,7 @@ internal class Jmap private constructor(
                 putJsonArray("ids") { add(id) }
                 putJsonArray("properties") {
                     add("htmlBody"); add("textBody"); add("bodyValues")
-                    add("messageId"); add("references"); add("to"); add("cc")
+                    add("messageId"); add("references"); add("to"); add("cc"); add("replyTo")
                     // Asked for by name. These are not JMAP properties, they are ordinary
                     // headers, and a header nobody asks for is not sent.
                     add("header:List-Unsubscribe:asText")
@@ -389,6 +398,7 @@ internal class Jmap private constructor(
             messageId = ids("messageId"),
             references = ids("references"),
             to = addresses("to"),
+            replyTo = addresses("replyTo"),
             cc = addresses("cc"),
             listUnsubscribe = email["header:List-Unsubscribe:asText"]?.str(),
             listUnsubscribePost = email["header:List-Unsubscribe-Post:asText"]?.str(),

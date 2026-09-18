@@ -102,4 +102,67 @@ class SignatureTest {
         val signed = signed(draft, "Justin")
         assertEquals("\n\n> -- \n> their sign-off\n\n-- \nJustin", signed.body)
     }
+
+    private val reply = Draft(
+        from = "me@example.org",
+        body = "Tuesday works.\n\nOn 15 Sep 2026, Dana Whitfield wrote:\n> Is Tuesday any good?",
+    )
+
+    @Test
+    fun aSignOffCanGoAboveTheQuote() {
+        val signed = signed(reply, "Justin", aboveQuote = true)
+        assertEquals(
+            "Tuesday works.\n\n-- \nJustin\n\nOn 15 Sep 2026, Dana Whitfield wrote:\n> Is Tuesday any good?",
+            signed.body,
+        )
+    }
+
+    @Test
+    fun aSignOffBelowTheQuoteIsStillWhatHappensByDefault() {
+        assertEquals(
+            "Tuesday works.\n\nOn 15 Sep 2026, Dana Whitfield wrote:\n> Is Tuesday any good?\n\n-- \nJustin",
+            signed(reply, "Justin").body,
+        )
+    }
+
+    @Test
+    fun aForwardIsQuotedToo() {
+        val forward = Draft(
+            from = "me@example.org",
+            body = "\n\n---------- Forwarded message ----------\nFrom: Dana <dana@example.org>\n",
+        )
+        // The two blank lines the draft opens with stay above it, which is where the cursor
+        // goes and where the writing happens.
+        assertEquals(
+            "\n\n-- \nJustin\n\n---------- Forwarded message ----------\nFrom: Dana <dana@example.org>\n",
+            signed(forward, "Justin", aboveQuote = true).body,
+        )
+    }
+
+    @Test
+    fun aNewMessageHasNoQuoteToGoAboveOf() {
+        // Nothing to be above, so the setting makes no difference rather than misfiring.
+        val fresh = Draft(from = "me@example.org", body = "Morning.")
+        assertEquals(signed(fresh, "Justin").body, signed(fresh, "Justin", aboveQuote = true).body)
+    }
+
+    @Test
+    fun theHtmlHalfPutsTheSignOffBackWhereTheTextOneWas() {
+        val signed = signed(reply, "Justin", "<p><b>Justin</b></p>", aboveQuote = true)
+        val html = htmlBodyOf(signed.body, signed.textSignature, signed.htmlSignature)!!
+
+        // Above the quote in both halves, or the recipient sees the same message signed in
+        // two different places depending on which part their client shows.
+        assertTrue(html.indexOf("<b>Justin</b>") < html.indexOf("Dana Whitfield wrote:"))
+        assertTrue(!html.contains("-- "))
+    }
+
+    @Test
+    fun theHtmlHalfKeepsTheTextSignOffWhenThereIsNoHtmlOne() {
+        // It used to be cut out and never put back, so the HTML part went out unsigned
+        // while the text part carried a sign-off.
+        val signed = signed(reply.copy(body = "*Tuesday* works."), "Justin")
+        val html = htmlBodyOf(signed.body, signed.textSignature, "")!!
+        assertTrue(html.contains("Justin"))
+    }
 }

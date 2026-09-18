@@ -1592,7 +1592,7 @@ private fun Reader(
             // is the one used here without anything having to be imported or kept in step.
             initial = identities[writingAccount()].orEmpty()
                 .firstOrNull { it.email.equals(composer.from, ignoreCase = true) }
-                ?.let { signed(composer, it.textSignature, it.htmlSignature) }
+                ?.let { signed(composer, it.textSignature, it.htmlSignature, Settings.signatureAboveQuote()) }
                 ?: composer,
             sending = sending,
             error = sendError,

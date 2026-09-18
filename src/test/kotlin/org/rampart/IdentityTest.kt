@@ -77,4 +77,24 @@ class IdentityTest {
             identityFor(body(to = listOf("justin@example.com", "justin@example.org")), mine, fallback),
         )
     }
+
+    @Test
+    fun `a sub-addressed copy is still yours`() {
+        // Mail to justin+newsletters@ lands in justin@'s mailbox, so it is answered as
+        // justin@. A client that cannot see that replies as the wrong identity.
+        assertEquals(
+            "justin@example.org",
+            identityFor(body(to = listOf("justin+newsletters@example.org")), mine, fallback),
+        )
+        assertEquals(
+            "justin@another.example",
+            identityFor(body(to = listOf("Justin <justin+bills@another.example>")), mine, fallback),
+        )
+    }
+
+    @Test
+    fun `a plus in the domain, or no address at all, does not confuse it`() {
+        assertEquals(fallback, identityFor(body(to = listOf("justin@ex+ample.org")), mine, fallback))
+        assertEquals(fallback, identityFor(body(to = listOf("not an address")), mine, fallback))
+    }
 }
