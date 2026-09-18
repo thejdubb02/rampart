@@ -1655,6 +1655,24 @@ private fun Reader(
                 }
             }
         }
+        /*
+         * The pictures, decoded once rather than per row.
+         *
+         * Only the ones carried inside a contact card, which is how a vCard photo has
+         * always travelled and costs no request. A card that states a URL instead is left
+         * alone: that is somebody else's server, and fetching it on every message is the
+         * leak the image blocker exists to stop.
+         */
+        val senderPhotos = remember(contacts) {
+            buildMap {
+                contacts.forEach { (contact, _) ->
+                    val picture = contact.photo.takeIf { it.startsWith("data:image", true) }
+                        ?.let { embeddedImage(it) } ?: return@forEach
+                    contact.emails.forEach { put(it.trim().lowercase(), picture) }
+                }
+            }
+        }
+        CompositionLocalProvider(LocalSenderPhotos provides senderPhotos) {
         Row(Modifier.fillMaxSize()) {
             Sidebar(
                 search = {
@@ -2105,6 +2123,7 @@ private fun Reader(
                     }
                 },
             )
+        }
         }
     }
 
@@ -2900,7 +2919,18 @@ private fun MessageRow(
             Modifier.width(2.dp).fillMaxHeight()
                 .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent),
         )
-        Column(Modifier.padding(start = 12.dp, end = 14.dp, top = 11.dp, bottom = 12.dp)) {
+        // Their mark, beside the row rather than above it. Top aligned rather than centred:
+        // a row is three lines tall and a circle floating in the middle of it reads as
+        // belonging to the preview rather than to the sender.
+        Box(Modifier.padding(start = 10.dp, top = 12.dp)) {
+            Avatar(
+                label = message.from,
+                seed = message.fromEmail,
+                size = 30.dp,
+                photo = photoFor(message.fromEmail),
+            )
+        }
+        Column(Modifier.padding(start = 10.dp, end = 14.dp, top = 11.dp, bottom = 12.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(7.dp)) {
                     if (!message.seen) {
@@ -3399,7 +3429,12 @@ internal fun Message(
                     if (earlier.isNotEmpty()) Spacer(Modifier.height(12.dp))
 
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Avatar(summary.from, summary.fromEmail.ifBlank { summary.from }, 34.dp)
+                        Avatar(
+                            summary.from,
+                            summary.fromEmail.ifBlank { summary.from },
+                            34.dp,
+                            photo = photoFor(summary.fromEmail),
+                        )
                         Spacer(Modifier.width(11.dp))
                         Column(Modifier.weight(1f)) {
                             Text(
@@ -3668,7 +3703,12 @@ private fun ThreadRow(message: Summary, onClick: () -> Unit) {
             .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Avatar(message.from, message.fromEmail.ifBlank { message.from }, 24.dp)
+        Avatar(
+            message.from,
+            message.fromEmail.ifBlank { message.from },
+            24.dp,
+            photo = photoFor(message.fromEmail),
+        )
         Spacer(Modifier.width(9.dp))
         Text(
             message.from,

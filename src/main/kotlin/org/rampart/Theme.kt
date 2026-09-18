@@ -17,6 +17,12 @@ import androidx.compose.ui.text.platform.Font
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.Image
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.layout.fillMaxSize
 
 /**
  * Archivo, the face the wordmark is cut from, bundled as four static weights.
@@ -56,9 +62,12 @@ internal val RampartTypography: Typography = Typography().let { base ->
 }
 
 /**
- * Initials in a coloured circle. No image is fetched: a real avatar means asking a third
- * party who you correspond with, on every message, which is exactly the leak the image
- * blocker exists to prevent.
+ * Their picture if we hold one, initials in a coloured circle otherwise.
+ *
+ * Still nothing fetched. A real avatar service means asking a third party who you
+ * correspond with, on every message, which is exactly the leak the image blocker exists to
+ * prevent. [photo] only ever comes from a contact card you already have, where the picture
+ * is carried inside the card and no request leaves the machine to draw it.
  */
 @Composable
 internal fun Avatar(
@@ -66,20 +75,43 @@ internal fun Avatar(
     seed: String,
     size: Dp,
     color: Color = avatarColor(seed),
+    photo: ImageBitmap? = null,
 ) {
     Box(
-        modifier = Modifier.size(size).background(color, CircleShape),
+        modifier = Modifier.size(size).background(color, CircleShape).clip(CircleShape),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            initialsOf(label, seed),
-            color = Color.White,
-            fontWeight = FontWeight.Bold,
-            fontSize = (size.value * 0.36f).sp,
-            fontFamily = Archivo,
-        )
+        if (photo != null) {
+            Image(
+                photo,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Text(
+                initialsOf(label, seed),
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = (size.value * 0.36f).sp,
+                fontFamily = Archivo,
+            )
+        }
     }
 }
+
+/**
+ * The pictures we hold, by address, for whoever is being drawn.
+ *
+ * A lookup rather than a parameter threaded through every list and row that might want
+ * one, the same way the icon pack is done. Empty is the normal case and costs nothing.
+ */
+internal val LocalSenderPhotos = staticCompositionLocalOf { emptyMap<String, ImageBitmap>() }
+
+/** The picture for [email], or null. Case is not part of an address. */
+@Composable
+internal fun photoFor(email: String): ImageBitmap? =
+    LocalSenderPhotos.current[email.trim().lowercase()]
 
 /**
  * Two letters: the first of each of the first two words of the name, or the first two

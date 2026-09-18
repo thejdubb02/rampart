@@ -161,6 +161,19 @@ proven, and it is listed that way on the board.
 
 ---
 
+## Sender marks, and the picture Rampart will not fetch
+
+Every row carries the sender's mark, the way the reader already did. Where a contact card
+holds a picture, that is drawn instead of the initials.
+
+**Only a picture already in hand.** A vCard photo has always been carried inside the card,
+so drawing it costs no request. A card that states a URL instead is left alone, and no
+avatar service is used at all: Gravatar and its like mean sending a hash of the sender's
+address to a third party on every message, which is exactly the leak the image blocker
+exists to stop. That is a setting somebody can ask for, not a default worth having.
+
+---
+
 ## HTML mail: tables are the layout, not decoration
 
 A mail table is almost never a table of data. It is the only layout tool that works in

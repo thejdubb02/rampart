@@ -165,3 +165,43 @@ class ContactsTest {
         assertEquals("a@example.test", Contact(emails = listOf("a@example.test")).label)
     }
 }
+
+/**
+ * A picture on a card is read, and only ever the kind that is already in hand.
+ */
+class ContactPhotoTest {
+    private fun card(text: String): JsonObject = Json.parseToJsonElement(text).jsonObject
+
+    @Test
+    fun `a photo carried inside the card is read`() {
+        val contact = contactOf(
+            card(
+                """
+                { "@type": "Card", "version": "1.0", "id": "c",
+                  "name": { "full": "Dana Reyes" },
+                  "photos": { "p1": { "uri": "data:image/png;base64,AAAA" } } }
+                """,
+            ),
+        )
+        assertEquals("data:image/png;base64,AAAA", contact.photo)
+    }
+
+    @Test
+    fun `a card with no photo says so rather than throwing`() {
+        assertEquals("", contactOf(card("""{ "@type": "Card", "version": "1.0", "id": "c" }""")).photo)
+    }
+
+    @Test
+    fun `the photo survives an edit made here`() {
+        // merged() builds on the card that was read, and photos is not a group Rampart
+        // replaces, so a picture put there by a phone is still there afterwards.
+        val fromServer = card(
+            """
+            { "@type": "Card", "version": "1.0", "id": "c", "name": { "full": "Old" },
+              "photos": { "p1": { "uri": "data:image/png;base64,AAAA" } } }
+            """,
+        )
+        val written = merged(contactOf(fromServer).copy(name = "New"), fromServer)
+        assertEquals("data:image/png;base64,AAAA", contactOf(written).photo)
+    }
+}

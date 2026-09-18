@@ -25,6 +25,14 @@ internal data class Contact(
     val note: String = "",
     /** The address books it belongs to. Kept so a save does not move it out of them. */
     val bookIds: List<String> = emptyList(),
+    /**
+     * Their picture, as the card states it: usually a `data:` URI, occasionally a URL.
+     *
+     * Read but never fetched. A vCard photo has traditionally been carried inside the card,
+     * which costs nobody anything; a photo stated as a URL is somebody else's server and is
+     * treated like any other remote picture, which is to say left alone.
+     */
+    val photo: String = "",
 ) {
     /** What the list and the autocomplete show. An address is better than an empty line. */
     val label: String get() = name.ifBlank { emails.firstOrNull().orEmpty() }
@@ -49,6 +57,7 @@ internal fun contactOf(card: JsonObject): Contact = Contact(
     organisation = valuesOf(card, "organizations", "name").firstOrNull().orEmpty(),
     note = valuesOf(card, "notes", "note").firstOrNull().orEmpty(),
     bookIds = (card["addressBookIds"] as? JsonObject)?.keys?.toList().orEmpty(),
+    photo = valuesOf(card, "photos", "uri").firstOrNull().orEmpty(),
 )
 
 private fun valuesOf(card: JsonObject, group: String, field: String): List<String> =
