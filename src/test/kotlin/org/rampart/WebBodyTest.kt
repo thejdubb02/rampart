@@ -1,6 +1,5 @@
 package org.rampart
 
-import java.util.Base64
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -16,8 +15,13 @@ class WebBodyTest {
 
     private fun roundTrip(document: String): String {
         val url = asUrl(document)
-        assertTrue(url.startsWith("data:text/html;charset=utf-8;base64,"), url.take(50))
-        return String(Base64.getDecoder().decode(url.substringAfter("base64,")), Charsets.UTF_8)
+        assertTrue(url.startsWith("file:"), url.take(60))
+        // Read back as bytes and decoded here, which is exactly what the engine does with
+        // the charset the document states.
+        return String(
+            java.nio.file.Files.readAllBytes(java.nio.file.Path.of(java.net.URI.create(url))),
+            Charsets.UTF_8,
+        )
     }
 
     @Test
@@ -77,13 +81,19 @@ class WebBodyTest {
     }
 
     @Test
-    fun `the url carries nothing but the document`() {
-        // base64 of the bytes and nothing else, so there is no escaping step to get wrong.
-        val document = "<p>plain</p>"
-        assertEquals(
-            "data:text/html;charset=utf-8;base64," +
-                Base64.getEncoder().encodeToString(document.toByteArray(Charsets.UTF_8)),
-            asUrl(document),
-        )
+    fun `a document of any size is handed over whole`() {
+        // The ceiling a data URL had, and the reason this is a file: a signature with a
+        // 700 KB picture in it makes a document of nearly a megabyte, and at that size the
+        // picture came out blank while the text around it was fine.
+        val big = "<p>x</p>" + "<span>padding</span>".repeat(60_000)
+        assertEquals(big, roundTrip(big))
+    }
+
+    @Test
+    fun `the file goes away when the next message is opened`() {
+        val first = java.nio.file.Path.of(java.net.URI.create(asUrl("<p>one</p>")))
+        assertTrue(java.nio.file.Files.exists(first))
+        asUrl("<p>two</p>")
+        assertTrue(!java.nio.file.Files.exists(first), "the previous message was left behind")
     }
 }

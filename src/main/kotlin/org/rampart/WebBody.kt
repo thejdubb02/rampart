@@ -210,16 +210,30 @@ private fun javafxScale(): Float =
  * `text/html; charset=UTF-8` as the content type does not fix it, it stops the page
  * loading at all, because the type is matched exactly.
  *
- * A `data:` URL has no such step. The document is encoded to UTF-8 here, base64 makes it
- * safe to be a URL, and the charset is stated in the URL itself, so what WebKit decodes is
- * the bytes this function produced. Verified against a 65 KB message: same content, same
- * measured height, and the emoji intact.
+ * So the document is written out as UTF-8 bytes and the engine is pointed at the file. The
+ * bytes it reads are the bytes written here, and the charset is stated in the document
+ * itself, so there is no step in between that can reinterpret anything.
  *
- * The page's own content security policy is in a meta tag and applies either way.
+ * **A `data:` URL did the same job and had a ceiling.** A signature with a 700 KB picture
+ * in it makes a document of nearly a megabyte, which is a data URL of one and a quarter,
+ * and at that size the picture came out as a blank white rectangle on Windows while the
+ * text around it was fine. A file has no such limit.
+ *
+ * Deleted as soon as the next message is opened, and again on exit, so a session that
+ * reads three hundred messages does not leave three hundred files behind. The page's own
+ * content security policy is in a meta tag and applies whichever way it was loaded.
  */
-internal fun asUrl(document: String): String =
-    "data:text/html;charset=utf-8;base64," +
-        Base64.getEncoder().encodeToString(document.toByteArray(Charsets.UTF_8))
+internal fun asUrl(document: String): String {
+    val file = kotlin.io.path.createTempFile("rampart-message-", ".html")
+    file.toFile().deleteOnExit()
+    java.nio.file.Files.write(file, document.toByteArray(Charsets.UTF_8))
+    // Whatever was being read a moment ago is not being read now, and a session that opens
+    // a few hundred messages should not leave a few hundred files behind.
+    previous.getAndSet(file)?.let { runCatching { java.nio.file.Files.deleteIfExists(it) } }
+    return file.toUri().toString()
+}
+
+private val previous = java.util.concurrent.atomic.AtomicReference<java.nio.file.Path?>(null)
 
 /**
  * Printing the message, through the engine that already knows how to draw it.
