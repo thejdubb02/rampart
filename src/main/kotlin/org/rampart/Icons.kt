@@ -17,7 +17,7 @@ import androidx.compose.ui.unit.dp
  * style is not ours. These are the same paths as the design canvas, on an 18 unit grid,
  * stroked rather than filled so they sit at the weight of the text beside them.
  */
-private fun icon(name: String, path: String, weight: Float = 1.4f): ImageVector =
+private fun icon(name: String, path: String, weight: Float = 1.4f, solid: Boolean = false): ImageVector =
     ImageVector.Builder(
         name = name,
         defaultWidth = 18.dp,
@@ -27,7 +27,9 @@ private fun icon(name: String, path: String, weight: Float = 1.4f): ImageVector 
     ).apply {
         addPath(
             pathData = PathParser().parsePathString(path).toNodes(),
-            fill = null,
+            // A glyph that means "on" is filled rather than a second shape, so the on and
+            // off states are the same outline and only the inside changes.
+            fill = if (solid) SolidColor(Color.Black) else null,
             // Icon() recolours whatever is drawn, so the colour here is only a placeholder.
             stroke = SolidColor(Color.Black),
             strokeLineWidth = weight,
@@ -74,6 +76,10 @@ internal interface IconPack {
     val Contacts: ImageVector
     val Search: ImageVector
     val Dashboard: ImageVector
+
+    /** Hollow for a message left as the sender built it, solid for one turned dark. */
+    val Bulb: ImageVector
+    val BulbOn: ImageVector
 
 }
 
@@ -124,6 +130,8 @@ internal object LineIcons : IconPack {
             "M10.4 11a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2",
     )
     override val Check = icon("Check", "m3.6 9.4 3.6 3.6L14.4 5.6")
+    override val Bulb = icon("Bulb", "M9 2.6a4.6 4.6 0 0 0-2.7 8.3c.5.4.8 1 .8 1.6v.3h3.8v-.3c0-.6.3-1.2.8-1.6A4.6 4.6 0 0 0 9 2.6Z M7.1 14.4h3.8 M7.7 16.1h2.6")
+    override val BulbOn = icon("BulbOn", "M9 2.6a4.6 4.6 0 0 0-2.7 8.3c.5.4.8 1 .8 1.6v.3h3.8v-.3c0-.6.3-1.2.8-1.6A4.6 4.6 0 0 0 9 2.6Z M7.1 14.4h3.8 M7.7 16.1h2.6", solid = true)
     override val Star = icon("Star", "M9 2.4 11.1 6.7 15.8 7.4 12.4 10.7 13.2 15.4 9 13.2 4.8 15.4 5.6 10.7 2.2 7.4 6.9 6.7Z")
     override val Refresh = icon(
         "Refresh",
@@ -172,7 +180,9 @@ private fun heavy(source: ImageVector): ImageVector = ImageVector.Builder(
         (node as? androidx.compose.ui.graphics.vector.VectorPath)?.let {
             addPath(
                 pathData = it.pathData,
-                fill = null,
+                // Kept, or a glyph that means "on" by being filled comes out hollow in the
+                // heavy pack and the two states become indistinguishable.
+                fill = it.fill,
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2.1f,
                 strokeLineCap = StrokeCap.Round,
@@ -212,6 +222,8 @@ internal object HeavyIcons : IconPack by LineIcons {
     override val Trash by lazy { heavy(LineIcons.Trash) }
     override val Folder by lazy { heavy(LineIcons.Folder) }
     override val Star by lazy { heavy(LineIcons.Star) }
+    override val Bulb by lazy { heavy(LineIcons.Bulb) }
+    override val BulbOn by lazy { heavy(LineIcons.BulbOn) }
     override val Refresh by lazy { heavy(LineIcons.Refresh) }
     override val Back by lazy { heavy(LineIcons.Back) }
     override val Collapse by lazy { heavy(LineIcons.Collapse) }

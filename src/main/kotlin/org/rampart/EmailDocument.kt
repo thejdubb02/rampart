@@ -41,6 +41,10 @@ internal fun emailDocument(
     carried: Map<String, String> = emptyMap(),
     /** Whether pictures may be fetched from the web. Off is the default and the safe one. */
     remoteImages: Boolean = false,
+    /**
+     * Draw an undesigned message dark. A designed one is never touched. See [PLAIN_DARK].
+     */
+    dark: Boolean = false,
 ): EmailPage {
     val source = Jsoup.parse(html)
     val clean = Cleaner(EMAIL_SAFELIST).clean(source)
@@ -49,8 +53,20 @@ internal fun emailDocument(
     val policy = if (remoteImages) REMOTE_POLICY else LOCAL_POLICY
     val css = stylesheet(source, remoteImages)
     val body = clean.body().html()
-    // A message that brought a design of its own is left alone. See [paintsItself].
-    val plain = if (paintsItself(clean, css)) "" else PLAIN_CSS
+    /*
+     * A message that brought a design of its own is left alone, in either window.
+     *
+     * The rest are given one, and which one depends on the window. This is not the old
+     * inversion and must not become it: nothing is filtered, no pixel is turned inside
+     * out, and a message that chose a colour still gets the colour it chose. All that
+     * changes is the page a message with no opinion is drawn on.
+     */
+    val designed = paintsItself(clean, css)
+    val plain = when {
+        designed -> DESIGNED_CSS
+        dark -> PLAIN_DARK
+        else -> PLAIN_LIGHT
+    }
     return EmailPage(
         """<!DOCTYPE html>
 <html><head>
@@ -230,12 +246,20 @@ private const val BASE_CSS = """
    to scroll. One taller than the panel will fit scrolls itself, which is what auto is
    for: hidden clipped it instead, and the rest of the message was simply gone. */
 html { overflow-x: auto; overflow-y: auto; }
-/* The page always paints, because the panel behind it is transparent and a message that
-   painted nothing showed the dark window through the gaps between its own tables. */
-html { background: #ffffff; }
 body { margin: 0; padding: 0; overflow-x: auto; }
 img:not([style*="max-width"]) { max-width: 100%; height: auto; }
 table:not([style*="max-width"]) { max-width: 100%; }
+"""
+
+/**
+ * A message that painted its own page, which gets nothing but a canvas to sit on.
+ *
+ * The white matters even though the sender is about to paint over most of it: the panel
+ * behind the engine is transparent, so without it the dark window shows through the gaps
+ * between a newsletter's own tables.
+ */
+private const val DESIGNED_CSS = """
+html { background: #ffffff; }
 """
 
 /**
@@ -255,14 +279,46 @@ table:not([style*="max-width"]) { max-width: 100%; }
  * keeps its own full-bleed background and gets no padding it did not ask for.
  */
 private const val PLAIN_CSS = """
-html { color: #1a1a1a;
-       font: 15px/1.55 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
 /* Room to breathe, because the pane's own edge is not a margin. */
 body { padding: 4px 22px 20px; }
 /* A pasted link or a forwarded tracking URL is one unbreakable word several thousand
    pixels long. Without this it sets the width of the page and every paragraph above it
    is laid out to that width and then clipped by the pane. */
 body { overflow-wrap: break-word; word-break: break-word; }
+html { font: 15px/1.55 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+"""
+
+/** The light version, which is what a message gets in a light window. */
+private const val PLAIN_LIGHT = PLAIN_CSS + """
+html { background: #ffffff; color: #1a1a1a; }
+"""
+
+/**
+ * The dark version, and the thing that replaced inverting the page.
+ *
+ * **Inverting was wrong and is not coming back.** It turned every pixel inside out, which
+ * made an unpainted reply white text on a black slab and made a hotel's dark brown header
+ * come out pink. This does none of that. It is the same stylesheet with two colours
+ * swapped, applied only to a message that stated no colours of its own, so nothing the
+ * sender chose is altered and nothing designed is touched at all.
+ *
+ * The one hazard is a message that painted no background but did state a text colour, and
+ * in practice that means Outlook, which writes `color:black` on nearly every span it
+ * produces. Black text on a dark page is an empty message, so the handful of ways of
+ * writing "black" are given the page's colour back. It is a substring match on the inline
+ * style and it will miss something eventually, which is what the reader's own switch is
+ * for: one click puts the message back the way the sender built it.
+ */
+private const val PLAIN_DARK = PLAIN_CSS + """
+html { background: #191417; color: #e8e2e5; }
+a, a * { color: #ff8fa8; }
+[style*="color:black"], [style*="color: black"],
+[style*="color:#000"], [style*="color: #000"],
+[style*="color:#111"], [style*="color:#222"], [style*="color:#333"],
+[style*="color:rgb(0,0,0)"], [style*="color:rgb(0, 0, 0)"],
+font[color="black"], font[color="#000000"] { color: #e8e2e5 !important; }
+/* A quoted reply's rule is drawn for a white page and disappears on a dark one. */
+blockquote { border-color: #4a3f44 !important; }
 """
 
 /**

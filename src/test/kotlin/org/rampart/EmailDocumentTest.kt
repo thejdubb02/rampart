@@ -185,7 +185,32 @@ class EmailDocumentTest {
     }
 
     @Test
-    fun `the page is always light, whatever the window is doing`() {
+    fun `a message with no colours follows the window, and one with a design never does`() {
+        fun drawnDark(html: String) = emailDocument(html, dark = true).document.contains("background: #191417")
+        // A reply with nothing in it: the ordinary case, and the one this is for.
+        assertTrue(drawnDark("""<div dir="ltr">Mark,</div>"""))
+        assertTrue(drawnDark("<p>Tuesday works.</p>"))
+        // A design is never touched, in either window. Inverting one was the pink header.
+        assertFalse(drawnDark("""<table width="100%" bgcolor="#F4F1EC"><tr><td>Hello</td></tr></table>"""))
+        assertFalse(drawnDark("""<body bgcolor="#102030"><p>Hello</p></body>"""))
+        // And a light window draws nothing dark, whatever the message is.
+        assertFalse(emailDocument("<p>Tuesday works.</p>").document.contains("background: #191417"))
+    }
+
+    @Test
+    fun `black text a sender stated is given the page's colour back`() {
+        // Outlook writes color:black on nearly every span it produces, and on a dark page
+        // that is an empty message. The handful of ways of writing it are covered; anything
+        // missed is what the switch on the toolbar is for.
+        val dark = emailDocument("""<span style="color:black">Hi</span>""", dark = true).document
+        listOf("""[style*="color:black"]""", """[style*="color:#000"]""", """font[color="black"]""")
+            .forEach { assertTrue(dark.contains(it), "no rule for $it") }
+        // Not imposed on a light page, where black on white is exactly right.
+        assertFalse(emailDocument("""<span style="color:black">Hi</span>""").document.contains("""[style*="color:black"]"""))
+    }
+
+    @Test
+    fun `nothing is ever inverted, in either window`() {
         /*
          * The whole of what replaced inversion, and the reason it is one line.
          *
@@ -201,13 +226,17 @@ class EmailDocumentTest {
             """<body bgcolor="#123456">painted on body</body>""",
             "<style>@media (prefers-color-scheme: dark) { body { background: #000 } }</style><p>own</p>",
         ).forEach { html ->
-            val document = emailDocument(html).document
-            assertEquals(
-                "light",
-                Regex("""color-scheme" content="([^"]+)"""").find(document)?.groupValues?.get(1),
-                "the page must never ask for dark defaults: $html",
-            )
-            assertFalse(document.contains("invert("), "nothing is inverted any more: $html")
+            listOf(false, true).forEach { dark ->
+                val document = emailDocument(html, dark = dark).document
+                assertFalse(document.contains("invert("), "something was inverted: $html")
+                // The scheme is stated by the stylesheet above, so the engine is never asked
+                // to supply defaults of its own. That disagreement was the 0.1.114 bug.
+                assertEquals(
+                    "light",
+                    Regex("""color-scheme" content="([^"]+)"""").find(document)?.groupValues?.get(1),
+                    "the engine must never pick its own colours: $html",
+                )
+            }
         }
     }
 
@@ -215,7 +244,13 @@ class EmailDocumentTest {
     fun `the page always paints, so the window never shows through it`() {
         // The panel behind the engine is transparent, so a message that painted nothing
         // showed the dark window between its own tables.
-        listOf("<p>plain</p>", """<table width="100%" bgcolor="#eeeeee"><tr><td>x</td></tr></table>""")
-            .forEach { assertTrue(emailDocument(it).document.contains("html { background: #ffffff; }")) }
+        listOf(
+            "<p>plain</p>" to false,
+            """<table width="100%" bgcolor="#eeeeee"><tr><td>x</td></tr></table>""" to false,
+            """<table width="100%" bgcolor="#eeeeee"><tr><td>x</td></tr></table>""" to true,
+        ).forEach { (html, dark) ->
+            assertTrue(emailDocument(html, dark = dark).document.contains("background: #ffffff"), html)
+        }
+        assertTrue(emailDocument("<p>plain</p>", dark = true).document.contains("background: #191417"))
     }
 }

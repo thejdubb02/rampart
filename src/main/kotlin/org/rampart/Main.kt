@@ -4217,8 +4217,18 @@ internal fun Message(
      * own colours are always what you see, and the dark window holds a light message the
      * way a webmail tab does.
      */
-    val page = remember(body, carriedData, showRemote) {
-        body?.html?.let { emailDocument(it, carriedData, showRemote) }
+    /*
+     * A message with no colours of its own follows the window; one with a design does not.
+     *
+     * This is not the old inversion and must not become it. Nothing is filtered and no
+     * pixel is turned inside out: a message that stated no colours is drawn on a dark page
+     * instead of a light one, and a message that stated any is drawn exactly as it was
+     * built, in either window. The switch on the toolbar puts this one message back on
+     * paper when the guess is wrong, which is what it is for.
+     */
+    val darkWindow = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    val page = remember(body, carriedData, showRemote, darkWindow, paper) {
+        body?.html?.let { emailDocument(it, carriedData, showRemote, dark = darkWindow && !paper) }
     }
     val engineDraws = page != null && webEngineWorks
     val rendered = remember(body, linkColor, bodyPaper, engineDraws) {
@@ -4292,18 +4302,29 @@ internal fun Message(
                 // Everything past Delete is something people reach for occasionally, and a
                 // row of eight buttons runs off the edge of the pane at any sensible width.
                 /*
-                 * A themed reader is the right default and is wrong for some mail. A
-                 * newsletter or an invoice was drawn against white by whoever sent it, and
-                 * on a dark theme its own colours end up on a background it was never
-                 * tested on. This puts one message back on paper without changing the app.
+                 * The light in the room, for one message.
+                 *
+                 * A message with no colours of its own is drawn to match the window, which
+                 * is right for a reply and wrong for the occasional one: an invoice or a
+                 * statement was laid out against white by whoever sent it, and a sender who
+                 * set a text colour but no background can land dark on dark. Lit means the
+                 * message is following the window; unlit means it is on paper, the way the
+                 * sender built it.
+                 *
+                 * In a light window there is nothing for it to switch between, so it is not
+                 * offered rather than being a button that appears to do nothing.
                  */
-                IconButton(onClick = { onPaper(!paper) }, modifier = Modifier.size(34.dp)) {
-                    Icon(
-                        RampartIcons.Page,
-                        contentDescription = if (paper) "Back to the theme" else "Show it as the sender drew it",
-                        tint = if (paper) MaterialTheme.colorScheme.primary else LocalContentColor.current,
-                        modifier = Modifier.size(16.dp),
-                    )
+                if (darkWindow) {
+                    IconButton(onClick = { onPaper(!paper) }, modifier = Modifier.size(34.dp)) {
+                        Icon(
+                            if (paper) RampartIcons.Bulb else RampartIcons.BulbOn,
+                            contentDescription =
+                            if (paper) "Draw this message dark" else "Show it as the sender drew it",
+                            tint = if (paper) LocalContentColor.current
+                            else MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(17.dp),
+                        )
+                    }
                 }
                 var more by remember(summary.id) { mutableStateOf(false) }
                 Box {
