@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rampart: a desktop mail client built for Stalwart</title>
+<meta name="description" content="Rampart is a free, open source desktop mail client for Windows and Linux. It speaks JMAP and IMAP, and on a Stalwart server it manages your filter rules, signatures, contacts and quota from the same window as your mail.">
+<link rel="canonical" href="https://rampart.itsjustin.me/">
+<link rel="icon" href="/img/favicon.png" type="image/png">
+
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rampart.itsjustin.me/">
+<meta property="og:title" content="Rampart: a desktop mail client built for Stalwart">
+<meta property="og:description" content="Your mail and your whole mail server, in one native desktop window. Free and open source, for Windows and Linux.">
+<meta property="og:image" content="https://rampart.itsjustin.me/img/reader.png">
+<meta name="twitter:card" content="summary_large_image">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Rampart",
+  "applicationCategory": "CommunicationApplication",
+  "applicationSubCategory": "Email client",
+  "operatingSystem": "Windows 10, Windows 11, Linux",
+  "description": "A desktop mail client built for the Stalwart mail server. It speaks JMAP first and falls back to IMAP, and manages account settings such as Sieve filter rules, signatures, contacts and quota from the same window as the mail.",
+  "url": "https://rampart.itsjustin.me/",
+  "downloadUrl": "https://github.com/thejdubb02/rampart/releases/latest",
+  "codeRepository": "https://github.com/thejdubb02/rampart",
+  "license": "https://www.apache.org/licenses/LICENSE-2.0",
+  "isAccessibleForFree": true,
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "author": { "@type": "Person", "name": "Justin Willhite" }
+}
+</script>
+
+<style>
+:root {
+  --brand: #db2d54;
+  --brand-ink: #ffffff;
+  --bg: #ffffff;
+  --panel: #faf7f8;
+  --ink: #1a1417;
+  --muted: #6a5f64;
+  --line: #e8dfe2;
+  --radius: 14px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --brand: #f0567a;
+    --brand-ink: #2a0d16;
+    --bg: #161114;
+    --panel: #1f181b;
+    --ink: #f4ecef;
+    --muted: #b1a2a8;
+    --line: #322629;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 17px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1040px; margin: 0 auto; padding: 0 20px; }
+a { color: var(--brand); }
+h1, h2, h3 { line-height: 1.2; letter-spacing: -0.01em; }
+
+header { padding: 56px 0 8px; text-align: center; }
+header img.logo { width: 300px; max-width: 76%; height: auto; }
+h1 { font-size: clamp(28px, 4.4vw, 42px); margin: 26px 0 10px; }
+.tagline { color: var(--muted); font-size: clamp(17px, 2.2vw, 20px); max-width: 640px; margin: 0 auto; }
+
+.buttons { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin: 30px 0 8px; }
+.btn {
+  display: inline-block; padding: 12px 22px; border-radius: 999px;
+  text-decoration: none; font-weight: 600; border: 1px solid var(--brand);
+}
+.btn.primary { background: var(--brand); color: var(--brand-ink); }
+.btn.ghost { color: var(--brand); }
+.note { text-align: center; color: var(--muted); font-size: 14px; margin-top: 14px; }
+
+.shot {
+  margin: 44px 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--panel);
+}
+.shot img { display: block; width: 100%; height: auto; }
+.shot figcaption { padding: 12px 16px; color: var(--muted); font-size: 14px; border-top: 1px solid var(--line); }
+
+section { padding: 34px 0; border-top: 1px solid var(--line); }
+section h2 { font-size: clamp(22px, 3vw, 28px); margin: 0 0 14px; }
+section p { max-width: 68ch; }
+
+.grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(255px, 1fr)); margin-top: 22px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; }
+.card h3 { margin: 0 0 6px; font-size: 17px; }
+.card p { margin: 0; color: var(--muted); font-size: 15px; }
+
+.pair { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.pair .shot { margin: 0; }
+
+table { border-collapse: collapse; width: 100%; margin-top: 18px; font-size: 15px; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; }
+
+pre {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 14px 16px; overflow-x: auto; font-size: 14px;
+}
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+footer { padding: 40px 0 60px; border-top: 1px solid var(--line); color: var(--muted); font-size: 15px; }
+footer a { color: var(--brand); }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+<header>
+  <img class="logo" src="/img/logo.png" width="1600" height="279" alt="Rampart">
+  <h1>Your mail and your whole mail server, in one native desktop window.</h1>
+  <p class="tagline">
+    A free, open source desktop mail client for Windows and Linux. Built for
+    <a href="https://stalw.art">Stalwart</a>, and happy on anything else.
+  </p>
+  <div class="buttons">
+    <a class="btn primary" href="https://github.com/thejdubb02/rampart/releases/latest">Download</a>
+    <a class="btn ghost" href="https://github.com/thejdubb02/rampart">Source on GitHub</a>
+  </div>
+  <p class="note">Apache 2.0. No account, no telemetry, no subscription.</p>
+</header>
+
+<figure class="shot">
+  <img src="/img/reader.png" width="1400" height="900" alt="Rampart reading a message, with two mail accounts folded into one sidebar">
+  <figcaption>Two accounts, one inbox, and a warning above a message that cannot prove who sent it.</figcaption>
+</figure>
+
+<section id="stalwart">
+  <h2>Built for Stalwart</h2>
+  <p>
+    Rampart is designed against the <a href="https://stalw.art">Stalwart</a> mail server first.
+    Stalwart speaks JMAP, and JMAP is what makes the second half of this application possible:
+    your account settings and your server settings, managed from the same window as your mail.
+  </p>
+  <p>
+    IMAP can move messages and very little else. It has no way to carry your filter rules, your
+    aliases, your vacation responder, your app passwords or your server's own configuration, so
+    every IMAP client, however good it is, leaves nine tenths of a modern mail server invisible
+    and sends you to a browser for the rest.
+  </p>
+  <table>
+    <tr><th></th><th>Today</th><th>Being built</th></tr>
+    <tr>
+      <th>Mail</th>
+      <td>Read, write, send, search, file, offline</td>
+      <td></td>
+    </tr>
+    <tr>
+      <th>Your account</th>
+      <td>Sieve filter rules with a builder, vacation responder, signatures, contacts, quota</td>
+      <td>App passwords, API keys, aliases</td>
+    </tr>
+    <tr>
+      <th>Your server</th>
+      <td></td>
+      <td>Accounts, domains, DKIM, the mail queue, certificates, TLS, listeners, logs</td>
+    </tr>
+  </table>
+  <p style="margin-top:18px">
+    The account and server screens are rendered from the server's own published schema rather
+    than hand written, so they stay correct when Stalwart adds a field.
+  </p>
+</section>
+
+<section id="anything-else">
+  <h2>And it works on anything else</h2>
+  <p>
+    Type your email address and Rampart finds the rest. It asks what your domain publishes about
+    itself, tries JMAP first and falls back to IMAP, and signs in with the first server that
+    answers. There is a box for the hostname if your domain says nothing, and most people will
+    never open it.
+  </p>
+  <p>
+    Reading, writing, sending, searching, folders, attachments and flags all work against any
+    IMAP and SMTP server that takes a password. What the protocol cannot do is absent with a
+    sentence saying why, never a button that fails.
+  </p>
+</section>
+
+<section id="features">
+  <h2>What it does today</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>Reading</h3>
+      <p>Threaded conversations, a unified inbox across accounts, instant offline search, and
+      push over the JMAP WebSocket. Pictures in the flow, remote images held per sender, links
+      confirmed before they open.</p>
+    </div>
+    <div class="card">
+      <h3>Knowing what a message is</h3>
+      <p>A word above anything that cannot prove who sent it, from the SPF, DKIM and DMARC
+      results your server already recorded. Trackers named rather than silently blocked.</p>
+    </div>
+    <div class="card">
+      <h3>Writing</h3>
+      <p>Bold, italic, links, lists and inline pictures. Recipient autocomplete from your address
+      book and your own mail. Templates, read receipts, and undo-send on a timer you choose.</p>
+    </div>
+    <div class="card">
+      <h3>Keeping a mailbox</h3>
+      <p>Star, tag, archive, spam, trash, one at a time or in a batch, all undoable. Snooze a
+      message until later. Create, rename, nest and delete folders.</p>
+    </div>
+    <div class="card">
+      <h3>Filters, as Sieve</h3>
+      <p>Built in the interface or written by hand, in the format your webmail already reads, so
+      a rule made in either one opens in the other.</p>
+    </div>
+    <div class="card">
+      <h3>Eighteen themes</h3>
+      <p>The window's title bar included. Keyboard shortcuts with the list on a single key, a
+      command palette, and passwords in the operating system's credential store.</p>
+    </div>
+  </div>
+
+  <div class="pair" style="margin-top:34px">
+    <figure class="shot">
+      <img src="/img/dashboard.png" width="1100" height="1000" alt="A dashboard counting mail volume, junk share, top senders and unanswered messages">
+      <figcaption>A dashboard counted from what is already in the mailbox.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="/img/settings-filters.png" width="1200" height="900" alt="The Sieve filter rule builder">
+      <figcaption>Filter rules, built here and stored on the server as Sieve.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="/img/invitation.png" width="900" height="620" alt="A calendar invitation answered from inside the message">
+      <figcaption>Calendar invitations answered in place.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="/img/reader-dark.png" width="1400" height="900" alt="Rampart in a dark theme">
+      <figcaption>One of eighteen themes.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="install">
+  <h2>Install it</h2>
+  <p><strong>Windows.</strong> Paste this into PowerShell:</p>
+  <pre><code>irm https://github.com/thejdubb02/rampart/releases/latest/download/install.ps1 | iex</code></pre>
+  <p>
+    It trusts the signing certificate, installs Rampart and starts it. One admin prompt, the
+    first time on each machine, and every update after that is silent. Do not double-click the
+    <code>.msix</code>: Rampart is signed with its own key rather than a certificate from a
+    public authority, and Windows will not install a package whose signer it does not know yet.
+  </p>
+  <p>
+    <strong>Linux.</strong> Take the <code>.deb</code> from the
+    <a href="https://github.com/thejdubb02/rampart/releases/latest">latest release</a>.
+  </p>
+  <p>
+    <strong>macOS</strong> is not built yet. An unnotarised build is worse than none, and
+    notarising needs a paid Apple account.
+  </p>
+</section>
+
+<section id="privacy">
+  <h2>What it sends, which is nothing</h2>
+  <p>
+    Rampart talks to your mail server and to GitHub when it checks for an update. There is no
+    account to make, no analytics, and no server of ours in the middle of your mail. Passwords
+    go to the operating system's credential store.
+  </p>
+  <p>
+    One feature genuinely cannot work from a desktop application alone, which is knowing whether
+    a message you sent was opened, because that needs somewhere on the web a picture can be
+    fetched from. That server is
+    <a href="https://github.com/thejdubb02/rampart/tree/main/server">in the repository</a>, it is
+    optional, you run it yourself, and with it unset the feature is visibly unavailable rather
+    than quietly broken.
+  </p>
+</section>
+
+<footer>
+  <div class="wrap" style="padding:0">
+    <p>
+      Rampart is Apache 2.0.
+      <a href="https://github.com/thejdubb02/rampart">Source</a>,
+      <a href="https://github.com/thejdubb02/rampart/issues">issues</a>,
+      <a href="https://github.com/thejdubb02/rampart/blob/main/docs/roadmap.md">roadmap</a>.
+    </p>
+    <p>
+      Built on <a href="https://codeberg.org/iNPUTmice/jmap">jmap-mua</a> by Daniel Gultsch.
+      On Android, use <a href="https://sternamail.org/">Sterna Mail</a> instead: it is a good
+      native JMAP client and Rampart does not duplicate it.
+    </p>
+  </div>
+</footer>
+
+</div>
+</body>
+</html>
