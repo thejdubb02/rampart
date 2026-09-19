@@ -255,4 +255,28 @@ class EmailDocumentTest {
         }
         assertTrue(emailDocument("<p>plain</p>", dark = true).document.contains("background: #191417"))
     }
+
+    /**
+     * Outlook gives every part a Content-ID, attachments included, so "has one" cannot mean
+     * "the body draws it". Two screenshots dragged into a message were counted as already on
+     * screen and were then never drawn: in the message, downloaded, and nowhere to be seen.
+     */
+    @Test
+    fun `only the pictures the body actually refers to are cited`() {
+        val html = """<p>hi</p><img src="cid:logo@example.com"><img src="data:image/png;base64,AAAA">"""
+
+        assertEquals(setOf("logo@example.com"), citedCids(html))
+    }
+
+    @Test
+    fun `angle brackets and the spelling of cid make no difference`() {
+        assertEquals(setOf("a@b"), citedCids("""<img src="CID:<a@b>">"""))
+        assertEquals(setOf("a@b"), citedCids("""<img src=" cid:a@b ">"""))
+    }
+
+    @Test
+    fun `a message with no body cites nothing`() {
+        assertEquals(emptySet(), citedCids(null))
+        assertEquals(emptySet(), citedCids("<p>no pictures here</p>"))
+    }
 }

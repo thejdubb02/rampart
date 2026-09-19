@@ -141,6 +141,27 @@ private val DANGEROUS_CSS = Regex(
  *
  * Returns the ones held back, with the size the sender declared, so each can be judged.
  */
+/**
+ * The Content-IDs the body actually shows, which is not the same as the ones it carries.
+ *
+ * **Outlook gives every part a Content-ID, including the ones it attaches.** Two screenshots
+ * a sender dragged into a message arrive with Content-IDs and a disposition of `attachment`,
+ * and the body never refers to either. Rampart took "has a Content-ID" to mean "the body
+ * draws it", so it left both out of the attachment list as already on screen, and the body
+ * never drew them: they were in the message, downloaded, and nowhere to be seen or saved.
+ *
+ * Matched exactly, the way [resolveImages] matches, so a name that differs in case is
+ * listed as a file rather than silently belonging to neither list.
+ */
+internal fun citedCids(html: String?): Set<String> {
+    if (html.isNullOrBlank()) return emptySet()
+    return Jsoup.parse(html).select("img[src]").mapNotNullTo(HashSet()) { img ->
+        val src = img.attr("src").trim()
+        if (!src.startsWith("cid:", ignoreCase = true)) null
+        else src.removePrefix("cid:").removePrefix("CID:").trim().trim('<', '>').ifBlank { null }
+    }
+}
+
 private fun resolveImages(
     document: Document,
     carried: Map<String, String>,

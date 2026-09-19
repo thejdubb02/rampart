@@ -4436,6 +4436,8 @@ internal fun Message(
             }
         }
     }
+    /** The pictures the body puts on screen itself. Everything else the message brought is a file. */
+    val shown = remember(body) { citedCids(body?.html) }
     // The body refers to a picture it carries by its Content-ID, not by its blob, so the
     // two have to be joined up before anything can be drawn in place.
     val carried = remember(attachments, images) {
@@ -5071,10 +5073,11 @@ internal fun Message(
                     else HtmlBody(rendered, carried, emptyMap())
                     }
 
-                    // Only the ones the body did not already put on screen. A picture with
-                    // no Content-ID is not referred to by the body, so it is a file.
+                    // Only the ones the body did not already put on screen, which is the ones
+                    // it actually refers to rather than the ones that happen to have a
+                    // Content-ID. See [citedCids]: Outlook gives one to every part.
                     val files = attachments
-                        .filter { it.cid?.trim()?.trim('<', '>') !in carried.keys }
+                        .filter { it.cid?.trim()?.trim('<', '>') !in shown }
                         // The card above is the invitation. Listing invite.ics underneath it
                         // offers somebody a file whose entire content is already on screen.
                         .filter { invitation == null || !it.type.equals("text/calendar", ignoreCase = true) }
@@ -5087,6 +5090,25 @@ internal fun Message(
                                 Modifier.fillMaxWidth().padding(vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
+                                /*
+                                 * A picture is shown, not just named. The bytes are already
+                                 * here and already decoded, because a part with a Content-ID
+                                 * is fetched with the body whether the body draws it or not,
+                                 * so this costs a draw call. A screenshot somebody sent is
+                                 * recognisable from it, and "Screenshot 2026-09-19 at
+                                 * 10.44.51 AM.png" is not.
+                                 */
+                                images[attachment.blobId]?.let { picture ->
+                                    Image(
+                                        picture,
+                                        contentDescription = attachment.name,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier
+                                            .padding(end = 12.dp)
+                                            .size(56.dp)
+                                            .clip(RoundedCornerShape(6.dp)),
+                                    )
+                                }
                                 Column(Modifier.weight(1f)) {
                                     Text(
                                         // The name a sender chose is shown as the name it will be
