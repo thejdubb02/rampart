@@ -138,6 +138,27 @@ with the list on `?`, a vacation responder, the command palette on Ctrl+K, push 
 JMAP WebSocket, eighteen themes, self-updating, passwords in the operating system's
 credential store.
 
+**2026-09-19, and most of it was one bug wearing four costumes.** A message would open and
+be blank: drawn, sized, painted, and empty. Four separate faults in the path between the
+sanitised document and the pane produced exactly that outcome, none of them logged
+anything, and any one alone was enough. They are written up in `architecture.md` under
+"Handing the message to the engine". What matters here is the rule that came out of it:
+**the message shows even when the measuring fails.** After three seconds with no answer
+the panel takes the pane and the page scrolls itself. The remaining ways this can go wrong
+live in a browser engine, a toolkit and a display scale, and mail should not depend on all
+three agreeing.
+
+Dark-window inversion is gone with it. It turned a reply with no colours into white text
+on a black slab and a hotel's brown header into pink, so the page is always light and the
+sender's colours are always what you see. What a message with no design of its own gets
+instead is four declarations: a font, a colour, padding and a wrapping rule.
+
+Shipped the same day: **Move, Unread and Print** on the open message, where before there
+was no way at all to file the message you were reading. Move is a folder list rather than a
+dialog, skipping the folder it is already in and the five with buttons of their own. And
+**the tray carries the unread count**, drawn over the icon, inboxes only, with a menu on
+it and an optional close-to-tray so shutting the window does not quit.
+
 **What that adds up to: a client a working day can be spent in, against one server.** The
 rest of this file is the distance between that and a client anybody can install.
 

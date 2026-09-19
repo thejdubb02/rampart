@@ -107,9 +107,8 @@ Three things back it up rather than replace it:
   back to Rampart to open in the reader's own browser: this view has no address bar, no
   back button and no profile, so a message that could navigate it is a message that
   could show you a login page.
-- Nothing script-shaped is ever part of the message's own HTML. The two things the page
-  does, reporting its height and handing back link clicks and wheel turns, are injected
-  after it loads.
+- Nothing script-shaped is ever part of the message's own HTML. The one thing the page
+  still does, handing back link clicks and wheel turns, is injected after it loads.
 
 `<style>` is now carried over, which the old safelist could not do: jsoup's cleaner
 keeps a `<style>` element and throws away everything inside it, because a safelist
@@ -125,6 +124,43 @@ scroll with the message; the page hands its wheel events back for that, because 
 component swallows its own input and the pane would otherwise stop scrolling wherever
 the pointer happened to be. And the page is always light, whatever the window is doing:
 see below.
+
+### Handing the message to the engine, and four ways it went wrong (2026-09-19)
+
+All four produced the same thing on screen, which is why they took a day: a message that
+was there, drawn, and blank. None of them logged anything.
+
+**The document reaches the engine as a file, not as a string or a URL.** `loadContent`
+re-encodes the string somewhere before WebKit sees it, and nothing outside the Basic
+Multilingual Plane survives: a ticket emoji arrived as six replacement characters, and so
+did every en dash and em dash in every newsletter, which is in far more mail. Passing
+`text/html; charset=UTF-8` as the content type does not correct it, it stops the page
+loading at all, because the type is matched exactly. A `data:` URL fixed the encoding and
+brought a ceiling with it: a signature carrying a 700 KB logo makes a document of nearly a
+megabyte and a data URL of one and a quarter, and at that size the picture came out as a
+blank white rectangle with the text around it intact. So the document is written out as
+UTF-8 bytes and the engine is pointed at the file, which has neither problem. The file is
+deleted when the next message is opened.
+
+**The height is read from here, not reported by the page.** It used to come back through
+the JavaScript bridge, which needs the bridge attached, the injected script to run, and
+the page allowed to call back out. When any of those did not happen there was no error
+anywhere and the panel stayed at the height it started with, which is a blank strip. It is
+now one `executeScript` on the thread the engine already runs on, asked repeatedly for a
+few seconds because the answer changes as the pane is laid out and pictures decode.
+
+**The height is multiplied by the zoom.** `scrollHeight` is in the page's own pixels and
+the panel is measured in the window's, and those are the same number only at zoom 1. On a
+scaled display, which is most of them, a message asked for a panel a fraction of the size
+it was about to draw itself at.
+
+**And if none of that works, the message still shows.** After three seconds with no
+measurement the panel takes the pane and the page scrolls itself, which is what webmail
+does and is always readable. The measuring is worth doing, because a message sized to its
+content scrolls with the rest of the pane rather than inside a box within it. It is not
+worth a blank message when it fails, and the remaining ways it can fail are in a browser
+engine, a toolkit and a display scale, which should not all have to agree for mail to
+appear.
 
 **A message is drawn as it was sent, and only what it left out is filled in.** Rampart
 inverted the page in a dark window until 2026-09-19, which is the trick webmail uses, and
