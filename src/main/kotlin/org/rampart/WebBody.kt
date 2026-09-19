@@ -186,22 +186,31 @@ private fun measure(view: WebView, zoom: Double, report: (Int) -> Unit, blank: (
     var ticks = 0
     val tick = javafx.event.EventHandler<javafx.event.ActionEvent> {
         ticks++
-        val page = runCatching {
-            val tall = (view.engine.executeScript("document.documentElement.scrollHeight") as? Number)
-            val drew = (view.engine.executeScript(DREW) as? Number)
-            tall?.toDouble() to drew?.toInt()
+        val tall = runCatching {
+            (view.engine.executeScript("document.documentElement.scrollHeight") as? Number)?.toDouble()
         }.getOrNull()
-        val tall = page?.first
         if (tall != null && tall > 0) report((tall * zoom).toInt())
         // Three seconds in, and the engine either will not answer or is answering that it
         // has a document with nothing in it. Asked once rather than every tick, because a
         // page part way through loading is legitimately empty and this is not a race to
         // win: it is the last resort after every ordinary way of getting there has failed.
-        if (ticks == 12 && (page == null || (page.second ?: 0) <= 0)) blank()
+        if (ticks == 12 && drewNothing(view)) blank()
     }
     timeline.keyFrames.add(javafx.animation.KeyFrame(javafx.util.Duration.millis(250.0), tick))
     timeline.play()
 }
+
+/**
+ * Whether there is anything on the page a reader would see.
+ *
+ * Text or a picture. Not the height, which a blank page has plenty of, and not whether the
+ * load reported success, which it does for a document that drew nothing.
+ */
+private fun drewNothing(view: WebView): Boolean = runCatching {
+    (view.engine.executeScript(
+        "document.body ? document.body.innerText.trim().length + document.images.length : 0"
+    ) as? Number)?.toInt()
+}.getOrNull().let { it == null || it <= 0 }
 
 /**
  * What to multiply the page by so it comes out the size the rest of the window is.
@@ -215,15 +224,6 @@ private fun measure(view: WebView, zoom: Double, report: (Int) -> Unit, blank: (
  * Bounded, because a preference that can make a message unreadable in either direction is
  * a setting somebody can break the application with.
  */
-/**
- * Whether there is anything on the page a reader would see.
- *
- * Text or a picture. Not the height, which a blank page has plenty of, and not whether the
- * load reported success, which it does for a document that drew nothing.
- */
-private const val DREW =
-    "document.body ? document.body.innerText.trim().length + document.images.length : 0"
-
 internal fun zoomFor(density: Float, scale: Float, engineScale: Float = javafxScale()): Double =
     (density / engineScale.coerceAtLeast(0.1f) * scale).coerceIn(0.5f, 3f).toDouble()
 
@@ -307,7 +307,6 @@ private val INLINE_PICTURE =
 private fun extensionFor(type: String): String =
     when (val sub = type.substringAfter('/').substringBefore('+').lowercase()) {
         "jpeg" -> "jpg"
-        "svg+xml", "svg" -> "svg"
         else -> sub.filter { it.isLetterOrDigit() }.ifBlank { "img" }
     }
 
