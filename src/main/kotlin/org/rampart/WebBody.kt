@@ -77,7 +77,18 @@ internal fun WebBody(
     // only a weak reference, so anything it can collect stops being callable a minute in.
     val bridge = remember { WebBridge() }
     bridge.onLink = onLink
-    bridge.onHeight = { if (it > 0) height = minOf(it, TALLEST) }
+    /*
+     * The tallest answer wins, not the latest.
+     *
+     * The page is asked its height several times, because the one that counts is whichever
+     * ask lands after the panel has its real width, and there is no way to know which that
+     * will be. Every measurement before that one is of a collapsed layout and is therefore
+     * too short, never too tall, so keeping the largest is the whole of the arbitration.
+     *
+     * Safe to keep across a document because [height] is reset with it: showing the
+     * pictures builds a new document, which starts the measuring again from nothing.
+     */
+    bridge.onHeight = { if (it > 0) height = maxOf(height, minOf(it, TALLEST)) }
     bridge.onScroll = onScroll
     val panel = remember { JFXPanel() }
 
@@ -201,22 +212,41 @@ private val WIRING = """
     var step = e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? 400 : 1);
     window.rampart.scroll(e.deltaY * step);
   }, { passive: true });
-  function tell() {
+  function tell(force) {
     // A measurement taken before the panel has a real width is a measurement of a
-    // collapsed layout, and it is worse than no measurement because it is then the height
-    // of the panel forever. A newsletter is nested tables: in a pane one pixel wide every
-    // one of them is one pixel wide, the cells report their padding and nothing else, and
-    // the whole message came out as a 140 pixel strip of its own background colour with
-    // no card, no heading and no text in it.
-    if (window.innerWidth < 40) return;
+    // collapsed layout. A newsletter is nested tables: in a pane a few pixels wide every
+    // one of them is a few pixels wide, the cells report their padding and nothing else,
+    // and the message comes out as a short strip of its own background colour with no
+    // card, no heading and no text in it. Refused rather than reported, because the
+    // caller keeps the tallest answer and a wrong small one would be harmless but a
+    // wrong large one would not.
+    //
+    // Except at the end. A pane really can be narrow, and a message that is permanently
+    // 160 pixels tall because the guard never let go is a worse fault than the one the
+    // guard is for.
+    if (!force && window.innerWidth < 40) return;
     window.rampart.height(document.documentElement.scrollHeight);
   }
   tell();
   window.addEventListener('load', tell);
-  // The viewport widening from nothing to the pane is the event that matters, and it is
-  // the one a ResizeObserver on the document does not always see.
   window.addEventListener('resize', tell);
   if (window.ResizeObserver) new ResizeObserver(tell).observe(document.documentElement);
+  // A picture finishing is the ordinary reason a first measurement is short.
+  Array.prototype.forEach.call(document.images, function (img) {
+    img.addEventListener('load', tell);
+    img.addEventListener('error', tell);
+  });
+  /*
+   * And a few times regardless.
+   *
+   * The panel getting its real width is not an event this page can rely on seeing: it is
+   * laid out by the toolkit outside, after the document has already loaded, and whether
+   * a resize reaches the page depends on which of the two happened first. That made the
+   * fault look random, which is exactly what it is. Asking a few times over the first
+   * couple of seconds costs nothing and does not depend on winning the race.
+   */
+  [60, 200, 500, 1200, 2500].forEach(function (ms) { setTimeout(tell, ms); });
+  setTimeout(function () { tell(true); }, 4000);
 })();
 """.trimIndent()
 
