@@ -4174,11 +4174,20 @@ internal fun Message(
             imageBytes[part.blobId]?.let { cid to dataUri(part.type, it) }
         }.toMap()
     }
-    // What the window is, not what the operating system says: the theme picker can put a
-    // dark theme on a light desktop and the message has to match the window it is in.
-    val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
-    val page = remember(body, carriedData, showRemote, dark) {
-        body?.html?.let { emailDocument(it, carriedData, showRemote, dark) }
+    /*
+     * The message is drawn as the sender built it, on its own page, whatever the window
+     * around it is doing.
+     *
+     * Rampart used to invert a message in a dark window, which is the trick webmail uses.
+     * It was wrong twice over on real mail. A reply with no colours in it at all came out
+     * as white text on a black slab, because inverting an unpainted page inverts the white
+     * the engine supplies. And a design that was inverted is a design nobody made: a
+     * hotel's dark brown header came out pink. So the page is always light, the sender's
+     * own colours are always what you see, and the dark window holds a light message the
+     * way a webmail tab does.
+     */
+    val page = remember(body, carriedData, showRemote) {
+        body?.html?.let { emailDocument(it, carriedData, showRemote) }
     }
     val engineDraws = page != null && webEngineWorks
     val rendered = remember(body, linkColor, bodyPaper, engineDraws) {

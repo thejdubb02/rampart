@@ -41,8 +41,6 @@ internal fun emailDocument(
     carried: Map<String, String> = emptyMap(),
     /** Whether pictures may be fetched from the web. Off is the default and the safe one. */
     remoteImages: Boolean = false,
-    /** Render for a dark window. See [DARK_CSS] for what that does and does not do. */
-    dark: Boolean = false,
 ): EmailPage {
     val source = Jsoup.parse(html)
     val clean = Cleaner(EMAIL_SAFELIST).clean(source)
@@ -51,27 +49,16 @@ internal fun emailDocument(
     val policy = if (remoteImages) REMOTE_POLICY else LOCAL_POLICY
     val css = stylesheet(source, remoteImages)
     val body = clean.body().html()
-    // A message that chose its own colours is left alone. See [paintsItself].
-    val ownColours = dark && paintsItself(clean, css)
-    val invert = if (dark && !ownColours) DARK_CSS else ""
-    /*
-     * The colour scheme has to follow the inversion, not the window.
-     *
-     * `color-scheme: dark` tells the engine to use dark defaults, which is white text on a
-     * dark canvas. That is right when the whole page is about to be turned inside out, and
-     * catastrophic when it is not: a message that set a light background and left its text
-     * colour alone got the sender's light background with the engine's white text on it,
-     * which is an empty grey box. Shipped in 0.1.114 and found the same evening.
-     */
-    val scheme = if (ownColours || !dark) "light" else "dark light"
+    // A message that brought a design of its own is left alone. See [paintsItself].
+    val plain = if (paintsItself(clean, css)) "" else PLAIN_CSS
     return EmailPage(
         """<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="$policy">
-<meta name="color-scheme" content="$scheme">
+<meta name="color-scheme" content="light">
 <style>$css</style>
-<style>$BASE_CSS$invert</style>
+<style>$BASE_CSS$plain</style>
 </head><body>$body</body></html>""",
         held,
     )
@@ -243,45 +230,67 @@ private const val BASE_CSS = """
    to scroll. One taller than the panel will fit scrolls itself, which is what auto is
    for: hidden clipped it instead, and the rest of the message was simply gone. */
 html { overflow-x: auto; overflow-y: auto; }
+/* The page always paints, because the panel behind it is transparent and a message that
+   painted nothing showed the dark window through the gaps between its own tables. */
+html { background: #ffffff; }
 body { margin: 0; padding: 0; overflow-x: auto; }
 img:not([style*="max-width"]) { max-width: 100%; height: auto; }
 table:not([style*="max-width"]) { max-width: 100%; }
 """
 
 /**
- * A dark window's version, by inverting.
+ * What a message that brought no design of its own gets, which is most mail.
  *
- * Every pixel is turned inside out and the hues put back, then pictures are turned inside
- * out again so they land where they started. It is the trick webmail uses and it is not
- * colour management: a message with a mid-grey background comes out mid-grey. It beats the
- * alternative, which is a sheet of white in the middle of a dark window.
+ * A reply typed in Gmail is a bare `<div dir="ltr">`: no font, no colour, no width, no
+ * margin. Handed to an engine as-is it comes out in the engine's default, which is Times
+ * at the very edge of the pane with no wrapping, and that is what webmail's own stylesheet
+ * exists to prevent. This is that stylesheet, and it is deliberately four declarations:
+ * anything more starts overriding senders who did choose.
  *
- * Only where the sender did not do it themselves. [OWN_DARK_MODE] is that test.
+ * On `html` rather than `body` so the sender wins every disagreement. A rule the sender
+ * wrote targets `body` or something inside it, which is more specific, and an inline style
+ * beats both. This only ever fills in what nobody stated.
+ *
+ * It is applied only where [paintsItself] says the message has no design, so a newsletter
+ * keeps its own full-bleed background and gets no padding it did not ask for.
  */
-private const val DARK_CSS = """
-html { filter: invert(1) hue-rotate(180deg); background: #ffffff; }
-img, video { filter: invert(1) hue-rotate(180deg); }
+private const val PLAIN_CSS = """
+html { color: #1a1a1a;
+       font: 15px/1.55 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+/* Room to breathe, because the pane's own edge is not a margin. */
+body { padding: 4px 22px 20px; }
+/* A pasted link or a forwarded tracking URL is one unbreakable word several thousand
+   pixels long. Without this it sets the width of the page and every paragraph above it
+   is laid out to that width and then clipped by the pane. */
+body { overflow-wrap: break-word; word-break: break-word; }
 """
 
-/** A message that asked for dark treatment of its own, and so should not be inverted. */
+/**
+ * A message that asked for dark treatment of its own.
+ *
+ * Kept from when messages were inverted for a dark window, because it is still the
+ * cheapest signal that a sender has a design: a `prefers-color-scheme` block is a thing
+ * only somebody who thought about colour writes.
+ */
 private val OWN_DARK_MODE = Regex("""prefers-color-scheme\s*:\s*dark""", RegexOption.IGNORE_CASE)
 
 /**
- * Whether the message painted its own page, and so must not be inverted.
+ * Whether the message painted its own page, and so should be left entirely alone.
  *
- * **[DARK_CSS] exists for a message that never chose a colour**, which is the ordinary
- * case: black text on the white a mail client supplies by default, and a sheet of white in
- * a dark window is worse than turning it inside out. A message that set its own background
- * is a different thing entirely. It has a design, and inverting a design produces something
- * nobody made: a hotel's dark brown header came out pink, which is how this was found.
+ * **[PLAIN_CSS] exists for a message that never chose anything**, which is most mail: a
+ * reply typed in a webmail box, with no font, no colour and no width in it. Those need a
+ * stylesheet or they arrive in the engine's Times at the edge of the pane. A message that
+ * set its own background is a different thing entirely. It has a design, and a design
+ * needs nothing from us: the padding we would add puts a white frame around a full-bleed
+ * header, and the font we would set is not the one it chose.
  *
  * Three ways a sender says so, and the third is the one that matters in practice. Almost no
  * marketing email sets a background on `body`, because Outlook ignored it for twenty years;
  * they all wrap the message in a full-width table and paint that instead.
  *
  * White is not a design. A sender who writes `bgcolor="#ffffff"` is being defensive about
- * clients that default to something else, not choosing white over black, so that one still
- * inverts and still turns dark.
+ * clients that default to something else, not choosing white over anything, so that one is
+ * still treated as plain and still gets the stylesheet.
  */
 private fun paintsItself(document: Document, css: String): Boolean {
     if (OWN_DARK_MODE.containsMatchIn(css + document.html())) return true

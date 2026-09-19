@@ -146,9 +146,21 @@ private val WIRING = """
     var step = e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? 400 : 1);
     window.rampart.scroll(e.deltaY * step);
   }, { passive: true });
-  function tell() { window.rampart.height(document.documentElement.scrollHeight); }
+  function tell() {
+    // A measurement taken before the panel has a real width is a measurement of a
+    // collapsed layout, and it is worse than no measurement because it is then the height
+    // of the panel forever. A newsletter is nested tables: in a pane one pixel wide every
+    // one of them is one pixel wide, the cells report their padding and nothing else, and
+    // the whole message came out as a 140 pixel strip of its own background colour with
+    // no card, no heading and no text in it.
+    if (window.innerWidth < 40) return;
+    window.rampart.height(document.documentElement.scrollHeight);
+  }
   tell();
   window.addEventListener('load', tell);
+  // The viewport widening from nothing to the pane is the event that matters, and it is
+  // the one a ResizeObserver on the document does not always see.
+  window.addEventListener('resize', tell);
   if (window.ResizeObserver) new ResizeObserver(tell).observe(document.documentElement);
 })();
 """.trimIndent()

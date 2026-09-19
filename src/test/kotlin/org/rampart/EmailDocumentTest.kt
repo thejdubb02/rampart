@@ -11,8 +11,8 @@ import kotlin.test.assertTrue
  */
 class EmailDocumentTest {
 
-    private fun page(html: String, remote: Boolean = false, dark: Boolean = false) =
-        emailDocument(html, remoteImages = remote, dark = dark)
+    private fun page(html: String, remote: Boolean = false) =
+        emailDocument(html, remoteImages = remote)
 
     @Test
     fun `nothing that executes gets through`() {
@@ -108,18 +108,6 @@ class EmailDocumentTest {
     }
 
     @Test
-    fun `a dark window inverts, unless the sender did it themselves`() {
-        assertTrue(page("<p>hi</p>", dark = true).document.contains("invert(1)"))
-        assertFalse(page("<p>hi</p>", dark = false).document.contains("invert(1)"))
-
-        val own = """<style>@media (prefers-color-scheme: dark){body{background:#111}}</style><p>hi</p>"""
-        assertFalse(
-            page(own, dark = true).document.contains("invert(1)"),
-            "a message that chose its own dark colours must not be turned inside out",
-        )
-    }
-
-    @Test
     fun `a cid with no matching part leaves no broken picture behind`() {
         val out = page("""<p>text</p><img src="cid:missing@example.org">""").document
         assertFalse(out.contains("cid:"))
@@ -135,102 +123,99 @@ class EmailDocumentTest {
         assertTrue(dataUri("image/png; name=logo.png", byteArrayOf(0)).startsWith("data:image/png;base64,"))
     }
 
-    // ---- dark mode, and what it must not touch -----------------------------------------
+    // ---- what a message gets given, and what it must be left to do itself ---------------
 
-    private fun inverts(html: String): Boolean =
-        emailDocument(html, dark = true).document.contains("invert(1)")
+    /**
+     * Whether the message was handed the plain-mail stylesheet.
+     *
+     * The old version of this section asked whether a message was inverted for a dark
+     * window. Inversion is gone: it turned an uncoloured reply into white text on a black
+     * slab, and it turned a design into one nobody made. The question underneath it is
+     * still exactly as live, because the same test now decides whether Rampart supplies a
+     * font, a padding and a wrapping rule, so every case below is kept.
+     */
+    private fun styled(html: String): Boolean =
+        emailDocument(html).document.contains("word-break: break-word")
 
     @Test
-    fun `a plain message is turned inside out, because a white sheet in a dark window is worse`() {
-        assertTrue(inverts("<p>Tuesday works.</p>"))
-        // Explicit white is defensiveness about other clients, not a design, so it inverts.
-        assertTrue(inverts("""<table width="100%" bgcolor="#ffffff"><tr><td>Hello</td></tr></table>"""))
+    fun `a message with no design of its own is given one, because Times at the pane edge is not a design`() {
+        assertTrue(styled("<p>Tuesday works.</p>"))
+        // The shape this was found on: a reply typed into a webmail box, with nothing in it.
+        assertTrue(styled("""<div dir="ltr"><div>Mark,</div><div><br></div><div>We sent a letter.</div></div>"""))
+        // Explicit white is defensiveness about other clients, not a design.
+        assertTrue(styled("""<table width="100%" bgcolor="#ffffff"><tr><td>Hello</td></tr></table>"""))
     }
 
     @Test
     fun `a message that painted its own page is left exactly as it was sent`() {
         // The real one this was found on: a hotel's alert, a cream page and a dark brown
-        // header bar. Inverted, the brown header came out pink.
+        // header bar. Padding round it would frame a full-bleed header in white.
         val duchamp =
             """<table width="100%" bgcolor="#F4F1EC"><tr><td>""" +
                 """<table width="100%" bgcolor="#3B1F0B"><tr><td align="center">""" +
                 """<h2>DUCHAMP</h2></td></tr></table></td></tr></table>"""
-        assertFalse(inverts(duchamp))
+        assertFalse(styled(duchamp))
     }
 
     @Test
     fun `the background counts wherever the sender put it`() {
-        assertFalse(inverts("""<body bgcolor="#102030"><p>Hello</p></body>"""))
-        assertFalse(inverts("""<body style="background-color:#102030"><p>Hello</p></body>"""))
-        assertFalse(inverts("""<style>body { background: #102030; }</style><p>Hello</p>"""))
+        assertFalse(styled("""<body bgcolor="#102030"><p>Hello</p></body>"""))
+        assertFalse(styled("""<body style="background-color:#102030"><p>Hello</p></body>"""))
+        assertFalse(styled("""<style>body { background: #102030; }</style><p>Hello</p>"""))
         // A fixed-width body, which is the other half of how every template is built.
-        assertFalse(inverts("""<table width="600" bgcolor="#102030"><tr><td>Hi</td></tr></table>"""))
-        assertFalse(inverts("""<div style="width:100%;background:#102030">Hi</div>"""))
+        assertFalse(styled("""<table width="600" bgcolor="#102030"><tr><td>Hi</td></tr></table>"""))
+        assertFalse(styled("""<div style="width:100%;background:#102030">Hi</div>"""))
     }
 
     @Test
-    fun `a sender who did dark mode themselves is still left alone`() {
+    fun `a sender who wrote a dark mode of their own has a design`() {
         assertFalse(
-            inverts("<style>@media (prefers-color-scheme: dark) { body { background: #000 } }</style><p>Hi</p>"),
+            styled("<style>@media (prefers-color-scheme: dark) { body { background: #000 } }</style><p>Hi</p>"),
         )
     }
 
     @Test
     fun `a tinted box inside an otherwise plain message is not a design`() {
         // Only a full-width wrapper counts. A quote block or a callout must not stop the
-        // inversion, or an ordinary message becomes a white sheet in a dark window.
-        assertTrue(inverts("""<p>See below.</p><table width="300" bgcolor="#eeeeee"><tr><td>Quoted</td></tr></table>"""))
-        assertTrue(inverts("""<p>See below.</p><td bgcolor="#eeeeee">Quoted</td>"""))
+        // styling, or an ordinary reply is back to Times at the edge of the pane.
+        assertTrue(styled("""<p>See below.</p><table width="300" bgcolor="#eeeeee"><tr><td>Quoted</td></tr></table>"""))
+        assertTrue(styled("""<p>See below.</p><td bgcolor="#eeeeee">Quoted</td>"""))
         // A max-width on a wrapper is a responsive hint, not a stated width.
-        assertTrue(inverts("""<div style="max-width:600px">Hello</div>"""))
+        assertTrue(styled("""<div style="max-width:600px">Hello</div>"""))
     }
 
     @Test
-    fun `a light window never inverts anything, whatever the sender did`() {
-        val page = emailDocument("""<body bgcolor="#102030"><p>Hi</p></body>""", dark = false)
-        assertFalse(page.document.contains("invert(1)"))
-    }
-
-    private fun scheme(html: String, dark: Boolean): String =
-        Regex("""color-scheme" content="([^"]+)"""").find(emailDocument(html, dark = dark).document)
-            ?.groupValues?.get(1).orEmpty()
-
-    @Test
-    fun `a message left uninverted is never told to use dark defaults`() {
-        // The 0.1.114 bug, and the worst kind: the message renders, with the sender's own
-        // light background and the engine's white text on top of it, so the body is an
-        // empty grey box and nothing anywhere reports a fault.
-        val painted = """<table width="100%" bgcolor="#F4F1EC"><tr><td>Hello</td></tr></table>"""
-        assertEquals("light", scheme(painted, dark = true))
-        // A reply with a background and no colour of its own is the shape it happened on.
-        assertEquals("light", scheme("""<div style="width:100%;background:#f5f5f5">Hi</div>""", dark = true))
-    }
-
-    @Test
-    fun `a message that is being inverted still gets the dark defaults`() {
-        assertEquals("dark light", scheme("<p>Tuesday works.</p>", dark = true))
-    }
-
-    @Test
-    fun `a light window always asks for light, whatever the message did`() {
-        assertEquals("light", scheme("<p>Hi</p>", dark = false))
-        assertEquals("light", scheme("""<body bgcolor="#102030">Hi</body>""", dark = false))
-    }
-
-    @Test
-    fun `the scheme and the inversion never disagree`() {
-        // The invariant behind the bug: dark defaults are only ever correct when the whole
-        // page is about to be turned inside out.
+    fun `the page is always light, whatever the window is doing`() {
+        /*
+         * The whole of what replaced inversion, and the reason it is one line.
+         *
+         * `color-scheme: dark` tells the engine to use dark defaults, which is white text
+         * on a dark canvas, and there is no message for which that is right: one with a
+         * design supplies its own colours, and one without gets ours. The two ways this
+         * went wrong both came from the page and the window disagreeing about which it was.
+         */
         listOf(
             "<p>plain</p>",
+            """<div dir="ltr">a reply with nothing in it</div>""",
             """<table width="100%" bgcolor="#eeeeee"><tr><td>painted</td></tr></table>""",
             """<body bgcolor="#123456">painted on body</body>""",
             "<style>@media (prefers-color-scheme: dark) { body { background: #000 } }</style><p>own</p>",
         ).forEach { html ->
-            val page = emailDocument(html, dark = true).document
-            val inverted = page.contains("invert(1)")
-            val darkScheme = """content="dark light"""" in page
-            assertEquals(inverted, darkScheme, "scheme and inversion disagree for: $html")
+            val document = emailDocument(html).document
+            assertEquals(
+                "light",
+                Regex("""color-scheme" content="([^"]+)"""").find(document)?.groupValues?.get(1),
+                "the page must never ask for dark defaults: $html",
+            )
+            assertFalse(document.contains("invert("), "nothing is inverted any more: $html")
         }
+    }
+
+    @Test
+    fun `the page always paints, so the window never shows through it`() {
+        // The panel behind the engine is transparent, so a message that painted nothing
+        // showed the dark window between its own tables.
+        listOf("<p>plain</p>", """<table width="100%" bgcolor="#eeeeee"><tr><td>x</td></tr></table>""")
+            .forEach { assertTrue(emailDocument(it).document.contains("html { background: #ffffff; }")) }
     }
 }

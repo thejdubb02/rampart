@@ -123,9 +123,24 @@ Two things the engine does not get to decide. It is sized to its content and put
 pane's scroll rather than scrolling itself, so the header, the tags and the attachments
 scroll with the message; the page hands its wheel events back for that, because a real
 component swallows its own input and the pane would otherwise stop scrolling wherever
-the pointer happened to be. And in a dark window the page is inverted and its pictures
-inverted back, unless the sender wrote a `prefers-color-scheme: dark` rule themselves,
-in which case they meant it and it is left alone.
+the pointer happened to be. And the page is always light, whatever the window is doing:
+see below.
+
+**A message is drawn as it was sent, and only what it left out is filled in.** Rampart
+inverted the page in a dark window until 2026-09-19, which is the trick webmail uses, and
+it was wrong twice on real mail. A reply with no colours in it came out as white text on a
+black slab, because inverting a page nobody painted inverts the white the engine supplies.
+And a design that has been inverted is one nobody made: a hotel's dark brown header came
+out pink. So the page is light, the sender's colours are what you see, and a dark window
+holds a light message the way a webmail tab does.
+
+What is supplied is a stylesheet for the message that brought none, which is most mail: a
+reply typed into a webmail box is a bare `<div dir="ltr">` with no font, no colour, no
+width and no margin, and handed to an engine untouched it arrives in the engine's Times at
+the very edge of the pane, with a pasted URL setting the width of the page and every
+paragraph above it clipped. It is four declarations, on `html` so that anything the sender
+did state wins, and it is applied only where the message has no background of its own, so
+a newsletter keeps its full-bleed header and gets no padding it did not ask for.
 
 The block renderer stays. Plain text still goes through it, because a written message
 has no layout to get right and drawing it in Compose keeps it selectable, themed and
