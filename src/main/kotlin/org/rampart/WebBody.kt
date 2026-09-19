@@ -17,6 +17,7 @@ import javafx.embed.swing.JFXPanel
 import javafx.scene.Scene
 import javafx.scene.web.WebView
 import netscape.javascript.JSObject
+import java.util.Base64
 /**
  * A message drawn by a real engine, sitting in the Compose window like any other component.
  *
@@ -80,7 +81,7 @@ internal fun WebBody(
                     fresh.engine.executeScript(WIRING)
                 }
             }
-            view.engine.loadContent(document, "text/html")
+            view.engine.load(asUrl(document))
         }
     }
 
@@ -90,6 +91,27 @@ internal fun WebBody(
         modifier = modifier.fillMaxWidth().height(height.dp),
     )
 }
+
+/**
+ * The document, as something the engine will take the bytes of.
+ *
+ * **`loadContent` corrupts the text and there is no charset argument that stops it.** A
+ * ticket emoji arrived as six replacement characters, and so did every en dash and em dash
+ * in every newsletter: the string is re-encoded somewhere between here and WebKit, and a
+ * character outside the Basic Multilingual Plane does not survive the trip. Passing
+ * `text/html; charset=UTF-8` as the content type does not fix it, it stops the page
+ * loading at all, because the type is matched exactly.
+ *
+ * A `data:` URL has no such step. The document is encoded to UTF-8 here, base64 makes it
+ * safe to be a URL, and the charset is stated in the URL itself, so what WebKit decodes is
+ * the bytes this function produced. Verified against a 65 KB message: same content, same
+ * measured height, and the emoji intact.
+ *
+ * The page's own content security policy is in a meta tag and applies either way.
+ */
+internal fun asUrl(document: String): String =
+    "data:text/html;charset=utf-8;base64," +
+        Base64.getEncoder().encodeToString(document.toByteArray(Charsets.UTF_8))
 
 /**
  * What the page calls back into.
