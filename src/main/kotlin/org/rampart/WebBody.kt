@@ -163,6 +163,34 @@ internal fun asUrl(document: String): String =
         Base64.getEncoder().encodeToString(document.toByteArray(Charsets.UTF_8))
 
 /**
+ * Printing the message, through the engine that already knows how to draw it.
+ *
+ * A fresh offscreen view rather than the one on screen. The one on screen is capped at
+ * [TALLEST] and may be scrolled, and a print is the whole message, not the part that fits;
+ * loading it again costs nothing worth saving and gets the whole thing.
+ *
+ * The dialog is the operating system's own, so paper size, printer and range are all
+ * already answered. With no printer configured there is no job to make and nothing
+ * happens, which is the same as every other application on the machine.
+ */
+internal fun printDocument(document: String) {
+    Platform.runLater {
+        val job = javafx.print.PrinterJob.createPrinterJob() ?: return@runLater
+        val view = WebView()
+        view.engine.loadWorker.stateProperty().addListener { _, _, state ->
+            if (state != Worker.State.SUCCEEDED) return@addListener
+            // Asked after the load, not before: the dialog shows a page count, and before
+            // the load there are no pages to count.
+            if (job.showPrintDialog(null)) {
+                view.engine.print(job)
+                job.endJob()
+            }
+        }
+        view.engine.load(asUrl(document))
+    }
+}
+
+/**
  * What the page calls back into.
  *
  * Public, and the methods with it, because JavaFX reaches them by reflection from the

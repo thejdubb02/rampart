@@ -1480,6 +1480,30 @@ private fun Reader(
      * Returns null when this account has no folder for that role, so a server with no
      * Archive never offers an Archive that would fail.
      */
+    /**
+     * The move itself, wherever it was asked for.
+     *
+     * Filing by role and filing into a folder somebody picked off a list are the same act
+     * once the target is known, and the parts that are easy to forget are the ones after
+     * the move: dropping the local copy, taking it out of the list on screen, and leaving
+     * something to undo with.
+     */
+    suspend fun carryOut(key: String, message: Summary, into: String, from: String?, verb: String) {
+        if (io { session(key).jmap.move(listOf(message.id), into) } == null) return
+        // Out of the local copy as well, or the folder it left would show it
+        // again the next time that folder is opened from disk.
+        io { session(key).store?.forget(listOf(message.id)) }
+        emails = emails.filterNot { it.id == message.id }
+        if (selected?.id == message.id) {
+            selected = null
+            body = null
+        }
+        // One message can be taken back the same way a batch can. Filing the
+        // wrong thing is a click, and having to go and find it again is the
+        // part that makes people slow and careful about a button.
+        undo = from?.let { Undoable(listOf(Move(key, listOf(message.id), it)), verb) }
+    }
+
     fun fileAway(message: Summary, role: String): (() -> Unit)? {
         val key = accountOf(message) ?: return null
         val target = folderFor(role, mailboxes[key].orEmpty()) ?: return null
@@ -1503,26 +1527,12 @@ private fun Reader(
                         ?.also { refreshFolders(key) }
                 } ?: target.id
 
-                if (io { session(key).jmap.move(listOf(message.id), into) } != null) {
-                    // Out of the local copy as well, or the folder it left would show it
-                    // again the next time that folder is opened from disk.
-                    io { session(key).store?.forget(listOf(message.id)) }
-                    emails = emails.filterNot { it.id == message.id }
-                    if (selected?.id == message.id) {
-                        selected = null
-                        body = null
-                    }
-                    // One message can be taken back the same way a batch can. Filing the
-                    // wrong thing is a click, and having to go and find it again is the
-                    // part that makes people slow and careful about a button.
-                    undo = from?.let {
-                        Undoable(listOf(Move(key, listOf(message.id), it)), pastTense(role))
-                    }
-                }
+                carryOut(key, message, into, from, pastTense(role))
             }
             Unit
         }
     }
+
 
     /**
      * Puts a message away until later.
@@ -1816,6 +1826,7 @@ private fun Reader(
          * both the fix and the correction.
          */
         val junked = inJunk(message)
+        val boxes = mailboxes[accountOf(message)!!].orEmpty()
         MessageActions(
             archive = moveTo("archive"),
             snooze = { until -> snooze(message, until) },
@@ -1823,6 +1834,18 @@ private fun Reader(
             junk = if (junked) null else moveTo("junk"),
             notJunk = if (junked) moveTo("inbox") else null,
             star = { starOne(message) },
+            // Unread is how most people say "come back to this", and it was reachable
+            // only by right-clicking the row the message was opened from.
+            markUnread = if (message.seen) ({ markRead(message, false) }) else null,
+            moveInto = { into ->
+                val key = accountOf(message) ?: return@MessageActions
+                val from = sourceFolder(key)
+                scope.launch { carryOut(key, message, into, from, "Moved") }
+                Unit
+            },
+            // Everything except where it already is, and except the three that have a
+            // button of their own: offering Archive twice is how a menu stops being read.
+            folders = boxes.filter { it.id != here?.second?.id && it.role !in MOVE_COVERED },
         )
     }
 
@@ -4150,6 +4173,26 @@ internal data class RowActions(
     val snooze: ((Summary, SnoozeUntil) -> Unit)? = null,
 )
 
+/**
+ * How deep a folder sits, for indenting it in a flat list.
+ *
+ * Counted by walking up the parents rather than stored, because the list Move is given is
+ * already filtered and a stored depth would be the depth in the full tree.
+ */
+internal fun depthOf(folder: Mailbox, among: List<Mailbox>): Int {
+    var depth = 0
+    var parent = folder.parentId
+    while (parent != null && depth < 6) {
+        val next = among.firstOrNull { it.id == parent } ?: break
+        depth++
+        parent = next.parentId
+    }
+    return depth
+}
+
+/** Roles that already have a button on the message, so Move does not offer them again. */
+internal val MOVE_COVERED = setOf("archive", "junk", "trash", "drafts", "sent")
+
 internal data class MessageActions(
     val archive: (() -> Unit)? = null,
     val snooze: ((SnoozeUntil) -> Unit)? = null,
@@ -4158,6 +4201,17 @@ internal data class MessageActions(
     /** Out of Junk again. Present exactly when [junk] is not, never both and never neither. */
     val notJunk: (() -> Unit)? = null,
     val star: (() -> Unit)? = null,
+    /** Marking it unread again, which is how most people say "come back to this". */
+    val markUnread: (() -> Unit)? = null,
+    /**
+     * Filing it anywhere, by mailbox id.
+     *
+     * Archive, Spam and Delete are the three folders worth their own button; everything
+     * else a mailbox has is this. Null on an account with nowhere else to put it.
+     */
+    val moveInto: ((String) -> Unit)? = null,
+    /** The folders that move can offer, already in the order the sidebar shows them. */
+    val folders: List<Mailbox> = emptyList(),
 )
 
 @Composable
@@ -4334,9 +4388,49 @@ internal fun Message(
                 OutlinedButton(onClick = onForward, enabled = body != null) { Text("Forward") }
                 Spacer(Modifier.weight(1f))
                 actions.archive?.let { OutlinedButton(onClick = it) { Text("Archive") } }
+                /*
+                 * Move, for the folders that have no button of their own.
+                 *
+                 * The list rather than a dialog: filing is a thing people do to one message
+                 * at a time, over and over, and a dialog turns a click into a click, a wait,
+                 * a read and a second click. Nested folders are shown by their depth rather
+                 * than by a submenu, for the same reason.
+                 */
+                if (actions.folders.isNotEmpty() && actions.moveInto != null) {
+                    var picking by remember(summary.id) { mutableStateOf(false) }
+                    Box {
+                        OutlinedButton(onClick = { picking = true }) { Text("Move") }
+                        DropdownMenu(picking, onDismissRequest = { picking = false }) {
+                            actions.folders.forEach { folder ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            folder.name,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            modifier = Modifier.padding(
+                                                start = (depthOf(folder, actions.folders) * 12).dp,
+                                            ),
+                                        )
+                                    },
+                                    modifier = Modifier.height(32.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp),
+                                    onClick = { picking = false; actions.moveInto.invoke(folder.id) },
+                                )
+                            }
+                        }
+                    }
+                }
                 actions.junk?.let { OutlinedButton(onClick = it) { Text("Spam") } }
                 actions.notJunk?.let { OutlinedButton(onClick = it) { Text("Not spam") } }
                 actions.trash?.let { OutlinedButton(onClick = it) { Text("Delete") } }
+                // Unread is what people press to mean "come back to this", and it was only
+                // ever reachable by right-clicking the row the message was opened from.
+                actions.markUnread?.let { OutlinedButton(onClick = it) { Text("Unread") } }
+                // Only where an engine drew it. The block renderer has no page to hand a
+                // printer, and a Print button that does nothing is worse than none.
+                if (engineDraws && page != null) {
+                    OutlinedButton(onClick = { printDocument(page.document) }) { Text("Print") }
+                }
                 // Everything past Delete is something people reach for occasionally, and a
                 // row of eight buttons runs off the edge of the pane at any sensible width.
                 /*
