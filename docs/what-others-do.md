@@ -127,7 +127,86 @@ local store, and passwords in the operating system's credential store.
 
 ---
 
-## 3. The menu crawl
+## 3. What is actually new in 2026, and where Rampart already stands
+
+Added 2026-09-19. Thunderbird is the bar for "is anything missing". This section is the
+opposite question: of everything being built right now, what is a genuinely different
+idea rather than a prettier list on top of IMAP.
+
+**The first thing to say is that Rampart is already on the right side of the main split.**
+The interesting clients of 2026 are the ones that are JMAP-native with a local database,
+and that is what this is. Thunderbird is not one of them. So most of what follows is not a
+gap, it is confirmation that the shape is right, plus five ideas worth taking.
+
+### The one to actually watch
+
+**czlmail.** A Wails JMAP client for Stalwart: mail, calendar, contacts, WebDAV and an MCP
+server. That is this application's exact niche, described in one line. Worth reading before
+the next big design decision, not to copy but because somebody else has already hit the
+walls we are about to. The same goes for **Parula / Mustang**, built by former Thunderbird
+people, which claims the first JMAP Calendar and JMAP Contacts implementations.
+
+### Ideas worth taking
+
+| Idea | Where from | Why it fits here |
+|---|---|---|
+| **Query mailboxes with nested conditions, and auto-submailboxes** | MailMate | A saved search is already on the Thunderbird list. This is the version worth building instead: a folder defined by a query, which can split itself into one child per mailing list or per sender. Rampart has a local store with a search index, which is the hard half. |
+| **Export the archive as `.eml` in a Maildir tree** | MailVault | Already on the list as "import and export", and this is the shape it should take. Mail that stays readable after the server deletes it is the strongest version of "you can leave", and Rampart already saves single messages as `.eml`. |
+| **Markdown composing that emits plain and HTML together** | MailMate | Rampart's composer already writes both parts. Markdown as an input mode is a setting, not an architecture, and it is the thing power users ask for first. |
+| **Betterbird's backlog** | Betterbird | Twenty years of paper cuts Mozilla would not ship: multi-line message list, regex search, a collapsed thread showing its latest child, attachments above the body, account colours on rows, a real tray with an unread count. Cheap individually, and together they are most of what "finished" feels like. Rampart already has account tinting, which is on that list. |
+| **Newsletter bundling and follow-up reminders** | Velo, and the paid inboxes | The dashboard already counts unanswered mail. A follow-up reminder is that count turned into a prompt. |
+
+### Already the plan, and worth knowing we were right
+
+- **A local warehouse the models query.** msgvault indexes millions of messages into SQLite
+  and DuckDB and exposes them over MCP, so an assistant reads your archive rather than the
+  provider's API. `assistant.md` specifies exactly that shape, over the store Rampart
+  already has.
+- **Bring your own key, or run it on the machine.** Velo, Inboxed and GingerMail all put
+  the model behind the user's own key or on-device. That is `assistant.md` section 3, and
+  it is also the estate rule about capping anything given a model, which does not apply to
+  a key the user typed in.
+- **Tracking, and stripping tracking, in the same application.** Mailspring sells read
+  receipts and pixel tracking as a paid feature, and Kanmail strips pixels and refuses a
+  proxy inbox. Rampart does both, which is the honest position: blocking is the default for
+  mail you receive, and tracking is switched on one message at a time by somebody who knows
+  what it is.
+- **Local first, no server of ours in the middle.** Every client in this list that is worth
+  anything says it. The companion server is optional and holds no mail, which is the same
+  claim and it is true.
+
+### Interesting, and still no
+
+- **A kanban board of the inbox** (Kanmail) and **a chat-bubble view of mail** (Parula,
+  MailVault). Genuinely different object models and genuinely good for some people. They
+  are also a second full interface to build, maintain and explain, on an application that
+  does not yet have encryption. The idea to keep is narrower and is already listed above:
+  a folder defined by a query.
+- **Mail plus realtime chat in one application.** Parula bundles XMPP, Matrix, WhatsApp and
+  Signal, and calls from the calendar. That is the "replace Outlook and Teams" bet and it is
+  a different product, with four more protocols to keep working forever.
+- **Native EWS for full Exchange PIM** (Evolution). Solved, by somebody else, for an
+  audience that is not ours. Same answer as in section 2.
+- **A terminal client or a CLI as the product** (aerc, Himalaya, notmuch, mu4e). A different
+  audience with different hands. The idea underneath, search index first and folders
+  optional, is the query-mailbox row above.
+- **Electron or Tauri and a 15 MB binary.** Rampart is Compose Desktop and ships a JVM, and
+  the download size is the cost of that choice. Worth knowing it is a thing people compare;
+  not worth rewriting the application over.
+
+### The warning in this list
+
+Every AI-first client here (Exo, Inboxed, GingerMail, the agentic Fastmail TUI) is betting
+that the inbox should arrive pre-processed. Some of that is right and it is in
+`assistant.md`. But the reason to be careful is the same reason inversion was removed from
+the renderer this week: **a mail client that changes what the sender wrote, or decides what
+you see, is wrong in a way that is invisible until it matters.** A summary that is
+confidently wrong about a contract is worse than no summary. Every model feature here stays
+off by default, shows what it was given, and never replaces the message.
+
+---
+
+## 4. The menu crawl
 
 Neither `parity.md` nor this file was written by going through the other application's
 menus one at a time, so both are built from what we happened to notice. The gap between
