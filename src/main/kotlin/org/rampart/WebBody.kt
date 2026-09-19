@@ -98,7 +98,12 @@ internal fun WebBody(
                 fresh.isContextMenuEnabled = false
                 // The page paints its own background; the panel behind it must not add a
                 // second one or every message sits on a white card.
-                panel.scene = Scene(fresh).apply { fill = javafx.scene.paint.Color.TRANSPARENT }
+                panel.scene = Scene(fresh).apply {
+                    fill = javafx.scene.paint.Color.TRANSPARENT
+                    // The engine is laid out at the size it is actually shown at.
+                    fresh.prefWidthProperty().bind(widthProperty())
+                    fresh.prefHeightProperty().bind(heightProperty())
+                }
                 fresh.engine.loadWorker.stateProperty().addListener { _, _, state ->
                     if (state != Worker.State.SUCCEEDED) return@addListener
                     (fresh.engine.executeScript("window") as JSObject).setMember("rampart", bridge)
@@ -227,14 +232,18 @@ private val WIRING = """
     if (!force && window.innerWidth < 40) return;
     window.rampart.height(document.documentElement.scrollHeight);
   }
+  // Wrapped, every one of them: a listener is called with its event as the first
+  // argument, so passing `tell` itself made `force` an Event, which is truthy, and the
+  // guard above was never once applied.
+  function again() { tell(false); }
   tell();
-  window.addEventListener('load', tell);
-  window.addEventListener('resize', tell);
-  if (window.ResizeObserver) new ResizeObserver(tell).observe(document.documentElement);
+  window.addEventListener('load', again);
+  window.addEventListener('resize', again);
+  if (window.ResizeObserver) new ResizeObserver(again).observe(document.documentElement);
   // A picture finishing is the ordinary reason a first measurement is short.
   Array.prototype.forEach.call(document.images, function (img) {
-    img.addEventListener('load', tell);
-    img.addEventListener('error', tell);
+    img.addEventListener('load', again);
+    img.addEventListener('error', again);
   });
   /*
    * And a few times regardless.
@@ -245,7 +254,7 @@ private val WIRING = """
    * fault look random, which is exactly what it is. Asking a few times over the first
    * couple of seconds costs nothing and does not depend on winning the race.
    */
-  [60, 200, 500, 1200, 2500].forEach(function (ms) { setTimeout(tell, ms); });
+  [60, 200, 500, 1200, 2500].forEach(function (ms) { setTimeout(again, ms); });
   setTimeout(function () { tell(true); }, 4000);
 })();
 """.trimIndent()
@@ -272,6 +281,9 @@ internal val webEngineWorks: Boolean by lazy {
  * every menu, dialog and overlay opens behind it. Set before the first window, because it
  * is read once when the scene is made.
  */
+@Volatile internal var lastReportedHeight: Int = -1
+@Volatile internal var probePanel: JFXPanel? = null
+
 internal fun enableWebBody() {
     System.setProperty("compose.interop.blending", "true")
 }
