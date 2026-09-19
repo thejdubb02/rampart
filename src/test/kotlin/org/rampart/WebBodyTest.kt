@@ -135,12 +135,16 @@ class WebBodyTest {
         assertTrue(written.contains("data:image/png;base64,$inline"))
     }
 
-    /** Old ones do go, or a long session fills the temporary directory. */
+    /**
+     * A picture is a file the page fetches when it needs it, so a message left open still
+     * depends on its files. Nothing this run wrote is removed while the run is going: the
+     * only sweep is of what an earlier run left, and it happens once.
+     */
     @Test
-    fun `a file nothing can still be reading is swept`() {
-        val stale = java.nio.file.Files.createTempFile("rampart-message-", ".html")
-        stale.toFile().setLastModified(System.currentTimeMillis() - 60 * 60 * 1000)
-        asUrl("<p>now</p>")
-        assertTrue(!java.nio.file.Files.exists(stale), "an hour-old message file was left behind")
+    fun `a message this run wrote is never swept out from under it`() {
+        val page = java.nio.file.Path.of(java.net.URI.create(asUrl("<p>read me slowly</p>")))
+        page.toFile().setLastModified(System.currentTimeMillis() - 24 * 60 * 60 * 1000)
+        asUrl("<p>and now another message</p>")
+        assertTrue(java.nio.file.Files.exists(page), "an open message's file was swept")
     }
 }

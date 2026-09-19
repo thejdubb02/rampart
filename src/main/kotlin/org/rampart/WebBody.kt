@@ -128,29 +128,46 @@ internal fun WebBody(
     bridge.onScroll = onScroll
     bridge.onBlank = onBlank
     val panel = remember { JFXPanel() }
+    /*
+     * The measuring of the message before this one, so it can be stopped.
+     *
+     * It runs for six seconds and the reader moves faster than that. Left running, it goes
+     * on asking the engine how tall it is, and the engine now holds a different message, so
+     * it answers for that one: the panel takes the previous message's height and, worse,
+     * counts as measured, which is what stops the fallback from ever running.
+     */
+    val ticker = remember { java.util.concurrent.atomic.AtomicReference<javafx.animation.Timeline?>(null) }
 
     remember(document, density, scale) {
         Platform.runLater {
-            val view = (panel.scene?.root as? WebView) ?: WebView().also { fresh ->
-                fresh.isContextMenuEnabled = false
-                // The page paints its own background; the panel behind it must not add a
-                // second one or every message sits on a white card.
-                panel.scene = Scene(fresh).apply {
-                    fill = javafx.scene.paint.Color.TRANSPARENT
-                    // The engine is laid out at the size it is actually shown at.
-                    fresh.prefWidthProperty().bind(widthProperty())
-                    fresh.prefHeightProperty().bind(heightProperty())
+            /*
+             * Writing the document out is the one step here that touches a disk, and a disk
+             * that is full or read-only throws. Uncaught it takes the pane down; caught, it
+             * is the same answer as every other way this can fail, which is that the block
+             * renderer draws the message instead.
+             */
+            runCatching {
+                val view = (panel.scene?.root as? WebView) ?: WebView().also { fresh ->
+                    fresh.isContextMenuEnabled = false
+                    // The page paints its own background; the panel behind it must not add a
+                    // second one or every message sits on a white card.
+                    panel.scene = Scene(fresh).apply {
+                        fill = javafx.scene.paint.Color.TRANSPARENT
+                        // The engine is laid out at the size it is actually shown at.
+                        fresh.prefWidthProperty().bind(widthProperty())
+                        fresh.prefHeightProperty().bind(heightProperty())
+                    }
+                    fresh.engine.loadWorker.stateProperty().addListener { _, _, state ->
+                        if (state != Worker.State.SUCCEEDED) return@addListener
+                        (fresh.engine.executeScript("window") as JSObject).setMember("rampart", bridge)
+                        fresh.engine.executeScript(WIRING)
+                    }
                 }
-                fresh.engine.loadWorker.stateProperty().addListener { _, _, state ->
-                    if (state != Worker.State.SUCCEEDED) return@addListener
-                    (fresh.engine.executeScript("window") as JSObject).setMember("rampart", bridge)
-                    fresh.engine.executeScript(WIRING)
-                }
-            }
-            val zoom = zoomFor(density, scale)
-            view.zoom = zoom
-            view.engine.load(asUrl(document))
-            measure(view, zoom, { bridge.onHeight(it) }, { bridge.onBlank() })
+                val zoom = zoomFor(density, scale)
+                view.zoom = zoom
+                view.engine.load(asUrl(document))
+                ticker.getAndSet(measure(view, zoom, { bridge.onHeight(it) }, { bridge.onBlank() }))?.stop()
+            }.onFailure { bridge.onBlank() }
         }
     }
 
@@ -180,7 +197,7 @@ internal fun WebBody(
  * pane is laid out after the document loads, pictures decode later still, and the
  * measurement that counts is whichever one lands after all of that. Stops on its own.
  */
-private fun measure(view: WebView, zoom: Double, report: (Int) -> Unit, blank: () -> Unit) {
+private fun measure(view: WebView, zoom: Double, report: (Int) -> Unit, blank: () -> Unit): javafx.animation.Timeline {
     val timeline = javafx.animation.Timeline()
     timeline.cycleCount = 24
     var ticks = 0
@@ -198,6 +215,7 @@ private fun measure(view: WebView, zoom: Double, report: (Int) -> Unit, blank: (
     }
     timeline.keyFrames.add(javafx.animation.KeyFrame(javafx.util.Duration.millis(250.0), tick))
     timeline.play()
+    return timeline
 }
 
 /**
@@ -259,11 +277,33 @@ private fun javafxScale(): Float =
  * last few minutes is touched, and there is no shared bookkeeping left to get wrong.
  */
 internal fun asUrl(document: String): String {
+    leftovers
     val file = kotlin.io.path.createTempFile("rampart-message-", ".html")
     file.toFile().deleteOnExit()
     java.nio.file.Files.write(file, unpack(document, file).toByteArray(Charsets.UTF_8))
-    sweep(file.parent)
     return file.toUri().toString()
+}
+
+/**
+ * What a previous run left behind, cleared once when this one first draws a message.
+ *
+ * **Sweeping by age during the session was wrong, and wrong in the direction that shows.**
+ * A picture is a file the page fetches when it needs it, not something read once at load,
+ * so a message left open while somebody reads it still depends on its files being there.
+ * Sweeping anything older than a few minutes therefore took the pictures out of the message
+ * on screen. This run's own files go on exit and are never touched before then; an hour is
+ * long enough that a second copy of Rampart started alongside the first cannot lose a
+ * message either.
+ */
+private val leftovers: Unit by lazy<Unit> {
+    runCatching {
+        val old = System.currentTimeMillis() - 60 * 60 * 1000
+        val temp = java.nio.file.Path.of(System.getProperty("java.io.tmpdir"))
+        java.nio.file.Files.newDirectoryStream(temp, "rampart-message-*").use { files ->
+            files.filter { it.toFile().lastModified() < old }
+                .forEach { runCatching { java.nio.file.Files.deleteIfExists(it) } }
+        }
+    }
 }
 
 /**
@@ -310,16 +350,6 @@ private fun extensionFor(type: String): String =
         else -> sub.filter { it.isLetterOrDigit() }.ifBlank { "img" }
     }
 
-/** Messages written long enough ago that nothing can still be loading one. */
-private fun sweep(directory: java.nio.file.Path) {
-    runCatching {
-        val old = System.currentTimeMillis() - 5 * 60 * 1000
-        java.nio.file.Files.newDirectoryStream(directory, "rampart-message-*").use { files ->
-            files.filter { it.toFile().lastModified() < old }
-                .forEach { runCatching { java.nio.file.Files.deleteIfExists(it) } }
-        }
-    }
-}
 
 /**
  * Printing the message, through the engine that already knows how to draw it.
