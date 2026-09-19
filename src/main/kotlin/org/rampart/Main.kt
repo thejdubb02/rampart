@@ -129,6 +129,8 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.isTraySupported
 import androidx.compose.ui.window.rememberTrayState
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -636,7 +638,22 @@ internal fun Connect(
  * refusing to send their mail. So this rethrows instead, which is what a cancellation is
  * supposed to do: unwind the coroutine that was cancelled and tell nobody.
  */
-internal fun whyFailed(e: Exception): String {
+/**
+ * A call that may fail, without swallowing the cancellation that everything here depends on.
+ *
+ * `runCatching` catches [CancellationException] with everything else, and in a coroutine
+ * that turns "the reader moved to another message" into "the server failed", which then
+ * writes an error where the next message is about to be drawn.
+ */
+private suspend fun <T> tried(block: suspend () -> T): Result<T> = try {
+    Result.success(block())
+} catch (e: CancellationException) {
+    throw e
+} catch (e: Exception) {
+    Result.failure(e)
+}
+
+internal fun whyFailed(e: Throwable): String {
     if (e is CancellationException) throw e
     return e.message ?: e.toString()
 }
@@ -1350,28 +1367,42 @@ private fun Reader(
         // can gain a decoded part or lose a broken one between reads.
         val kept = io { session(key).store?.body(message.id) }
         if (kept != null) body = kept
-        body = try {
-            withContext(Dispatchers.IO) { session(key).jmap.body(message.id) }
-                .also { fetched -> io { session(key).store?.putBody(message.id, fetched) } }
-        } catch (e: Exception) {
-            // Only a failure when there was nothing kept. Offline, with a copy on disk,
-            // is a message that opens rather than an error where the message should be.
-            if (kept == null) bodyError = whyFailed(e)
-            kept
-        }
-        attachments = io { session(key).jmap.attachments(message.id) } ?: emptyList()
+        /*
+         * The body, the parts list and the conversation are asked for at once.
+         *
+         * They do not depend on each other and each is a round trip, so asking for them in
+         * turn made opening a message cost three of them end to end, and a message with
+         * pictures in it several more on top. On anything but a local server that is the
+         * difference between a message appearing and a message arriving.
+         */
+        val fetchedBody = async(Dispatchers.IO) { tried { session(key).jmap.body(message.id) } }
+        val fetchedParts = async(Dispatchers.IO) { tried { session(key).jmap.attachments(message.id) } }
+        val fetchedThread =
+            if (thread.isEmpty()) async(Dispatchers.IO) { tried { session(key).jmap.thread(message.threadId) } }
+            else null
+
+        body = fetchedBody.await().fold(
+            onSuccess = { fresh -> fresh.also { io { session(key).store?.putBody(message.id, it) } } },
+            onFailure = { e ->
+                // Only a failure when there was nothing kept. Offline, with a copy on disk,
+                // is a message that opens rather than an error where the message should be.
+                if (kept == null) bodyError = whyFailed(e)
+                kept
+            },
+        )
+        attachments = fetchedParts.await().getOrNull() ?: emptyList()
 
         // Images the message carries with it are drawn. Fetching them asks the server this
         // account is already signed in to, so it tells the sender nothing, which is the
         // whole difference between these and the remote ones that stay blocked.
         val embedded = attachments.filter { it.inline && it.type.startsWith("image/") }
         if (embedded.isNotEmpty()) {
+            // All of them at once, for the same reason as above: a message with six inline
+            // pictures was six round trips, one after the other, before it finished drawing.
             val fetched = withContext(Dispatchers.IO) {
-                embedded.mapNotNull { part ->
-                    val bytes = runCatching { session(key).jmap.blob(part) }.getOrNull()
-                        ?: return@mapNotNull null
-                    part.blobId to bytes
-                }.toMap()
+                embedded.map { part ->
+                    async { tried { session(key).jmap.blob(part) }.getOrNull()?.let { part.blobId to it } }
+                }.awaitAll().filterNotNull().toMap()
             }
             inlineBytes = fetched
             inlineImages = fetched.mapNotNull { (blobId, bytes) ->
@@ -1397,7 +1428,7 @@ private fun Reader(
             }
         }
 
-        if (thread.isEmpty()) thread = io { session(key).jmap.thread(message.threadId) } ?: emptyList()
+        fetchedThread?.let { thread = it.await().getOrNull() ?: emptyList() }
 
         // Already answered for this sender, so it is not asked again. The question is
         // whether to tell them the message was opened, and that was settled the first time.
