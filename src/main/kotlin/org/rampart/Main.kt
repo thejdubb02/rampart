@@ -97,6 +97,9 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import org.jetbrains.skia.Image
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.loadSvgPainter
 import androidx.compose.ui.res.useResource
@@ -3960,7 +3963,42 @@ private fun MessageRow(
                     Box(Modifier.size(7.dp).clip(CircleShape).background(Color(tag.color)))
                 }
             }
-            if (message.preview.isNotBlank()) {
+            /*
+             * The sign-in code, on the row, so the message never has to be opened.
+             *
+             * This is the whole point of the feature rather than a flourish on it: a code
+             * is wanted for about forty seconds and the message is never read. It is drawn
+             * instead of the preview, because the preview of one of these messages is the
+             * sentence the code was found in.
+             */
+            val code = remember(message.id) { oneTimeCode(message.subject, message.preview) }
+            if (code != null) {
+                val clipboard = LocalClipboardManager.current
+                Spacer(Modifier.height(3.dp))
+                Row(
+                    Modifier.padding(start = 13.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                        modifier = Modifier.clickable { clipboard.setText(AnnotatedString(code)) },
+                    ) {
+                        Text(
+                            code,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                        )
+                    }
+                    Spacer(Modifier.width(7.dp))
+                    Text(
+                        "Copy",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+            } else if (message.preview.isNotBlank()) {
                 Spacer(Modifier.height(2.dp))
                 Text(
                     message.preview,
@@ -4679,6 +4717,51 @@ internal fun Message(
                             me = me,
                             onAnswer = if (answering == null) onAnswer else null,
                         )
+                    }
+
+                    /*
+                     * The sign-in code, in a size somebody can read across a desk.
+                     *
+                     * Read from the message itself rather than the preview the list had,
+                     * because a body is the whole message and a preview is its first two
+                     * hundred characters, so this finds the ones that put the code lower
+                     * down. A message whose code the list already found shows the same one.
+                     */
+                    val signInCode = remember(summary.id, body) {
+                        body?.let { oneTimeCode(summary.subject, it.text, it.html) }
+                    }
+                    if (signInCode != null) {
+                        val clipboard = LocalClipboardManager.current
+                        var copied by remember(signInCode) { mutableStateOf(false) }
+                        Spacer(Modifier.height(16.dp))
+                        Surface(
+                            shape = MaterialTheme.shapes.medium,
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                        ) {
+                            Row(
+                                Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        "Sign-in code",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.outline,
+                                    )
+                                    Text(
+                                        signInCode,
+                                        style = MaterialTheme.typography.headlineSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+                                TextButton(onClick = {
+                                    clipboard.setText(AnnotatedString(signInCode))
+                                    copied = true
+                                }) {
+                                    Text(if (copied) "Copied" else "Copy")
+                                }
+                            }
+                        }
                     }
 
                     Spacer(Modifier.height(18.dp))
