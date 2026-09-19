@@ -138,15 +138,31 @@ with the list on `?`, a vacation responder, the command palette on Ctrl+K, push 
 JMAP WebSocket, eighteen themes, self-updating, passwords in the operating system's
 credential store.
 
-**2026-09-19, and most of it was one bug wearing four costumes.** A message would open and
+**2026-09-19, and most of it was one bug wearing five costumes.** A message would open and
 be blank: drawn, sized, painted, and empty. Four separate faults in the path between the
 sanitised document and the pane produced exactly that outcome, none of them logged
-anything, and any one alone was enough. They are written up in `architecture.md` under
+anything, and any one alone was enough. A fifth turned up the same evening and was the
+oldest of them: a picture the message carries is embedded as text, and past roughly nine
+hundred thousand characters the engine draws a blank rectangle the size of it and reports
+success. A 700 KB signature logo at the top of a message fills the pane and pushes the
+text below the fold, so a message that half arrived looks like one that did not arrive at
+all. Big pictures are now files beside the document. They are written up in
+`architecture.md` under
 "Handing the message to the engine". What matters here is the rule that came out of it:
 **the message shows even when the measuring fails.** After three seconds with no answer
-the panel takes the pane and the page scrolls itself. The remaining ways this can go wrong
-live in a browser engine, a toolkit and a display scale, and mail should not depend on all
-three agreeing.
+the panel takes the pane and the page scrolls itself. And the general form of it, because
+the specific forms keep arriving: three seconds after a document loads, if the page has no
+text and no picture on it, the message is drawn by the block renderer instead. Plainer
+than the sender meant, and always there. The remaining ways this can go wrong live in a
+browser engine, a toolkit and a display scale, and mail should not depend on all three
+agreeing.
+
+**Not spam now tells the server what it means.** It moved the message and said nothing
+else, so the correction was a tidy-up: the folder a message sits in is where it is, not
+what it is, and the same sender was back in Junk the next morning. It sets `$notjunk`, and
+Spam sets `$junk`, which is what the rest of the world writes and what a server's own
+classifier reads. Worth knowing where it still will not help: a message scored into Junk by
+a static rule rather than by the classifier is not something training can argue with.
 
 Dark-window inversion is gone with it. It turned a reply with no colours into white text
 on a black slab and a hotel's brown header into pink, so the page is always light and the

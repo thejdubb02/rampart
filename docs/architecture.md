@@ -125,7 +125,7 @@ component swallows its own input and the pane would otherwise stop scrolling whe
 the pointer happened to be. And the page is always light, whatever the window is doing:
 see below.
 
-### Handing the message to the engine, and four ways it went wrong (2026-09-19)
+### Handing the message to the engine, and five ways it went wrong (2026-09-19)
 
 All four produced the same thing on screen, which is why they took a day: a message that
 was there, drawn, and blank. None of them logged anything.
@@ -139,8 +139,24 @@ loading at all, because the type is matched exactly. A `data:` URL fixed the enc
 brought a ceiling with it: a signature carrying a 700 KB logo makes a document of nearly a
 megabyte and a data URL of one and a quarter, and at that size the picture came out as a
 blank white rectangle with the text around it intact. So the document is written out as
-UTF-8 bytes and the engine is pointed at the file, which has neither problem. The file is
-deleted when the next message is opened.
+UTF-8 bytes and the engine is pointed at the file, which has neither problem.
+
+Old files are swept by age rather than deleted the moment the next one is written. The
+eager version was wrong twice: a thread draws a message per panel, so one panel deleted
+the file another was still reading, and a message that rebuilds itself when its pictures
+arrive deleted the document it was showing. Both of those come out as a message that is
+blank sometimes and fine sometimes.
+
+**A big picture is a file beside the document, not a `data:` URI inside it.** The same
+ceiling as the document had, one level down, and the one that took longest to see because
+the message around it renders perfectly. Past roughly nine hundred thousand characters of
+base64 the engine draws a blank rectangle the size of the picture and still reports the
+load as a success. A 700 KB signature logo is exactly that, and when it sits at the top of
+a message it fills the pane and pushes the text below the fold, so the message looks
+entirely blank rather than half drawn. Pictures over 100 KB are written as siblings of the
+document and referred to by name, which has no limit and takes a 942,000 character
+document down to 6,000. `img-src` carries `file:` for this; with `script-src 'none'` there
+is nothing on the page that could observe or send what it loaded.
 
 **The height is read from here, not reported by the page.** It used to come back through
 the JavaScript bridge, which needs the bridge attached, the injected script to run, and
@@ -161,6 +177,13 @@ content scrolls with the rest of the pane rather than inside a box within it. It
 worth a blank message when it fails, and the remaining ways it can fail are in a browser
 engine, a toolkit and a display scale, which should not all have to agree for mail to
 appear.
+
+**And if the engine draws nothing at all, the block renderer gets the message.** Three
+seconds after the document loads the page is asked whether it has any text or any picture
+on it. If it has neither, the message is drawn the other way: plainer than the sender
+meant, and always there. This is the general form of the rule above, and it is here
+because the specific forms keep arriving. Five so far, all of them silent, all of them
+identical on screen.
 
 **A message is drawn as it was sent, and only what it left out is filled in.** Rampart
 inverted the page in a dark window until 2026-09-19, which is the trick webmail uses, and
