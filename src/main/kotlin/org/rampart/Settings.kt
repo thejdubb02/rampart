@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.floatOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -221,6 +222,24 @@ object Settings {
     fun undoBarSeconds(): Int = read()["undoBarSeconds"]?.jsonPrimitive?.intOrNull ?: 8
 
     fun setUndoBarSeconds(value: Int) = write { put("undoBarSeconds", JsonPrimitive(value)) }
+
+    /**
+     * How large a message is drawn, as a multiple of the size everything else is drawn at.
+     *
+     * **There is a correction underneath this and it is the part that matters.** The
+     * message is drawn by a separate engine inside the window, and that engine has its own
+     * idea of how big a pixel is. Where it disagrees with the rest of the application, a
+     * message comes out visibly smaller than the interface around it on exactly the
+     * displays where it matters most, which is every scaled one. [WebBody] divides one by
+     * the other, so 1.0 here means "the same size as everything else" on any display rather
+     * than "whatever the engine felt like".
+     *
+     * On top of that correction, this is a preference. Reading comfort is personal and
+     * every mail client has this control; ours starts at matching and goes either way.
+     */
+    fun messageScale(): Float = read()["messageScale"]?.jsonPrimitive?.floatOrNull ?: 1.0f
+
+    fun setMessageScale(value: Float) = write { put("messageScale", JsonPrimitive(value)) }
 
     /**
      * Senders whose pictures may be fetched from the web. Domains, not addresses: see

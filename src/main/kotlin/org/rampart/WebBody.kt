@@ -10,6 +10,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import javafx.application.Platform
 import javafx.concurrent.Worker
@@ -60,6 +61,18 @@ internal fun WebBody(
      * happening rather than being told, so there is one rule and nothing to keep in step.
      */
     var height by remember(document) { mutableStateOf(160) }
+    /*
+     * How big a pixel is, according to the rest of the application.
+     *
+     * The engine has its own answer and it is not always the same one. Where they
+     * disagree the message is drawn visibly smaller than the interface around it, which is
+     * what happens on a scaled display: the window is laid out at the system's scale and
+     * the page is laid out at the engine's. Dividing one by the other makes a message the
+     * same size as everything else on any display, and then [Settings.messageScale] is a
+     * preference on top of that rather than a correction somebody has to discover.
+     */
+    val density = LocalDensity.current.density
+    val scale = Settings.messageScale()
     // Held here rather than made in the factory: JavaFX calls it from the JS side and keeps
     // only a weak reference, so anything it can collect stops being callable a minute in.
     val bridge = remember { WebBridge() }
@@ -68,7 +81,7 @@ internal fun WebBody(
     bridge.onScroll = onScroll
     val panel = remember { JFXPanel() }
 
-    remember(document) {
+    remember(document, density, scale) {
         Platform.runLater {
             val view = (panel.scene?.root as? WebView) ?: WebView().also { fresh ->
                 fresh.isContextMenuEnabled = false
@@ -81,6 +94,7 @@ internal fun WebBody(
                     fresh.engine.executeScript(WIRING)
                 }
             }
+            view.zoom = zoomFor(density, scale)
             view.engine.load(asUrl(document))
         }
     }
@@ -91,6 +105,25 @@ internal fun WebBody(
         modifier = modifier.fillMaxWidth().height(height.dp),
     )
 }
+
+/**
+ * What to multiply the page by so it comes out the size the rest of the window is.
+ *
+ * [density] is what Compose lays the window out at and `outputScaleX` is what JavaFX draws
+ * at. Usually they agree and this is 1, in which case the only thing left is the reader's
+ * own preference. Where they do not, this is the whole correction, and it is worked out
+ * rather than configured so there is nothing to keep in step when somebody moves the
+ * window to a second monitor at a different scale.
+ *
+ * Bounded, because a preference that can make a message unreadable in either direction is
+ * a setting somebody can break the application with.
+ */
+internal fun zoomFor(density: Float, scale: Float, engineScale: Float = javafxScale()): Double =
+    (density / engineScale.coerceAtLeast(0.1f) * scale).coerceIn(0.5f, 3f).toDouble()
+
+/** What JavaFX is drawing at, or 1 where it cannot say, which is every headless run. */
+private fun javafxScale(): Float =
+    runCatching { javafx.stage.Screen.getPrimary().outputScaleX.toFloat() }.getOrDefault(1f)
 
 /**
  * The document, as something the engine will take the bytes of.

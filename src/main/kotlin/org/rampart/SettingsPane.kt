@@ -372,6 +372,32 @@ private fun ReadingPage(onUndoBarSeconds: (Int) -> Unit = {}) {
 
     Spacer(Modifier.height(18.dp))
     Section(
+        "How large a message is drawn",
+        "Normal is the same size as everything else in the window. The message is drawn by " +
+            "a separate engine, so on some displays it comes out smaller than the rest of " +
+            "the window; that is corrected before this applies.",
+    )
+    var messageScale by remember { mutableStateOf(Settings.messageScale()) }
+    listOf(0.9f to "Smaller", 1.0f to "Normal", 1.15f to "Larger", 1.3f to "Largest")
+        .forEach { (value, label) ->
+            Row(
+                Modifier.fillMaxWidth().clickable {
+                    messageScale = value
+                    Settings.setMessageScale(value)
+                }.padding(vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(selected = messageScale == value, onClick = {
+                    messageScale = value
+                    Settings.setMessageScale(value)
+                })
+                Spacer(Modifier.width(8.dp))
+                Text(label, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+
+    Spacer(Modifier.height(18.dp))
+    Section(
         "Taking a send back",
         "A message waits this long before it actually goes, so a wrong recipient can be caught.",
     )
