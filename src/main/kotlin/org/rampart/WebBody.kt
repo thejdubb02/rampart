@@ -110,8 +110,10 @@ internal fun WebBody(
                     fresh.engine.executeScript(WIRING)
                 }
             }
-            view.zoom = zoomFor(density, scale)
+            val zoom = zoomFor(density, scale)
+            view.zoom = zoom
             view.engine.load(asUrl(document))
+            measure(view, zoom) { bridge.onHeight(it) }
         }
     }
 
@@ -120,6 +122,38 @@ internal fun WebBody(
         factory = { panel },
         modifier = modifier.fillMaxWidth().height(height.dp),
     )
+}
+
+/**
+ * Asking the page how tall it is, from here rather than from inside it.
+ *
+ * **The page used to report its own height through the JavaScript bridge, and that is one
+ * more thing that has to work than is needed.** The bridge has to be attached, the
+ * injected script has to run, and the page has to be allowed to call back out, and when
+ * any of those does not happen there is no error anywhere: the message is simply a short
+ * blank box, which is what was being reported. Nothing here needs the page's cooperation.
+ * It is one `executeScript` on the thread the engine already runs on.
+ *
+ * **Multiplied by the zoom, which is the second half of the same fault.** `scrollHeight`
+ * is in the page's own pixels and the panel is measured in the window's, and those are
+ * only the same thing when the zoom is 1. On a scaled display they are not, so a message
+ * was asking for a panel a fraction of the size it was about to draw itself at.
+ *
+ * Asked repeatedly for a few seconds rather than once, because the answer changes: the
+ * pane is laid out after the document loads, pictures decode later still, and the
+ * measurement that counts is whichever one lands after all of that. Stops on its own.
+ */
+private fun measure(view: WebView, zoom: Double, report: (Int) -> Unit) {
+    val timeline = javafx.animation.Timeline()
+    timeline.cycleCount = 24
+    val tick = javafx.event.EventHandler<javafx.event.ActionEvent> {
+        val tall = runCatching {
+            (view.engine.executeScript("document.documentElement.scrollHeight") as? Number)?.toDouble()
+        }.getOrNull()
+        if (tall != null && tall > 0) report((tall * zoom).toInt())
+    }
+    timeline.keyFrames.add(javafx.animation.KeyFrame(javafx.util.Duration.millis(250.0), tick))
+    timeline.play()
 }
 
 /**
