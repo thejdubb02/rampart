@@ -1,6 +1,7 @@
 package org.rampart
 
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -89,11 +90,57 @@ class WebBodyTest {
         assertEquals(big, roundTrip(big))
     }
 
+    /**
+     * Two panels at once is what a thread is, and a message that rebuilds itself when its
+     * pictures arrive is two documents in a row. Neither may delete a file the other is
+     * still loading: that is the fault that made a message blank sometimes and fine
+     * sometimes.
+     */
     @Test
-    fun `the file goes away when the next message is opened`() {
+    fun `opening one message does not delete another's file`() {
         val first = java.nio.file.Path.of(java.net.URI.create(asUrl("<p>one</p>")))
-        assertTrue(java.nio.file.Files.exists(first))
-        asUrl("<p>two</p>")
-        assertTrue(!java.nio.file.Files.exists(first), "the previous message was left behind")
+        val second = java.nio.file.Path.of(java.net.URI.create(asUrl("<p>two</p>")))
+        assertTrue(java.nio.file.Files.exists(first), "one message deleted another's file")
+        assertTrue(java.nio.file.Files.exists(second))
+    }
+
+    /**
+     * A signature logo is the picture that broke this, and it is bigger than the ceiling
+     * the engine has for a `data:` URI. It comes out as a file beside the document.
+     */
+    @Test
+    fun `a big picture is written beside the document, not inside it`() {
+        val bytes = ByteArray(120_000) { (it % 251).toByte() }
+        val inline = java.util.Base64.getEncoder().encodeToString(bytes)
+        val document = """<p>hello</p><img src="data:image/jpeg;base64,$inline">"""
+
+        val page = java.nio.file.Path.of(java.net.URI.create(asUrl(document)))
+        val written = java.nio.file.Files.readString(page)
+
+        assertTrue(!written.contains("base64"), "the picture is still inside the document")
+        val name = Regex("""src="([^"]+)"""").find(written)!!.groupValues[1]
+        val picture = page.resolveSibling(name)
+        assertTrue(name.endsWith(".jpg"), "the file does not say what it holds: $name")
+        assertContentEquals(bytes, java.nio.file.Files.readAllBytes(picture))
+    }
+
+    /** A small one is one file fewer and nothing is wrong with it. */
+    @Test
+    fun `a small picture stays where it is`() {
+        val inline = java.util.Base64.getEncoder().encodeToString(ByteArray(600))
+        val document = """<img src="data:image/png;base64,$inline">"""
+        val written = java.nio.file.Files.readString(
+            java.nio.file.Path.of(java.net.URI.create(asUrl(document)))
+        )
+        assertTrue(written.contains("data:image/png;base64,$inline"))
+    }
+
+    /** Old ones do go, or a long session fills the temporary directory. */
+    @Test
+    fun `a file nothing can still be reading is swept`() {
+        val stale = java.nio.file.Files.createTempFile("rampart-message-", ".html")
+        stale.toFile().setLastModified(System.currentTimeMillis() - 60 * 60 * 1000)
+        asUrl("<p>now</p>")
+        assertTrue(!java.nio.file.Files.exists(stale), "an hour-old message file was left behind")
     }
 }

@@ -224,14 +224,25 @@ internal val EMAIL_SAFELIST: Safelist = Safelist.relaxed()
  * post, whatever the cleaner may have missed. Styles are inline because the document is
  * built here, and data: images are the message's own parts.
  */
+/*
+ * `file:` is in `img-src` because a big picture the message carried is written beside the
+ * document rather than embedded in it: a `data:` URI has a size ceiling the engine does not
+ * document and does not report, and going past it draws a blank white rectangle where the
+ * picture was. See `unpack` in WebBody.
+ *
+ * It is not the hole it looks like. A message can ask for any local file as a picture, and
+ * with `script-src 'none'` there is nothing on the page that can find out whether it
+ * loaded, nothing to read a pixel of it, and nowhere to send it: `default-src 'none'`
+ * leaves no fetch, no frame and no form.
+ */
 private const val LOCAL_POLICY =
-    "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; " +
+    "default-src 'none'; img-src data: file:; style-src 'unsafe-inline'; font-src data:; " +
         "base-uri 'none'; form-action 'none'; frame-src 'none'; script-src 'none'"
 
 /** The same, with the picture fetch the reader agreed to. Still no script and no frame. */
 private const val REMOTE_POLICY =
-    "default-src 'none'; img-src data: http: https:; style-src 'unsafe-inline'; font-src data:; " +
-        "base-uri 'none'; form-action 'none'; frame-src 'none'; script-src 'none'"
+    "default-src 'none'; img-src data: file: http: https:; style-src 'unsafe-inline'; " +
+        "font-src data:; base-uri 'none'; form-action 'none'; frame-src 'none'; script-src 'none'"
 
 /**
  * The little that is imposed on the sender's own design.

@@ -46,6 +46,17 @@ internal fun WebBody(
      * scrolling belongs to the pane it sits in.
      */
     onScroll: (Float) -> Unit = {},
+    /**
+     * The engine loaded the document and drew nothing out of it.
+     *
+     * Not a diagnosis, a report. This has now happened four separate ways, none of which
+     * logged anything: a string the engine re-encoded into nothing, a URL past a size
+     * limit nobody documents, a height that came back through a bridge that was not
+     * attached, and a height in the wrong unit. The reader's answer to all four is the
+     * same, so this says only that the message is not on screen and lets the caller draw
+     * it the other way.
+     */
+    onBlank: () -> Unit = {},
 ) {
     /*
      * Grows to whatever the message turns out to be, so the pane scrolls rather than the
@@ -115,6 +126,7 @@ internal fun WebBody(
         if (!measured) height = UNMEASURED
     }
     bridge.onScroll = onScroll
+    bridge.onBlank = onBlank
     val panel = remember { JFXPanel() }
 
     remember(document, density, scale) {
@@ -138,7 +150,7 @@ internal fun WebBody(
             val zoom = zoomFor(density, scale)
             view.zoom = zoom
             view.engine.load(asUrl(document))
-            measure(view, zoom) { bridge.onHeight(it) }
+            measure(view, zoom, { bridge.onHeight(it) }, { bridge.onBlank() })
         }
     }
 
@@ -168,14 +180,24 @@ internal fun WebBody(
  * pane is laid out after the document loads, pictures decode later still, and the
  * measurement that counts is whichever one lands after all of that. Stops on its own.
  */
-private fun measure(view: WebView, zoom: Double, report: (Int) -> Unit) {
+private fun measure(view: WebView, zoom: Double, report: (Int) -> Unit, blank: () -> Unit) {
     val timeline = javafx.animation.Timeline()
     timeline.cycleCount = 24
+    var ticks = 0
     val tick = javafx.event.EventHandler<javafx.event.ActionEvent> {
-        val tall = runCatching {
-            (view.engine.executeScript("document.documentElement.scrollHeight") as? Number)?.toDouble()
+        ticks++
+        val page = runCatching {
+            val tall = (view.engine.executeScript("document.documentElement.scrollHeight") as? Number)
+            val drew = (view.engine.executeScript(DREW) as? Number)
+            tall?.toDouble() to drew?.toInt()
         }.getOrNull()
+        val tall = page?.first
         if (tall != null && tall > 0) report((tall * zoom).toInt())
+        // Three seconds in, and the engine either will not answer or is answering that it
+        // has a document with nothing in it. Asked once rather than every tick, because a
+        // page part way through loading is legitimately empty and this is not a race to
+        // win: it is the last resort after every ordinary way of getting there has failed.
+        if (ticks == 12 && (page == null || (page.second ?: 0) <= 0)) blank()
     }
     timeline.keyFrames.add(javafx.animation.KeyFrame(javafx.util.Duration.millis(250.0), tick))
     timeline.play()
@@ -193,6 +215,15 @@ private fun measure(view: WebView, zoom: Double, report: (Int) -> Unit) {
  * Bounded, because a preference that can make a message unreadable in either direction is
  * a setting somebody can break the application with.
  */
+/**
+ * Whether there is anything on the page a reader would see.
+ *
+ * Text or a picture. Not the height, which a blank page has plenty of, and not whether the
+ * load reported success, which it does for a document that drew nothing.
+ */
+private const val DREW =
+    "document.body ? document.body.innerText.trim().length + document.images.length : 0"
+
 internal fun zoomFor(density: Float, scale: Float, engineScale: Float = javafxScale()): Double =
     (density / engineScale.coerceAtLeast(0.1f) * scale).coerceIn(0.5f, 3f).toDouble()
 
@@ -219,21 +250,77 @@ private fun javafxScale(): Float =
  * and at that size the picture came out as a blank white rectangle on Windows while the
  * text around it was fine. A file has no such limit.
  *
- * Deleted as soon as the next message is opened, and again on exit, so a session that
- * reads three hundred messages does not leave three hundred files behind. The page's own
- * content security policy is in a meta tag and applies whichever way it was loaded.
+ * **Old ones are swept by age, not by keeping track of the last one.** The previous file
+ * was deleted the moment the next was written, which is wrong twice: a thread draws a
+ * message per panel, so one panel was deleting the file another was still reading, and a
+ * message that rebuilds itself when its pictures arrive deletes the document it is showing
+ * while the replacement is still loading. Both come out as a message that is blank
+ * sometimes and fine sometimes, which is what was being reported. Nothing written in the
+ * last few minutes is touched, and there is no shared bookkeeping left to get wrong.
  */
 internal fun asUrl(document: String): String {
     val file = kotlin.io.path.createTempFile("rampart-message-", ".html")
     file.toFile().deleteOnExit()
-    java.nio.file.Files.write(file, document.toByteArray(Charsets.UTF_8))
-    // Whatever was being read a moment ago is not being read now, and a session that opens
-    // a few hundred messages should not leave a few hundred files behind.
-    previous.getAndSet(file)?.let { runCatching { java.nio.file.Files.deleteIfExists(it) } }
+    java.nio.file.Files.write(file, unpack(document, file).toByteArray(Charsets.UTF_8))
+    sweep(file.parent)
     return file.toUri().toString()
 }
 
-private val previous = java.util.concurrent.atomic.AtomicReference<java.nio.file.Path?>(null)
+/**
+ * A big picture the message carried, written beside the document instead of inside it.
+ *
+ * **The same ceiling as the document had, one level down.** A signature with a 700 KB logo
+ * in it is a `data:` URI of about nine hundred thousand characters, and past somewhere
+ * around there the engine draws a blank white rectangle the size of the picture, with the
+ * message around it perfectly fine. Nothing is logged and the load still reports success,
+ * so it reads as a message that half arrived. Writing the bytes to a file beside the
+ * document and referring to it by name has no such limit, and it takes the document itself
+ * from nine hundred thousand characters back to a few thousand.
+ *
+ * Only the big ones. A small picture inline is one file fewer and nothing is wrong with it.
+ */
+private fun unpack(document: String, beside: java.nio.file.Path): String {
+    val stem = beside.fileName.toString().removeSuffix(".html")
+    var n = 0
+    return INLINE_PICTURE.replace(document) { match ->
+        val bytes = runCatching { Base64.getDecoder().decode(match.groupValues[2]) }.getOrNull()
+            ?: return@replace match.value
+        val name = "$stem-${++n}." + extensionFor(match.groupValues[1])
+        runCatching {
+            val file = beside.resolveSibling(name)
+            java.nio.file.Files.write(file, bytes)
+            file.toFile().deleteOnExit()
+        }.getOrElse { return@replace match.value }
+        """src="$name""""
+    }
+}
+
+/**
+ * Big enough to be worth a file of its own.
+ *
+ * Well under where the ceiling has been seen, because the point is not to find the edge.
+ */
+private val INLINE_PICTURE =
+    Regex("""src="data:(image/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=]{100000,})"""")
+
+/** What to call the file, so the engine knows what it is holding without being told. */
+private fun extensionFor(type: String): String =
+    when (val sub = type.substringAfter('/').substringBefore('+').lowercase()) {
+        "jpeg" -> "jpg"
+        "svg+xml", "svg" -> "svg"
+        else -> sub.filter { it.isLetterOrDigit() }.ifBlank { "img" }
+    }
+
+/** Messages written long enough ago that nothing can still be loading one. */
+private fun sweep(directory: java.nio.file.Path) {
+    runCatching {
+        val old = System.currentTimeMillis() - 5 * 60 * 1000
+        java.nio.file.Files.newDirectoryStream(directory, "rampart-message-*").use { files ->
+            files.filter { it.toFile().lastModified() < old }
+                .forEach { runCatching { java.nio.file.Files.deleteIfExists(it) } }
+        }
+    }
+}
 
 /**
  * Printing the message, through the engine that already knows how to draw it.
@@ -274,6 +361,7 @@ class WebBridge {
     internal var onLink: (String) -> Unit = {}
     internal var onHeight: (Int) -> Unit = {}
     internal var onScroll: (Float) -> Unit = {}
+    internal var onBlank: () -> Unit = {}
 
     fun open(url: String) = onLink(url)
 
@@ -391,9 +479,6 @@ internal val webEngineWorks: Boolean by lazy {
  * every menu, dialog and overlay opens behind it. Set before the first window, because it
  * is read once when the scene is made.
  */
-@Volatile internal var lastReportedHeight: Int = -1
-@Volatile internal var probePanel: JFXPanel? = null
-
 internal fun enableWebBody() {
     System.setProperty("compose.interop.blending", "true")
 }

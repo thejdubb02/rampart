@@ -43,6 +43,21 @@ internal fun pastTense(role: String): String = when (role) {
     else -> "moved"
 }
 
+/**
+ * Whether a move is a verdict on spam, and which way, or null when it is only a move.
+ *
+ * Into Junk says spam, out of Junk says not spam, and everything else says nothing. The
+ * third case is the one that matters: archiving a message is not a statement about whether
+ * it is spam, and marking every filed message as ham would teach the classifier that
+ * everything anybody ever tidied away was wanted.
+ */
+internal fun junkVerdict(junk: String?, from: String?, into: String): Boolean? = when (junk) {
+    null -> null
+    into -> true
+    from -> false
+    else -> null
+}
+
 /** "1 message archived" rather than "1 messages archived". */
 internal fun movedNotice(count: Int, what: String): String =
     if (count == 1) "1 message $what." else "$count messages $what."

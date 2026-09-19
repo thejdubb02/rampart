@@ -1541,7 +1541,34 @@ private fun Reader(
      * the move: dropping the local copy, taking it out of the list on screen, and leaving
      * something to undo with.
      */
+    /**
+     * Telling the server that a move was a verdict, when it was one.
+     *
+     * **Not spam moved the message and told the server nothing.** The folder a message sits
+     * in is where it is, not what it is, so moving one back to the inbox corrected the
+     * symptom and left the filter believing exactly what it believed before. The same
+     * sender arrived in Junk again the next morning, which is what was being reported.
+     *
+     * `$junk` and `$notjunk` are what the rest of the world writes for this (RFC 5788), so
+     * a verdict made here is a verdict every other client and the server's own classifier
+     * can read. Set before the move rather than after: over IMAP a moved message is a new
+     * message with a new number, and the old number then names nothing.
+     *
+     * Only the two moves that are a verdict. Archiving something is not a statement about
+     * whether it is spam, and stamping every filed message would teach the classifier that
+     * everything ever tidied away was ham.
+     */
+    suspend fun sayJunk(key: String, ids: List<String>, from: String?, into: String) {
+        val junk = folderFor("junk", mailboxes[key].orEmpty())?.id
+        val spam = junkVerdict(junk, from, into) ?: return
+        io {
+            session(key).jmap.setKeyword(ids, "\$junk", spam)
+            session(key).jmap.setKeyword(ids, "\$notjunk", !spam)
+        }
+    }
+
     suspend fun carryOut(key: String, message: Summary, into: String, from: String?, verb: String) {
+        sayJunk(key, listOf(message.id), from, into)
         if (io { session(key).jmap.move(listOf(message.id), into) } == null) return
         // Out of the local copy as well, or the folder it left would show it
         // again the next time that folder is opened from disk.
@@ -2638,6 +2665,9 @@ private fun Reader(
                             }
                         if (byAccount.isNotEmpty()) {
                             scope.launch {
+                                byAccount.forEach { (key, move, target) ->
+                                    sayJunk(key, move.ids, move.fromMailboxId, target)
+                                }
                                 val done = withContext(Dispatchers.IO) {
                                     byAccount.filter { (key, move, target) ->
                                         runCatching { session(key).jmap.move(move.ids, target) }.isSuccess
@@ -4375,7 +4405,20 @@ internal fun Message(
     val page = remember(body, carriedData, showRemote, darkWindow, paper) {
         body?.html?.let { emailDocument(it, carriedData, showRemote, dark = darkWindow && !paper) }
     }
-    val engineDraws = page != null && webEngineWorks
+    /*
+     * The engine had this message and drew nothing, so the block renderer gets it.
+     *
+     * Reset with the document, because every reason for a blank page so far has been about
+     * this particular document reaching this particular engine, not about the engine being
+     * broken from then on. Showing the pictures builds a new document and it gets a fresh
+     * try.
+     *
+     * The block renderer is not as good and is not meant to be. It is the difference
+     * between a message that looks plainer than the sender intended and a white rectangle,
+     * and there is no version of this where the white rectangle is the better answer.
+     */
+    var engineBlank by remember(page) { mutableStateOf(false) }
+    val engineDraws = page != null && webEngineWorks && !engineBlank
     val rendered = remember(body, linkColor, bodyPaper, engineDraws) {
         body?.let {
             when {
@@ -5023,6 +5066,7 @@ internal fun Message(
                         page.document,
                         onLink = onLink,
                         onScroll = { dy -> bodyScope.launch { bodyScroll.scrollBy(dy) } },
+                        onBlank = { engineBlank = true },
                     )
                     else HtmlBody(rendered, carried, emptyMap())
                     }

@@ -77,7 +77,9 @@ class EmailDocumentTest {
         }
         // Kept on the element, because Show pictures has to know what to ask for.
         assertTrue(out.document.contains("data-blocked-src=\"https://tracker.example.org/hero.png\""))
-        assertTrue(out.document.contains("img-src data:;"), "the policy must not allow a fetch")
+        // Pictures the message carried, from a data URI or from a file written beside the
+        // document, and nothing off this machine.
+        assertTrue(out.document.contains("img-src data: file:;"), "the policy must not allow a fetch")
     }
 
     @Test
@@ -87,7 +89,7 @@ class EmailDocumentTest {
 
         assertEquals(0, allowed.blocked)
         assertTrue(allowed.document.contains("src=\"https://tracker.example.org/hero.png\""))
-        assertTrue(allowed.document.contains("img-src data: http: https:"))
+        assertTrue(allowed.document.contains("img-src data: file: http: https:"))
         // Still no script and no frame, however the reader answered about pictures.
         assertTrue(allowed.document.contains("script-src 'none'"))
     }
