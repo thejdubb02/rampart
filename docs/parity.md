@@ -220,3 +220,69 @@ What is left, in the order it will be missed:
 The original note about IMAP sitting at 5 rather than 1 held: every feature above it was
 written once, against what became `MailBackend`, and satisfying it took adding the word
 `override` to thirty-five methods rather than rewriting any of them.
+
+---
+
+## 5. Re-read against Bulwark 1.10.0, 2026-09-19
+
+Justin supplied a full breakdown of Bulwark 1.10.0, taken from its `FEATURES.md`,
+`stores/settings-store.ts`, `components/settings/*` and its admin tabs. That is better
+than the walk through the menus this file was going to be built from, because it is the
+settings object as specified in code rather than as implied by the interface.
+
+**What it changes about how Bulwark should be read as a target.** Four things in its own
+list of honest gaps, and Rampart is stronger on all four:
+
+- **It is JMAP only.** No IMAP, no POP, no EWS. On a mailbox that is not Stalwart it is
+  not a mail client at all. Rampart speaks both, and that is the difference between a
+  Stalwart accessory and something anybody can install.
+- **No first-party OpenPGP composer.** S/MIME plus Stalwart's encryption at rest, with PGP
+  public keys feeding the server-side encryption rather than a client that signs and
+  encrypts. It ships three separate marketplace plugins for what a mail client should do
+  itself, which is the argument in `what-others-do.md` section 1 stated by its own
+  feature list.
+- **Offline is weaker than a desktop store.** It is online-first by design. Rampart has
+  the local store.
+- **Five accounts on an HTTP/1.1 browser**, because that is the connection limit. A desktop
+  application has no such ceiling.
+
+### The real gaps it exposed
+
+Each is now a card on the board rather than a line here, because a gap in a document is a
+gap nobody is working on.
+
+| Gap | Card |
+|---|---|
+| Shared and delegated mailboxes, and cross-account unified views | 45 |
+| Files: the JMAP FileNode side of Stalwart | 46 |
+| Calendar as an application rather than an invitation answerer | 47 |
+| Scheduled send, TNEF and `winmail.dat`, nested `.eml`, drag an attachment out | 48 |
+| 27 languages, right-to-left, and an accessibility pass | 49 |
+| Message list shapes and a density control | 42 |
+| Sender favicons as avatars | 27 |
+| The message toolbar: move, unread, print | 28 |
+| Themes anyone can make | 29 |
+
+**The largest is 49, and it is the one that looks smallest.** Every user-facing string in
+Rampart is a Kotlin literal. Bulwark has 27 locales and right-to-left. Getting the strings
+out of the source is not a translation project, it is the thing that has to happen before
+one is possible, and it gets more expensive every week it waits.
+
+**The one with the most substance is 45.** A shared or delegated mailbox is not a feature
+on a screen, it is a different idea of what an account is, and it is how a small business
+does support and sales. It is also the reason somebody installs a mail client for their
+team rather than for themselves.
+
+### Deliberately not doing, from this read
+
+- **The plugin system and its marketplace.** Reasons in `what-others-do.md` section 1. The
+  short version: a plugin in a web app is a script in a page, and a plugin here is code in
+  the same process as the mailbox.
+- **An admin dashboard for Rampart itself.** Bulwark has one because it is a server
+  somebody deploys for other people. Rampart is an application somebody installs, so its
+  equivalent is the settings screen, which already exists. The Stalwart admin console,
+  which is a different thing and the one nobody has built, stays on the roadmap.
+- **PWA, service workers, web push, protocol-handler registration, a static Lite build.**
+  All of it is a browser working around not being an application. Rampart is the
+  application.
+- **Telemetry.** Bulwark's is opt-in and careful. Rampart's answer is not to have any.
