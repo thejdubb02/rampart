@@ -71,6 +71,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.focusable
@@ -3796,6 +3797,27 @@ internal fun MessageList(
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         val scroll = rememberLazyListState()
+        /*
+         * A folder nobody has scrolled opens at the top, and goes on opening at the top.
+         *
+         * Rows are keyed by message id, so the list keeps whichever message was at the top
+         * of the viewport pinned when the contents change. That is exactly right when
+         * somebody scrolled to it and exactly wrong when they never left the top, and a
+         * folder is filled twice: once from the copy on disk and once from the server. The
+         * two do not always agree on order or on how many there are, so the message at the
+         * top of the first list can be sixty rows down the second, and the list scrolls
+         * sixty rows to keep it in view. The folder then opens in the middle of itself.
+         *
+         * Scrolling is what makes a position worth keeping, so that is what is watched. An
+         * anchor correction is done during layout and is not a scroll, which is the whole
+         * distinction this needs. Reset per folder, because arriving somewhere new is the
+         * one time nobody has a position in it yet.
+         */
+        var moved by remember(title) { mutableStateOf(false) }
+        LaunchedEffect(scroll, title) {
+            snapshotFlow { scroll.isScrollInProgress }.collect { if (it) moved = true }
+        }
+        LaunchedEffect(emails, title) { if (!moved) scroll.scrollToItem(0) }
         /*
          * Ask for the next page a screenful early, so the rows are already there by the
          * time somebody scrolls onto them. Derived rather than read every frame: without
