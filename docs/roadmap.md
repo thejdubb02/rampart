@@ -5,9 +5,12 @@ against Thunderbird, Bulwark and the paid inboxes (Superhuman, Spark, Shortwave,
 Outlook) at once. That spec is the target. This file is what it means for Rampart
 specifically, in the order we will actually do it.
 
-Two documents sit under this one and are not repeated here:
+Three documents sit under this one and are not repeated here:
 
 - **`parity.md`** - Bulwark 1.9.2 feature by feature against Rampart.
+- **`what-others-do.md`** - Bulwark's plugin marketplace and Thunderbird's feature set,
+  each entry marked build, do not build, or already have. Read it before adding anything
+  because another client has it.
 - **`assistant.md`** - the model features, the loopback API and MCP, in design detail.
 
 ---
