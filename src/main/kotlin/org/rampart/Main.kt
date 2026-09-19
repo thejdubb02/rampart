@@ -294,19 +294,51 @@ private fun ApplicationScope.Rampart() {
     }
 
     val tray = rememberTrayState()
+    /*
+     * The count on the tray icon, and the reason it is hoisted this far.
+     *
+     * The tray belongs to the application rather than to the window, and the unread counts
+     * live in the pane that draws the sidebar. Everything in between is a window that may
+     * be minimised, hidden or behind something, and the whole point of a tray count is
+     * that it is true in all three of those.
+     */
+    var unread by remember { mutableStateOf(0) }
+    var closed by remember { mutableStateOf(false) }
+
+    fun show() {
+        closed = false
+        windowState.isMinimized = false
+    }
+
     // No tray on this desktop means no notifications, and nothing else changes. Constructing
     // one anyway logs a warning on every start and still cannot deliver anything.
     if (isTraySupported) {
         Tray(
-            icon = icon,
+            icon = remember(icon, unread) { BadgedIcon(icon, unread) },
             state = tray,
-            tooltip = "Rampart",
-            onAction = { windowState.isMinimized = false },
+            tooltip = if (unread > 0) "Rampart, $unread unread" else "Rampart",
+            onAction = ::show,
+            menu = {
+                Item(if (closed) "Open Rampart" else "Show Rampart", onClick = ::show)
+                Item("Quit", onClick = ::quit)
+            },
         )
     }
 
+    // Closed to the tray is closed, not quit: the window goes away, the count stays, and
+    // mail keeps arriving. Only where there is a tray to go to, or it would be a close
+    // button that loses the application.
+    if (closed) return
+
     Window(
-        onCloseRequest = ::quit,
+        onCloseRequest = {
+            if (isTraySupported && Settings.closeToTray()) {
+                remember()
+                closed = true
+            } else {
+                quit()
+            }
+        },
         // The version lives in the sidebar. A title bar is for saying which app this is.
         title = "Rampart",
         icon = icon,
@@ -352,6 +384,7 @@ private fun ApplicationScope.Rampart() {
                         notify = { title, message ->
                             tray.sendNotification(Notification(title, message, Notification.Type.Info))
                         },
+                        onUnread = { unread = it },
                     )
                 }
             }
@@ -366,6 +399,8 @@ private fun App(
     notify: (String, String) -> Unit,
     icons: IconPack = LineIcons,
     onIcons: (IconPack) -> Unit = {},
+    /** Unread across every signed-in inbox, for the badge on the tray icon. */
+    onUnread: (Int) -> Unit = {},
 ) {
     var sessions by remember { mutableStateOf<List<Session>>(emptyList()) }
     var adding by remember { mutableStateOf(false) }
@@ -414,7 +449,11 @@ private fun App(
             adding = false
         }
     } else {
-        Reader(sessions, onTheme, onQuit, notify, onAddAccount = { adding = true }, icons = icons, onIcons = onIcons)
+        Reader(
+            sessions, onTheme, onQuit, notify,
+            onAddAccount = { adding = true },
+            icons = icons, onIcons = onIcons, onUnread = onUnread,
+        )
     }
 }
 
@@ -670,6 +709,8 @@ private fun Reader(
     onAddAccount: () -> Unit,
     icons: IconPack = LineIcons,
     onIcons: (IconPack) -> Unit = {},
+    /** Unread across every signed-in inbox, for the badge on the tray icon. */
+    onUnread: (Int) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     var identities by remember { mutableStateOf<Map<String, List<Identity>>>(emptyMap()) }
@@ -766,6 +807,18 @@ private fun Reader(
     val searchField = remember { FocusRequester() }
     val keyboard = remember { FocusRequester() }
     var mailboxes by remember { mutableStateOf<Map<String, List<Mailbox>>>(emptyMap()) }
+
+    /*
+     * The number on the tray icon.
+     *
+     * Every signed-in inbox, added up, and only the inboxes: a count that included Junk
+     * and Archive would go up when the filter caught something, which is the opposite of
+     * what a badge is for. Sent from here because this is where the counts are, and read
+     * where the tray is, which is outside the window on purpose.
+     */
+    LaunchedEffect(mailboxes) {
+        onUnread(mailboxes.values.sumOf { boxes -> folderFor("inbox", boxes)?.unread ?: 0 })
+    }
     var here by remember { mutableStateOf<Pair<String, Mailbox>?>(null) }
     var emails by remember { mutableStateOf<List<Summary>>(emptyList()) }
     var selected by remember { mutableStateOf<Summary?>(null) }

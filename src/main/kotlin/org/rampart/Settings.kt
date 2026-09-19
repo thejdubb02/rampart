@@ -71,6 +71,17 @@ object Settings {
 
     fun setNotifyOnArrival(value: Boolean) = write { put("notify", JsonPrimitive(value)) }
 
+    /**
+     * Whether closing the window leaves Rampart running in the tray.
+     *
+     * Off by default, and deliberately. An application that ignores the close button is a
+     * thing people have to be told about, and being told about it by noticing it is still
+     * running is how it reads as a bug rather than a feature.
+     */
+    fun closeToTray(): Boolean = read()["closeToTray"]?.jsonPrimitive?.booleanOrNull ?: false
+
+    fun setCloseToTray(value: Boolean) = write { put("closeToTray", JsonPrimitive(value)) }
+
     /** An order that is no longer in the enum reads as the default rather than crashing. */
     internal fun order(): Order = read()["order"]?.jsonPrimitive?.contentOrNull
         ?.let { name -> Order.entries.firstOrNull { it.name == name } } ?: Order.NEWEST

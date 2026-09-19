@@ -520,6 +520,35 @@ private fun NotificationsPage(notifyOnArrival: Boolean, onNotifyOnArrival: (Bool
         }
         Switch(checked = notifyOnArrival, onCheckedChange = onNotifyOnArrival, enabled = isTraySupported)
     }
+
+    // Kept next to notifications rather than under a Window heading of its own: both are
+    // about what Rampart does when nobody is looking at it, and one switch does not earn
+    // a page.
+    var toTray by remember { mutableStateOf(Settings.closeToTray()) }
+    Row(
+        Modifier.fillMaxWidth()
+            .clickable(enabled = isTraySupported) { toTray = !toTray; Settings.setCloseToTray(toTray) }
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Keep running when I close the window", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                if (isTraySupported) {
+                    "Mail keeps arriving and the count stays on the tray icon. Quit from the tray menu."
+                } else {
+                    "This desktop has no notification area, so there is nowhere to close to."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+        Switch(
+            checked = toTray,
+            onCheckedChange = { toTray = it; Settings.setCloseToTray(it) },
+            enabled = isTraySupported,
+        )
+    }
 }
 
 @Composable
