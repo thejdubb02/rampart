@@ -155,11 +155,21 @@ private val DANGEROUS_CSS = Regex(
  */
 internal fun citedCids(html: String?): Set<String> {
     if (html.isNullOrBlank()) return emptySet()
-    return Jsoup.parse(html).select("img[src]").mapNotNullTo(HashSet()) { img ->
-        val src = img.attr("src").trim()
-        if (!src.startsWith("cid:", ignoreCase = true)) null
-        else src.removePrefix("cid:").removePrefix("CID:").trim().trim('<', '>').ifBlank { null }
-    }
+    return Jsoup.parse(html).select("img[src]").mapNotNullTo(HashSet()) { cidOf(it.attr("src")) }
+}
+
+/**
+ * The Content-ID a `src` names, or null if it names something else.
+ *
+ * One function because two of them was the fault: the attachment list and the picture
+ * resolver each decided for themselves what counted as a reference, and a part either of
+ * them read differently belonged to neither list and went missing. Now they cannot
+ * disagree.
+ */
+private fun cidOf(src: String): String? {
+    val trimmed = src.trim()
+    if (!trimmed.startsWith("cid:", ignoreCase = true)) return null
+    return trimmed.drop(4).trim().trim('<', '>').ifBlank { null }
 }
 
 private fun resolveImages(
@@ -173,7 +183,7 @@ private fun resolveImages(
         val src = img.attr("src").trim()
         when {
             src.startsWith("cid:", ignoreCase = true) -> {
-                val data = carried[src.removePrefix("cid:").removePrefix("CID:").trim().trim('<', '>')]
+                val data = cidOf(src)?.let { carried[it] }
                 if (data != null) img.attr("src", data) else img.remove()
             }
             src.startsWith("data:", ignoreCase = true) -> Unit
