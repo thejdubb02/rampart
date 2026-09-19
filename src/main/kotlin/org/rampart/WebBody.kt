@@ -3,6 +3,7 @@ package org.rampart
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -12,6 +13,7 @@ import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import javafx.application.Platform
 import javafx.concurrent.Worker
 import javafx.embed.swing.JFXPanel
@@ -88,7 +90,30 @@ internal fun WebBody(
      * Safe to keep across a document because [height] is reset with it: showing the
      * pictures builds a new document, which starts the measuring again from nothing.
      */
-    bridge.onHeight = { if (it > 0) height = maxOf(height, minOf(it, TALLEST)) }
+    var measured by remember(document) { mutableStateOf(false) }
+    bridge.onHeight = {
+        if (it > 0) {
+            measured = true
+            height = maxOf(height, minOf(it, TALLEST))
+        }
+    }
+    /*
+     * If nothing ever answers, show the message anyway.
+     *
+     * Every version of this fault has ended the same way: a panel left at the height it
+     * started with, which is a blank strip where the mail should be, with nothing on
+     * screen or in a log saying so. The measuring is worth doing because a message sized
+     * to its content scrolls with the rest of the pane instead of inside a box. It is not
+     * worth a blank message when it fails.
+     *
+     * So after three seconds of no answer the panel takes the whole pane and the page
+     * scrolls itself, which is what webmail does and is always readable. Nothing here
+     * needs to know why the measuring did not work.
+     */
+    LaunchedEffect(document) {
+        delay(3_000)
+        if (!measured) height = UNMEASURED
+    }
     bridge.onScroll = onScroll
     val panel = remember { JFXPanel() }
 
@@ -260,6 +285,15 @@ class WebBridge {
  * being drawn. Well over nine tenths of messages are shorter than this and never notice.
  */
 private const val TALLEST = 3_000
+
+/**
+ * The panel a message gets when it never said how tall it was.
+ *
+ * Tall enough to be a message rather than a strip, short enough to sit inside any window
+ * somebody has actually opened. The page scrolls itself at this size, so nothing is lost,
+ * it is only read in a box rather than in the pane.
+ */
+private const val UNMEASURED = 720
 
 private val WIRING = """
 (function () {
