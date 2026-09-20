@@ -1,5 +1,28 @@
 package org.rampart
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.time.YearMonth
+import kotlin.io.path.createDirectories
+import kotlin.io.path.exists
+import kotlin.io.path.readText
+import kotlin.io.path.writeText
+
 /**
  * What the model is allowed to do, and what it has cost.
  *
@@ -61,9 +84,29 @@ object Assistant {
     const val SUMMARISE = "summarise"
 
     /** Settings as saved, or the defaults, which are off. */
-    fun config(): AssistantConfig = TODO()
+    fun config(): AssistantConfig {
+        val saved = read()
+        val fallback = AssistantConfig()
+        return AssistantConfig(
+            // A mode nobody has heard of is off. Every unreadable field falls the same way,
+            // towards the setting that costs nothing and sends nothing.
+            mode = AssistantMode.entries.firstOrNull { it.name == saved.text("mode") } ?: fallback.mode,
+            baseUrl = saved.text("baseUrl")?.ifBlank { null } ?: fallback.baseUrl,
+            model = saved.text("model")?.ifBlank { null } ?: fallback.model,
+            dollarsIn = saved.number("dollarsIn") ?: fallback.dollarsIn,
+            dollarsOut = saved.number("dollarsOut") ?: fallback.dollarsOut,
+            ceiling = saved.number("ceiling") ?: fallback.ceiling,
+        )
+    }
 
-    fun setConfig(config: AssistantConfig): Unit = TODO()
+    fun setConfig(config: AssistantConfig) = write {
+        put("mode", JsonPrimitive(config.mode.name))
+        put("baseUrl", JsonPrimitive(config.baseUrl))
+        put("model", JsonPrimitive(config.model))
+        put("dollarsIn", JsonPrimitive(config.dollarsIn))
+        put("dollarsOut", JsonPrimitive(config.dollarsOut))
+        put("ceiling", JsonPrimitive(config.ceiling))
+    }
 
     /**
      * Whether this feature has been explained and agreed to, on this install.
@@ -72,15 +115,19 @@ object Assistant {
      * not re-ask: a decision somebody already made and can see in Settings is not a
      * decision worth interrupting them for twice.
      */
-    fun agreed(feature: String): Boolean = TODO()
+    fun agreed(feature: String): Boolean = agreements().contains(feature)
 
-    fun agree(feature: String): Unit = TODO()
+    fun agree(feature: String) {
+        if (agreed(feature)) return
+        val next = agreements() + feature
+        write { put("agreed", buildJsonArray { next.forEach { add(JsonPrimitive(it)) } }) }
+    }
 
     /** Forget every agreement, which is what the switch in Settings does when it goes off. */
-    fun forgetAgreements(): Unit = TODO()
+    fun forgetAgreements() = write { put("agreed", JsonArray(emptyList())) }
 
     /** This month, as `YYYY-MM`, in the machine's own time zone. */
-    fun thisMonth(): String = TODO()
+    fun thisMonth(): String = YearMonth.now().toString()
 
     /**
      * Add one call to the running total.
@@ -89,13 +136,42 @@ object Assistant {
      * it" are the two questions anybody actually has. Months older than a year are dropped
      * on write, so the file cannot grow without end.
      */
-    fun record(feature: String, tokensIn: Int, tokensOut: Int, config: AssistantConfig = config()): Unit = TODO()
+    fun record(feature: String, tokensIn: Int, tokensOut: Int, config: AssistantConfig = config()) {
+        val month = thisMonth()
+        val was = breakdown(month)[feature] ?: Spend(0, 0, 0, 0.0)
+        val now = Spend(
+            calls = was.calls + 1,
+            tokensIn = was.tokensIn + tokensIn,
+            tokensOut = was.tokensOut + tokensOut,
+            dollars = was.dollars + cost(tokensIn, tokensOut, config),
+        )
+        // Rebuilt rather than patched in place, so the pruning below is the only rule about
+        // what a ledger holds and there is nowhere else for an old month to survive.
+        val months = read()["ledger"]?.asObject().orEmpty().toMutableMap()
+        months[month] = JsonObject(
+            (months[month]?.asObject().orEmpty() + (feature to now.json())),
+        )
+        write {
+            put("ledger", JsonObject(months.filterKeys { worthKeeping(it) }))
+        }
+    }
 
     /** What each feature has spent this month, in the order the features were first used. */
-    fun breakdown(month: String = thisMonth()): Map<String, Spend> = TODO()
+    fun breakdown(month: String = thisMonth()): Map<String, Spend> {
+        val entries = read()["ledger"]?.asObject()?.get(month)?.asObject().orEmpty()
+        return entries.mapNotNullTo(ArrayList()) { (feature, value) ->
+            val spend = value.asObject() ?: return@mapNotNullTo null
+            feature to Spend(
+                calls = spend.whole("calls") ?: 0,
+                tokensIn = spend.whole("tokensIn") ?: 0,
+                tokensOut = spend.whole("tokensOut") ?: 0,
+                dollars = spend.number("dollars") ?: 0.0,
+            )
+        }.toMap(LinkedHashMap())
+    }
 
     /** Everything spent this month, across features. */
-    fun spent(month: String = thisMonth()): Double = TODO()
+    fun spent(month: String = thisMonth()): Double = breakdown(month).values.sumOf { it.dollars }
 
     /**
      * Whether the ceiling has been reached, which is the answer to "may I make this call".
@@ -103,8 +179,91 @@ object Assistant {
      * Asked before the call rather than after, so the ceiling is a ceiling rather than a
      * line the last call is allowed to cross.
      */
-    fun blocked(config: AssistantConfig = config()): Boolean = TODO()
+    fun blocked(config: AssistantConfig = config()): Boolean =
+        config.ceiling > 0 && spent() >= config.ceiling
 
-    /** Whether a feature can run at all right now, and if not, why, in one sentence. */
-    fun whyNot(feature: String, config: AssistantConfig = config()): String? = TODO()
+    /**
+     * Whether a feature can run at all right now, and if not, why, in one sentence.
+     *
+     * Not having agreed to a feature is deliberately not a reason. Agreement is something
+     * the reader is asked for at the moment they press the button, and answering "you have
+     * not agreed" to somebody who has not been asked yet is a dead end rather than an
+     * explanation.
+     */
+    fun whyNot(feature: String, config: AssistantConfig = config()): String? = when {
+        config.mode == AssistantMode.OFF -> "The assistant is switched off."
+        config.mode == AssistantMode.BYOK && Secrets.loadNamed(KEY).isNullOrBlank() ->
+            "No key has been added yet."
+        blocked(config) -> "This month has reached the ${money(config.ceiling)} limit you set."
+        else -> null
+    }
+
+    /** The name the key is kept under in the operating system's own store. */
+    const val KEY = "assistant"
+
+    private fun cost(tokensIn: Int, tokensOut: Int, config: AssistantConfig): Double =
+        tokensIn / 1_000_000.0 * config.dollarsIn + tokensOut / 1_000_000.0 * config.dollarsOut
+
+    /** Dollars, as somebody would write them, which is what goes in a sentence. */
+    internal fun money(amount: Double): String =
+        if (amount >= 1) "$" + String.format("%.2f", amount) else "$" + String.format("%.3f", amount)
+
+    /**
+     * A month worth keeping: one that parses and is not more than a year behind.
+     *
+     * A key that does not parse is dropped rather than kept, because a ledger is only ever
+     * written by this file and anything else in there is not a record of spending.
+     */
+    private fun worthKeeping(month: String): Boolean = runCatching {
+        !YearMonth.parse(month).isBefore(YearMonth.now().minusMonths(12))
+    }.getOrDefault(false)
+
+    private fun agreements(): Set<String> =
+        read()["agreed"]?.let { it as? JsonArray }
+            ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+            ?.toSet()
+            .orEmpty()
+
+    private fun Spend.json(): JsonObject = buildJsonObject {
+        put("calls", JsonPrimitive(calls))
+        put("tokensIn", JsonPrimitive(tokensIn))
+        put("tokensOut", JsonPrimitive(tokensOut))
+        put("dollars", JsonPrimitive(dollars))
+    }
+
+    /*
+     * Its own file beside settings.json, not a key inside it.
+     *
+     * Preferences are a thing somebody pastes into a bug report. A running total of what a
+     * model has cost and which features were agreed to is not secret, but it is not a
+     * preference either, and keeping it separate means a reset of one is not a reset of the
+     * other. The key itself is in neither: that is in the operating system's store.
+     */
+    private fun file() = Accounts.file().resolveSibling("assistant.json")
+
+    private fun read(): JsonObject = runCatching {
+        val path = file()
+        if (!path.exists()) JsonObject(emptyMap())
+        else Json.parseToJsonElement(path.readText()).jsonObject
+    }.getOrDefault(JsonObject(emptyMap()))
+
+    /** Read, change one key, write beside and move over, the same way [Settings] does. */
+    private fun write(change: MutableMap<String, JsonElement>.() -> Unit) {
+        runCatching {
+            val updated = read().toMutableMap().apply(change)
+            val path = file()
+            path.parent?.createDirectories()
+            val temp = path.resolveSibling("assistant.json.new")
+            temp.writeText(Json.encodeToString(JsonObject.serializer(), JsonObject(updated)))
+            Files.move(temp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        }
+    }
+
+    private fun JsonElement.asObject(): JsonObject? = this as? JsonObject
+
+    private fun JsonObject.text(key: String): String? = this[key]?.jsonPrimitive?.contentOrNull
+
+    private fun JsonObject.number(key: String): Double? = this[key]?.jsonPrimitive?.doubleOrNull
+
+    private fun JsonObject.whole(key: String): Int? = this[key]?.jsonPrimitive?.intOrNull
 }

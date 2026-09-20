@@ -131,6 +131,27 @@ object Secrets {
         return store(TRACKING, value)
     }
 
+    /**
+     * A secret that belongs to the install rather than to any one mailbox, by name.
+     *
+     * The same made-up-account trick [trackingToken] uses, written once so the next one of
+     * these is a name rather than a fourth copy of it. [TRACKING] is deliberately left as
+     * it was: the store is keyed by a hash of the account, so moving it here would give it
+     * a different key and lose the token every existing install has already saved.
+     */
+    private fun named(name: String) = SavedAccount("Rampart: $name", "install", name)
+
+    fun loadNamed(name: String): String? = load(named(name))
+
+    /** Null when it was kept, otherwise the reason it was not. Blank forgets it. */
+    fun storeNamed(name: String, value: String): String? {
+        if (value.isBlank()) {
+            forget(named(name))
+            return null
+        }
+        return store(named(name), value)
+    }
+
     fun forget(account: SavedAccount) {
         runCatching {
             val id = id(account)

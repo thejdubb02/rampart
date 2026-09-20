@@ -146,6 +146,7 @@ internal fun SettingsPane(
                         )
                         "away" -> AwayPage(vacation, vacationError, onVacation)
                         "tracking" -> TrackingPage(onTrackingServer)
+                        "assistant" -> AssistantPage()
                         "about" -> AboutPage(update, onRestart)
                     }
                 }
@@ -172,6 +173,7 @@ private val SettingsPages: List<Triple<String, String, String>> = listOf(
     Triple("identities", "Identities and signatures", "Mail"),
     Triple("away", "Away reply", "Mail"),
     Triple("tracking", "Open tracking", "Mail"),
+    Triple("assistant", "Assistant", "Mail"),
     Triple("about", "About", "Rampart"),
 )
 
@@ -788,6 +790,193 @@ private fun TrackingPage(onTrackingServer: (String) -> Unit = {}) {
             "that includes robots is a number that makes you chase somebody who never read " +
             "anything. A recipient who blocks images, as Rampart does by default, never " +
             "registers at all.",
+    )
+}
+
+/**
+ * The model, if there is to be one.
+ *
+ * Off, and explained rather than defended. Everything about this feature is a decision
+ * somebody makes on purpose: whether there is a model at all, whether the text leaves the
+ * machine, what it may cost before it stops, and separately, for each feature, whether it
+ * is worth it. See `docs/assistant.md` for why each of those is its own question.
+ */
+@Composable
+private fun AssistantPage() {
+    var config by remember { mutableStateOf(Assistant.config()) }
+    var key by remember { mutableStateOf(Secrets.loadNamed(Assistant.KEY).orEmpty()) }
+    var saved by remember { mutableStateOf<String?>(null) }
+
+    fun change(next: AssistantConfig) {
+        config = next
+        Assistant.setConfig(next)
+        saved = null
+    }
+
+    Section(
+        "Assistant",
+        "A model can summarise a long thread, draft a reply or say what a message looks " +
+            "like. It is off, and every one of those is a button somebody presses: nothing " +
+            "here runs on a timer, on arrival, or while you scroll.",
+    )
+    Text(
+        "To summarise a message, its text has to be sent to whatever model you point this " +
+            "at. That is the whole mechanism and it cannot be avoided, so Rampart shows you " +
+            "the exact words before they go, and asks the first time you use each feature.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.outline,
+    )
+    Spacer(Modifier.height(16.dp))
+
+    AssistantMode.entries.forEach { mode ->
+        Row(
+            Modifier.fillMaxWidth()
+                .clickable {
+                    change(config.copy(mode = mode))
+                    // Turning it off is turning it off: an agreement given for one setup is
+                    // not an agreement that survives being switched off and on again with a
+                    // different provider in the box.
+                    if (mode == AssistantMode.OFF) Assistant.forgetAgreements()
+                }
+                .padding(vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(selected = config.mode == mode, onClick = null)
+            Spacer(Modifier.width(10.dp))
+            Column {
+                Text(
+                    when (mode) {
+                        AssistantMode.OFF -> "Off"
+                        AssistantMode.LOCAL -> "A model on this machine"
+                        AssistantMode.BYOK -> "A model somewhere else, with my own key"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    when (mode) {
+                        AssistantMode.OFF -> "No model, no key, nothing sent anywhere."
+                        AssistantMode.LOCAL ->
+                            "Ollama or anything else that speaks the same shape. Nothing leaves this machine."
+                        AssistantMode.BYOK ->
+                            "Your key, your account, your bill. Rampart never sees it after you type it."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+        }
+    }
+
+    if (config.mode != AssistantMode.OFF) {
+        Spacer(Modifier.height(16.dp))
+        OutlinedTextField(
+            value = config.baseUrl,
+            onValueChange = { change(config.copy(baseUrl = it)) },
+            label = { Text("Where to ask") },
+            placeholder = { Text("https://openrouter.ai/api/v1") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(10.dp))
+        OutlinedTextField(
+            value = config.model,
+            onValueChange = { change(config.copy(model = it)) },
+            label = { Text("Which model") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (config.mode == AssistantMode.BYOK) {
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value = key,
+                onValueChange = { key = it; saved = null },
+                label = { Text("Your key") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Button(onClick = {
+                    // The reason a save can fail is worth showing. Without a credential
+                    // store the key is not kept, and the failure would otherwise turn up as
+                    // "why does it ask me again every morning".
+                    saved = Secrets.storeNamed(Assistant.KEY, key) ?: "Kept in this machine's credential store."
+                }) { Text("Save the key") }
+                if (key.isNotBlank()) {
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(onClick = {
+                        key = ""
+                        Secrets.storeNamed(Assistant.KEY, "")
+                        saved = "Forgotten."
+                    }) { Text("Forget it") }
+                }
+            }
+            saved?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+            }
+        }
+
+        Spacer(Modifier.height(20.dp))
+        Section(
+            "What it may cost",
+            "Rampart cannot know what your provider charges, so it asks you. The two prices " +
+                "are per million tokens, the way every provider quotes them, and the total " +
+                "below is an estimate built from them rather than a bill.",
+        )
+        Row(Modifier.fillMaxWidth()) {
+            Dollars("Per million in", config.dollarsIn, Modifier.weight(1f)) {
+                change(config.copy(dollarsIn = it))
+            }
+            Spacer(Modifier.width(10.dp))
+            Dollars("Per million out", config.dollarsOut, Modifier.weight(1f)) {
+                change(config.copy(dollarsOut = it))
+            }
+            Spacer(Modifier.width(10.dp))
+            Dollars("Stop at, per month", config.ceiling, Modifier.weight(1f)) {
+                change(config.copy(ceiling = it))
+            }
+        }
+        Text(
+            "The limit stops the feature rather than warning about it. Zero means no limit.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline,
+        )
+
+        Spacer(Modifier.height(18.dp))
+        val breakdown = Assistant.breakdown()
+        Section("This month", if (breakdown.isEmpty()) "Nothing yet." else "")
+        breakdown.forEach { (feature, spend) ->
+            Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                Text(feature.replaceFirstChar { it.uppercase() }, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "${spend.calls} so far, ${spend.tokensIn + spend.tokensOut} tokens, " +
+                        Assistant.money(spend.dollars),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+        }
+    }
+}
+
+/** A money field that refuses to become something that is not a number. */
+@Composable
+private fun Dollars(label: String, value: Double, modifier: Modifier = Modifier, onChange: (Double) -> Unit) {
+    var text by remember(value) { mutableStateOf(if (value == 0.0) "0" else value.toString()) }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { typed ->
+            text = typed
+            // Half-typed is not a saved value. "0." is on the way to "0.5" and writing zero
+            // in the middle of that would silently turn the limit off.
+            typed.toDoubleOrNull()?.let(onChange)
+        },
+        label = { Text(label, style = MaterialTheme.typography.bodySmall) },
+        prefix = { Text("$") },
+        singleLine = true,
+        modifier = modifier,
     )
 }
 
