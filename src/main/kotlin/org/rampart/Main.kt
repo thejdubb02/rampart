@@ -1917,7 +1917,15 @@ private fun Reader(
             star = { starOne(message) },
             // Unread is how most people say "come back to this", and it was reachable
             // only by right-clicking the row the message was opened from.
-            markUnread = if (message.seen) ({ markRead(message, false) }) else null,
+            /*
+             * Always offered, and it says which way it goes.
+             *
+             * It used to appear only on a message the server thought had been read, which
+             * is a button that is there or not there depending on something nobody is
+             * looking at. With the mark-as-read delay set to never, the case it was written
+             * for, the message never becomes read and the button never appeared at all.
+             */
+            markUnread = { markRead(message, !message.seen) },
             moveInto = { into ->
                 val key = accountOf(message) ?: return@MessageActions
                 val from = sourceFolder(key)
@@ -4545,7 +4553,9 @@ internal fun Message(
                 actions.trash?.let { OutlinedButton(onClick = it) { Text("Delete") } }
                 // Unread is what people press to mean "come back to this", and it was only
                 // ever reachable by right-clicking the row the message was opened from.
-                actions.markUnread?.let { OutlinedButton(onClick = it) { Text("Unread") } }
+                actions.markUnread?.let {
+                    OutlinedButton(onClick = it) { Text(if (summary.seen) "Unread" else "Read") }
+                }
                 // Only where an engine drew it. The block renderer has no page to hand a
                 // printer, and a Print button that does nothing is worse than none.
                 if (engineDraws && page != null) {
