@@ -29,7 +29,7 @@ the key belongs to the user rather than to us, because the usual answer does not
 
 ## 1. What the model is actually for
 
-Five jobs, in the order they earn their keep.
+Six jobs, in the order they earn their keep.
 
 **Build a filter from a sentence.** Built first, 2026-09-20. "If I get a DMARC report,
 mark it read and delete it" is a thing anybody can say and almost nobody wants to assemble
@@ -51,6 +51,31 @@ And the result outlives the model: it is ordinary Sieve on the server, editable 
 builder and in Bulwark, still running with the assistant switched off forever. That is the
 opposite of an AI inbox that stops working when the subscription lapses. `RuleInWords.kt`,
 and `RuleInWordsTest` is the list of things a model is not allowed to get away with.
+
+**A panel you can talk to, that can act.** Built 2026-09-20. On the right, collapsible,
+beside the mail rather than instead of it: every question worth asking it is about
+something on screen.
+
+This is the one place in Rampart where mail text and the ability to act meet, so the
+safety is in what the tools are rather than in what the model is told:
+
+- It can search, read, archive, move to Trash, mark read, tag, and write a reply into the
+  composer. **It cannot send and it cannot delete anything for good.**
+- **An action can only name a message the app itself has already shown in that
+  conversation.** Ids come from a search the panel ran, never out of the text of a message.
+  That is what stops a message saying "archive everything in this mailbox" from being able
+  to name anything. `Chat.allowed`, and it has its own tests.
+- One action touches at most 25 messages, a turn runs at most 4 tools, and every action is
+  printed in the transcript and leaves an undo.
+
+The residual risk is worth stating rather than papering over: a message the model has read
+can still try to talk it into acting on the messages it legitimately found. Nothing on the
+tool list is destructive, and all of it shows up on screen, which is the answer available
+to a client that wants the feature to be useful.
+
+The protocol is ours rather than OpenAI tool calling, for the same reason the filter
+builder's is: tool calling is uneven across the cheap and free models this is meant to run
+on, while "answer with one JSON object" works everywhere. `Chat.kt`.
 
 **Summarise a long thread.** Twenty messages, one paragraph, before you decide whether to
 read it. This is the one people ask for and the one with the least that can go wrong: it

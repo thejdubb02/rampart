@@ -79,6 +79,9 @@ internal interface IconPack {
 
     /** Hollow for a message left as the sender built it, solid for one turned dark. */
     val Bulb: ImageVector
+
+    /** The assistant panel. A speech bubble, because that is what it is. */
+    val Ask: ImageVector
     val BulbOn: ImageVector
 
 }
@@ -140,6 +143,11 @@ internal object LineIcons : IconPack {
     override val Contacts = icon(
         "Contacts",
         "M9 3.4a2.7 2.7 0 1 1 0 5.4 2.7 2.7 0 0 1 0-5.4M3.6 15.4a5.4 5.4 0 0 1 10.8 0",
+    )
+    override val Ask = icon(
+        "Ask",
+        "M2.8 4.6a1.4 1.4 0 0 1 1.4-1.4h9.6a1.4 1.4 0 0 1 1.4 1.4v6a1.4 1.4 0 0 1-1.4 1.4H7.6" +
+            "L4.2 15v-3.4a1.4 1.4 0 0 1-1.4-1.4Z",
     )
     override val Search = icon("Search", "M8.1 2.6a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11M12.2 12.2 15.6 15.6")
     // Three bars of different heights, which is what a chart looks like at 16 pixels.

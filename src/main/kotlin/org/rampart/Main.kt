@@ -842,6 +842,19 @@ private fun Reader(
     var thread by remember { mutableStateOf<List<Summary>>(emptyList()) }
     /** Whether the open conversation is muted. Read off disk when the message changes. */
     var conversationMuted by remember { mutableStateOf(false) }
+    var chatOpen by remember { mutableStateOf(false) }
+    var said by remember { mutableStateOf<List<Said>>(emptyList()) }
+    var chatThinking by remember { mutableStateOf(false) }
+    // Read once rather than on every recomposition of the panel: it comes off disk.
+    var chatAgreed by remember { mutableStateOf(Assistant.agreed(Assistant.CHAT)) }
+    /*
+     * Every message id this panel has put on screen in this conversation.
+     *
+     * The whole of the guard against a message talking the model into acting on something
+     * nobody asked about: an action can only name an id that came out of a search run
+     * here. Cleared with the transcript, because a new conversation has been shown nothing.
+     */
+    val chatShown = remember { mutableSetOf<String>() }
     var bodyError by remember { mutableStateOf<String?>(null) }
     var inlineImages by remember { mutableStateOf<Map<String, ImageBitmap>>(emptyMap()) }
     // The same parts undecoded, for the engine, which wants the bytes rather than a bitmap.
@@ -1844,6 +1857,113 @@ private fun Reader(
         accountOf(message)?.let { setSeen(it, setOf(message.id), read) }
     }
 
+    /**
+     * Everything the assistant panel is able to reach.
+     *
+     * Built here because this is where the sessions are, and deliberately small: what is
+     * on this object is exactly what a model in that panel can do, so the list is the
+     * security boundary rather than the prompt being polite. Nothing here sends, and
+     * nothing here deletes for good.
+     *
+     * The calls block, and the panel runs them on a background thread.
+     */
+    fun toolsFor(key: String): MailTools = object : MailTools {
+        override fun search(text: String, limit: Int): List<Summary> =
+            runCatching { session(key).jmap.search(text, null, limit) }.getOrDefault(emptyList())
+
+        override fun read(id: String): String? =
+            runCatching { plainTextOf(session(key).jmap.body(id)) }.getOrNull()?.ifBlank { null }
+
+        override fun file(ids: List<String>, role: String): Int {
+            if (ids.isEmpty()) return 0
+            val target = folderFor(role, mailboxes[key].orEmpty())?.id ?: return 0
+            val from = sourceFolder(key)
+            if (runCatching { session(key).jmap.move(ids, target) }.isFailure) return 0
+            runCatching { session(key).store?.forget(ids) }
+            // Undoable like every other move. An action nobody typed is the one that most
+            // needs taking back.
+            scope.launch {
+                val gone = ids.toSet()
+                emails = emails.filterNot { it.id in gone }
+                if (selected?.id in gone) {
+                    selected = null
+                    body = null
+                }
+                undo = from?.let { Undoable(listOf(Move(key, ids, it)), pastTense(role)) }
+            }
+            return ids.size
+        }
+
+        override fun markRead(ids: List<String>, read: Boolean): Int {
+            if (ids.isEmpty()) return 0
+            if (runCatching { session(key).jmap.setKeyword(ids, "\$seen", read) }.isFailure) return 0
+            scope.launch { setSeen(key, ids.toSet(), read) }
+            return ids.size
+        }
+
+        override fun tag(ids: List<String>, keyword: String, on: Boolean): Int {
+            if (ids.isEmpty()) return 0
+            val word = keyword.trim().lowercase()
+            if (runCatching { session(key).jmap.setKeyword(ids, word, on) }.isFailure) return 0
+            scope.launch { reload() }
+            return ids.size
+        }
+
+        override fun draftReply(id: String, text: String): Boolean {
+            val message = (emails + thread).firstOrNull { it.id == id } ?: return false
+            val letter = runCatching { session(key).jmap.body(id) }.getOrNull()
+            scope.launch {
+                val ours = identities[key].orEmpty().map { it.email }.toSet()
+                sendError = null
+                // The model's words go above the quoted original, where a person's would.
+                val reply = replyTo(message, letter, identities[key].orEmpty().firstOrNull()?.email.orEmpty(), false, ours)
+                composing = reply.copy(body = text.trim() + "\n\n" + reply.body)
+            }
+            return true
+        }
+    }
+
+    /**
+     * One question, and whatever the model does about it.
+     *
+     * The whole exchange happens off the main thread and comes back as lines to add. The
+     * transcript is what the person reads and what goes back up next turn, so an action
+     * that happened is in both or in neither.
+     */
+    fun ask(question: String) {
+        if (question.isBlank() || chatThinking) return
+        val key = settingsAccount() ?: return
+        val config = Assistant.config()
+        Assistant.whyNot(Assistant.CHAT, config)?.let {
+            said = said + Said("result", it)
+            return
+        }
+        said = said + Said("user", question)
+        chatThinking = true
+        val history = said
+        val folders = mailboxes[key].orEmpty().map { it.name }
+        val who = sessions.firstOrNull { it.key == key }?.account?.email.orEmpty()
+        scope.launch {
+            val added = withContext(Dispatchers.IO) {
+                runCatching {
+                    converse(
+                        config = config,
+                        key = Secrets.loadNamed(Assistant.KEY),
+                        system = Chat.system(folders, who),
+                        history = history,
+                        shown = chatShown,
+                        tools = toolsFor(key),
+                        record = { tokensIn, tokensOut ->
+                            Assistant.record(Assistant.CHAT, tokensIn, tokensOut, config)
+                        },
+                    )
+                }.getOrElse { listOf(Said("result", it.message ?: "The model could not be reached.")) }
+            }
+            said = said + added
+            chatThinking = false
+        }
+    }
+
     /*
      * The same three acts, done to a whole conversation.
      *
@@ -2549,6 +2669,8 @@ private fun Reader(
         ) {
         Row(Modifier.fillMaxSize()) {
             Sidebar(
+                asking = chatOpen,
+                onAsk = { chatOpen = !chatOpen },
                 // Only once the card has been sent away, so there is one notice at a time.
                 updateWaiting = update?.takeIf { it == putOff },
                 onUpdate = { putOff = null },
@@ -3091,6 +3213,33 @@ private fun Reader(
                     }
                 },
             )
+            /*
+             * Beside the mail rather than instead of it.
+             *
+             * Every question worth asking it is about something on screen, so a panel that
+             * replaced the screen would mean leaving the thing being asked about.
+             */
+            if (chatOpen) {
+                VerticalDivider()
+                ChatPane(
+                    said = said,
+                    thinking = chatThinking,
+                    unavailable = Assistant.whyNot(Assistant.CHAT),
+                    onSend = { ask(it) },
+                    onClear = {
+                        said = emptyList()
+                        // A new conversation has been shown nothing, so it may act on
+                        // nothing until it looks something up again.
+                        chatShown.clear()
+                    },
+                    onClose = { chatOpen = false },
+                    onSettings = { settingsOpen = true },
+                    model = Assistant.config().model,
+                    agreed = chatAgreed,
+                    onAgree = { Assistant.agree(Assistant.CHAT); chatAgreed = true },
+                    onTyping = { typing = it },
+                )
+            }
         }
         }
     }
@@ -3186,6 +3335,9 @@ internal fun Sidebar(
     inSettings: Boolean = false,
     inContacts: Boolean = false,
     inDashboard: Boolean = false,
+    /** Whether the assistant panel is showing, so its button says so. */
+    asking: Boolean = false,
+    onAsk: () -> Unit = {},
     onToggleCollapsed: () -> Unit = {},
     onSettings: () -> Unit,
     onContacts: () -> Unit = {},
@@ -3402,6 +3554,15 @@ internal fun Sidebar(
                     modifier = Modifier.size(16.dp),
                 )
             }
+            IconButton(onClick = onAsk, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    RampartIcons.Ask,
+                    contentDescription = "The assistant",
+                    tint = if (asking) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
             IconButton(onClick = onSettings, modifier = Modifier.size(32.dp)) {
                 Icon(
                     RampartIcons.Settings,
@@ -3440,6 +3601,15 @@ internal fun Sidebar(
                         RampartIcons.Contacts,
                         contentDescription = "Contacts",
                         tint = if (inContacts) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+                IconButton(onClick = onAsk, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        RampartIcons.Ask,
+                        contentDescription = "The assistant",
+                        tint = if (asking) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.outline,
                         modifier = Modifier.size(16.dp),
                     )

@@ -86,6 +86,14 @@ object Assistant {
      */
     const val FILTER = "filter"
 
+    /**
+     * The panel that talks back and can act.
+     *
+     * Its own agreement again, and the one that deserves it most: this is the feature
+     * where the mail itself reaches the model and where the model can change something.
+     */
+    const val CHAT = "chat"
+
     /** Settings as saved, or the defaults, which are off. */
     fun config(): AssistantConfig {
         val saved = read()

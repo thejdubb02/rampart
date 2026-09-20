@@ -222,7 +222,7 @@ internal fun forwardOf(summary: Summary, body: Body?, from: String): Draft {
 }
 
 /** The message as text, whichever way it arrived, so a quote never carries markup. */
-private fun plainTextOf(body: Body?): String =
+internal fun plainTextOf(body: Body?): String =
     body?.text
         ?: body?.html?.let { renderHtml(it, Color.Unspecified, Color.Unspecified) {}.text.text }
         ?: ""

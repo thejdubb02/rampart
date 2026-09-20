@@ -52,19 +52,29 @@ internal object Llm {
      * Deterministic: the same arguments give the same bytes, so what the viewer shows is
      * what [ask] posts.
      */
-    fun packet(model: String, system: String, user: String, maxTokens: Int = 700): String {
+    fun packet(model: String, system: String, user: String, maxTokens: Int = 700): String =
+        packetOf(model, system, listOf(Said("user", user)), maxTokens)
+
+    /**
+     * The same thing for a conversation rather than a single question.
+     *
+     * Roles the rest of Rampart uses are mapped here rather than at every call site: a
+     * tool call the model made goes back as its own words, and what the app answered goes
+     * back as the user's, because that is the only pair of roles every provider agrees
+     * about.
+     */
+    fun packetOf(model: String, system: String, said: List<Said>, maxTokens: Int = 700): String {
         val json = buildJsonObject {
             put("model", model)
             put("max_tokens", maxTokens)
             put("messages", buildJsonArray {
-                add(buildJsonObject {
-                    put("role", "system")
-                    put("content", system)
-                })
-                add(buildJsonObject {
-                    put("role", "user")
-                    put("content", user)
-                })
+                add(buildJsonObject { put("role", "system"); put("content", system) })
+                said.forEach { line ->
+                    add(buildJsonObject {
+                        put("role", if (line.role == "assistant" || line.role == "call") "assistant" else "user")
+                        put("content", line.text)
+                    })
+                }
             })
         }
         return readable.encodeToString(JsonElement.serializer(), json)
