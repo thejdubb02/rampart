@@ -15,13 +15,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import java.time.YearMonth
-import kotlin.io.path.createDirectories
-import kotlin.io.path.exists
-import kotlin.io.path.readText
-import kotlin.io.path.writeText
 
 /**
  * What the model is allowed to do, and what it has cost.
@@ -239,25 +233,11 @@ object Assistant {
      * preference either, and keeping it separate means a reset of one is not a reset of the
      * other. The key itself is in neither: that is in the operating system's store.
      */
-    private fun file() = Accounts.file().resolveSibling("assistant.json")
+    private val store = JsonStore("assistant.json")
 
-    private fun read(): JsonObject = runCatching {
-        val path = file()
-        if (!path.exists()) JsonObject(emptyMap())
-        else Json.parseToJsonElement(path.readText()).jsonObject
-    }.getOrDefault(JsonObject(emptyMap()))
+    private fun read(): JsonObject = store.read()
 
-    /** Read, change one key, write beside and move over, the same way [Settings] does. */
-    private fun write(change: MutableMap<String, JsonElement>.() -> Unit) {
-        runCatching {
-            val updated = read().toMutableMap().apply(change)
-            val path = file()
-            path.parent?.createDirectories()
-            val temp = path.resolveSibling("assistant.json.new")
-            temp.writeText(Json.encodeToString(JsonObject.serializer(), JsonObject(updated)))
-            Files.move(temp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-        }
-    }
+    private fun write(change: MutableMap<String, JsonElement>.() -> Unit) = store.write(change)
 
     private fun JsonElement.asObject(): JsonObject? = this as? JsonObject
 

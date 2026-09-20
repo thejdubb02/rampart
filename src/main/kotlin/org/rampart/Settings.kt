@@ -13,12 +13,6 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
-import kotlin.io.path.createDirectories
-import kotlin.io.path.exists
-import kotlin.io.path.readText
-import kotlin.io.path.writeText
 
 /** Where the window was and how big, so reopening puts it back. */
 data class SavedWindow(val x: Int, val y: Int, val width: Int, val height: Int, val maximized: Boolean)
@@ -32,27 +26,12 @@ data class SavedWindow(val x: Int, val y: Int, val width: Int, val height: Int, 
  * lose the theme.
  */
 object Settings {
-    private fun file() = Accounts.file().resolveSibling("settings.json")
+    private val store = JsonStore("settings.json")
 
-    private fun read(): JsonObject = runCatching {
-        val path = file()
-        if (!path.exists()) JsonObject(emptyMap())
-        else Json.parseToJsonElement(path.readText()).jsonObject
-    }.getOrDefault(JsonObject(emptyMap()))
+    private fun read(): JsonObject = store.read()
 
-    private fun write(change: MutableMap<String, kotlinx.serialization.json.JsonElement>.() -> Unit) {
-        runCatching {
-            val updated = read().toMutableMap().apply(change)
-            val path = file()
-            path.parent?.createDirectories()
-            // Written beside the file and moved over it, so an interrupted write cannot
-            // leave half a file behind. Signatures save on every keystroke, which makes
-            // being caught mid-write a great deal likelier than it was.
-            val temp = path.resolveSibling("settings.json.new")
-            temp.writeText(Json.encodeToString(JsonObject.serializer(), JsonObject(updated)))
-            Files.move(temp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-        }
-    }
+    private fun write(change: MutableMap<String, kotlinx.serialization.json.JsonElement>.() -> Unit) =
+        store.write(change)
 
     /** The chosen theme's key, or null before anyone has chosen one. */
     fun theme(): String? = read()["theme"]?.jsonPrimitive?.contentOrNull
