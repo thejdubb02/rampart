@@ -53,6 +53,41 @@ class UpdateCommandTest {
         assertFalse('"' in script, script)
     }
 
+    /*
+     * The background fetch, which runs while somebody is reading their mail. The one thing
+     * it must never do is close the app to get the update in, so that is what is checked.
+     */
+    @Test
+    fun theBackgroundFetchCannotCloseTheApp() {
+        val staging = Updates.stageCommand().last()
+        assertTrue("Add-AppxPackage" in staging)
+        assertTrue("rampart.appinstaller" in staging)
+        assertFalse("Shutdown" in staging, "a fetch behind a running app never closes it")
+    }
+
+    /**
+     * Staged rather than applied, so closing Rampart later is enough on its own. The flag
+     * is not on every Windows, so there is a second attempt without it, and that one is
+     * allowed to fail.
+     */
+    @Test
+    fun itAsksWindowsToHoldTheUpdateUntilTheAppIsClosed() {
+        val staging = Updates.stageCommand().last()
+        assertTrue("-DeferRegistrationWhenPackagesAreInUse" in staging)
+        assertEquals(2, Regex("Add-AppxPackage").findAll(staging).count(), "a fallback without the flag")
+        assertTrue("exit 1" in staging, "a refusal is reported rather than counted as staged")
+    }
+
+    @Test
+    fun theStagingScriptCarriesNoDoubleQuotes() {
+        assertFalse('"' in Updates.stageCommand().last())
+    }
+
+    @Test
+    fun runningFromSourceHasNothingStagedAndNothingToUpdate() {
+        assertFalse(Updates.stage())
+    }
+
     @Test
     fun runningFromSourceHasNothingToUpdate() {
         // No packaged launcher beside a development build, so there is nothing to install

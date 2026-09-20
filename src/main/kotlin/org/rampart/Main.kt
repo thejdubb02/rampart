@@ -166,6 +166,8 @@ internal fun UpdateCard(
     version: String,
     installing: Boolean,
     note: String?,
+    /** True once the package has been fetched and is waiting to be put in place. */
+    waiting: Boolean,
     onRestart: () -> Unit,
     onLater: () -> Unit,
 ) {
@@ -188,8 +190,13 @@ internal fun UpdateCard(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    if (installing) "Rampart will close and open again by itself."
-                    else "It installs in about a minute, and Rampart restarts into it.",
+                    when {
+                        installing -> "Rampart will close and open again by itself."
+                        // The whole point of fetching it in the background: doing nothing
+                        // is a complete answer, and saying so is what makes Later honest.
+                        waiting -> "It is downloaded. It goes in next time you close Rampart, or now."
+                        else -> "It installs in about a minute, and Rampart restarts into it."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.outline,
                 )
@@ -205,7 +212,7 @@ internal fun UpdateCard(
                     ) {
                         TextButton(onClick = onLater) { Text("Later") }
                         Spacer(Modifier.width(4.dp))
-                        Button(onClick = onRestart) { Text("Restart now") }
+                        Button(onClick = onRestart) { Text("Install now") }
                     }
                 }
             }
@@ -779,6 +786,10 @@ private fun Reader(
     var signatureError by remember { mutableStateOf<String?>(null) }
     var installing by remember { mutableStateOf(false) }
     var installNote by remember { mutableStateOf<String?>(null) }
+    /** The version already fetched and waiting, which is what makes the button quick. */
+    var waiting by remember { mutableStateOf<String?>(null) }
+    /** The version the card was sent away for. It does not come back for that one. */
+    var putOff by remember { mutableStateOf<String?>(null) }
     var notifyOnArrival by remember { mutableStateOf(Settings.notifyOnArrival()) }
     var order by remember { mutableStateOf(Settings.order()) }
     // Not remembered between runs on purpose: opening the app into a folder that is hiding
@@ -943,6 +954,24 @@ private fun Reader(
             if (!installing) update = withContext(Dispatchers.IO) { Updates.newerVersion() }
             delay(30 * 60_000L)
         }
+    }
+
+    /*
+     * Fetched as soon as there is one, quietly, while the app carries on.
+     *
+     * A mail client is open for days, so the moment somebody finally agrees to restart is
+     * the worst possible moment to begin a download. Once this has run, pressing the button
+     * swaps files that are already on the machine, and closing Rampart without pressing
+     * anything installs it anyway.
+     *
+     * Once per version. A fetch that failed is not retried in a loop: the next half-hourly
+     * check finds the same version, and nothing here is allowed to become a machine that
+     * downloads a package over and over.
+     */
+    LaunchedEffect(update) {
+        val version = update ?: return@LaunchedEffect
+        if (waiting == version || installing) return@LaunchedEffect
+        if (withContext(Dispatchers.IO) { Updates.stage() }) waiting = version
     }
 
     // Windows closes this window when the new version is in place, so still being here
@@ -2410,6 +2439,9 @@ private fun Reader(
         ) {
         Row(Modifier.fillMaxSize()) {
             Sidebar(
+                // Only once the card has been sent away, so there is one notice at a time.
+                updateWaiting = update?.takeIf { it == putOff },
+                onUpdate = { putOff = null },
                 search = {
                     SearchBar(
                         query = query,
@@ -2977,11 +3009,12 @@ private fun Reader(
         }
     }
 
-    update?.let { version ->
+    update?.takeIf { it != putOff || installing }?.let { version ->
         UpdateCard(
             version = version,
             installing = installing,
             note = installNote,
+            waiting = waiting == version,
             onRestart = {
                 // The window stays up while Windows fetches the package, which can be most
                 // of a minute, and Windows closes it at the swap. Quitting first would leave
@@ -2995,7 +3028,10 @@ private fun Reader(
                     onQuit()
                 }
             },
-            onLater = { update = null },
+            // Remembered rather than forgotten, so the card does not come back in half an
+            // hour for the same version. Nagging is what makes people stop reading a notice,
+            // and the sidebar still says it is there.
+            onLater = { putOff = version },
         )
     }
 
@@ -3066,6 +3102,9 @@ internal fun Sidebar(
     onTagBounds: (String, Rect) -> Unit = { _, _ -> },
     /** The search field, drawn at the top. Absent while the sidebar is narrowed. */
     search: @Composable () -> Unit = {},
+    /** A version fetched and waiting, once the card offering it has been sent away. */
+    updateWaiting: String? = null,
+    onUpdate: () -> Unit = {},
 ) {
     Column(
         Modifier.width(if (collapsed) 60.dp else 232.dp).fillMaxHeight()
@@ -3313,13 +3352,29 @@ internal fun Sidebar(
                     )
                 }
             }
-            Updates.current?.let {
+            /*
+             * The version line, and where an update that was put off goes.
+             *
+             * Somewhere quiet and always in the same place, rather than a card that comes
+             * back every half hour. It is one line at the bottom of the sidebar, it says
+             * what is waiting, and it opens the card again when clicked.
+             */
+            if (updateWaiting != null) {
                 Text(
-                    it,
+                    "$updateWaiting is ready to install",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.padding(start = 12.dp, top = 2.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.clickable { onUpdate() }.padding(start = 12.dp, top = 2.dp),
                 )
+            } else {
+                Updates.current?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.padding(start = 12.dp, top = 2.dp),
+                    )
+                }
             }
         }
     }

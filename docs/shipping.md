@@ -25,8 +25,29 @@ for the same reason: a shallow clone counts one commit and would pin the version
 Windows installs Rampart as an MSIX registered against `rampart.appinstaller`, a small
 XML file listing the current version and where to get it. Windows re-reads it on its own
 schedule and in the background, whether or not the app is running, and downloads only the
-blocks that changed. Nothing in our code polls for updates, because the operating system
-already does.
+blocks that changed.
+
+On top of that, Rampart asks GitHub every half hour whether there is a newer release, and
+fetches it as soon as there is one. It is a mail client: it stays open for days, so the
+moment somebody finally agrees to restart is the worst possible moment to begin a download.
+`Updates.stage()` runs `Add-AppxPackage -AppInstallerFile ... -DeferRegistrationWhenPackagesAreInUse`,
+which puts the new version on the machine and tells Windows to apply it when the app is
+next closed. Nothing in that path can close the app, which is what makes it safe to run
+behind somebody reading their mail.
+
+So there are three ways the same update lands, and none of them needs anybody to act:
+Windows' own background check, closing Rampart once the package is staged, and the next
+launch, because the manifest carries `OnLaunch` with `HoursBetweenUpdateChecks="0"`.
+Pressing the button only makes it sooner.
+
+The defer flag is not on every Windows this might run on, so a second attempt without it
+follows, and that one is allowed to refuse while the app is in use. What is lost then is
+the head start, not the update.
+
+What the person sees: a card in the corner, once per version, saying it is downloaded and
+goes in when they next close Rampart. "Later" means the card does not come back for that
+version; the bottom of the sidebar carries one quiet line instead, and clicking it brings
+the card back.
 
 Linux gets a `.deb` from an apt repository in the same release, so `apt upgrade` carries it.
 

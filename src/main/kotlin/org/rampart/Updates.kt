@@ -108,6 +108,55 @@ object Updates {
     )
 
     /**
+     * Fetches the published package and leaves it waiting, without disturbing the copy that
+     * is running.
+     *
+     * The reason this exists: an update used to be fetched at the moment somebody pressed
+     * the button, so pressing it meant a minute of waiting with the app shut. People leave
+     * a mail client open for days, and the one moment they are willing to lose it is not
+     * the moment to start a download. Fetched quietly instead, as soon as there is one, so
+     * the button has nothing left to do but swap the files.
+     *
+     * `DeferRegistrationWhenPackagesAreInUse` is what makes it safe to do while the app is
+     * open: Windows stages the new version and applies it when the app is next closed. So
+     * doing nothing at all still ends with the update installed, which is the behaviour
+     * somebody who never presses the button should get.
+     *
+     * The flag is not on every Windows this might run on, so a second attempt without it
+     * follows. That one can refuse while the app is in use, and refusing is fine: nothing
+     * is staged, the button falls back to fetching at the time it is pressed, and what is
+     * lost is the head start rather than the update.
+     *
+     * Nothing here can close the app. Neither call carries a shutdown flag, which is the
+     * property that makes a background fetch acceptable in the first place.
+     */
+    internal fun stageCommand(): List<String> = listOf(
+        "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command",
+        "try { Add-AppxPackage -AppInstallerFile '$APPINSTALLER' " +
+            "-DeferRegistrationWhenPackagesAreInUse -ErrorAction Stop; exit 0 } catch { }; " +
+            "try { Add-AppxPackage -AppInstallerFile '$APPINSTALLER' -ErrorAction Stop; exit 0 } " +
+            "catch { exit 1 }",
+    )
+
+    /**
+     * Runs that fetch and says whether the package is now waiting. Blocks, so it belongs on
+     * a background thread.
+     *
+     * A fetch that has not finished in half an hour is abandoned rather than left holding a
+     * thread for the rest of the session. There is nothing to report when that happens: the
+     * button still works, and the next check starts it again.
+     */
+    fun stage(): Boolean = runCatching {
+        updater() ?: return false
+        val process = ProcessBuilder(stageCommand()).start()
+        if (!process.waitFor(30, java.util.concurrent.TimeUnit.MINUTES)) {
+            process.destroy()
+            return false
+        }
+        process.exitValue() == 0
+    }.getOrDefault(false)
+
+    /**
      * Installs the published version and restarts into it. Returns false when this is not a
      * packaged copy, and the caller then just closes.
      *

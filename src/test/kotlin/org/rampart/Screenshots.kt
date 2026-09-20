@@ -381,13 +381,13 @@ class Screenshots {
         shoot("update", 1000, 700, dark) {
             Box(Modifier.fillMaxSize()) {
                 Panes()
-                UpdateCard("0.1.44", installing = false, note = null, onRestart = {}, onLater = {})
+                UpdateCard("0.1.44", installing = false, note = null, waiting = true, onRestart = {}, onLater = {})
             }
         }
         shoot("update-installing", 1000, 700, dark) {
             Box(Modifier.fillMaxSize()) {
                 Panes()
-                UpdateCard("0.1.44", installing = true, note = null, onRestart = {}, onLater = {})
+                UpdateCard("0.1.44", installing = true, note = null, waiting = true, onRestart = {}, onLater = {})
             }
         }
         shoot("palette", 1000, 700, dark) {
