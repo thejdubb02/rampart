@@ -101,6 +101,11 @@ internal fun SettingsPane(
     filtersSupported: Boolean,
     filtersSaving: Boolean,
     filtersError: String?,
+    /** Which account's filters are showing, or null for the set kept for every account. */
+    filterAccount: String?,
+    onFilterAccount: (String?) -> Unit,
+    globalFilters: GlobalFilters,
+    onGlobalFilters: (GlobalFilters) -> Unit,
     onFilters: (Script) -> Unit,
     onClose: () -> Unit,
     /** Which page opens first. Only ever passed by the screenshot tests. */
@@ -133,8 +138,22 @@ internal fun SettingsPane(
                         "reading" -> ReadingPage(onUndoBarSeconds)
                         "filters" -> FiltersPage(
                             script = filters,
-                            // Only real folders, so nobody files into one that does not exist.
-                            folders = accounts.flatMap { it.mailboxes }.map { it.name }.distinct().sorted(),
+                            accounts = accounts,
+                            chosen = filterAccount,
+                            onChoose = onFilterAccount,
+                            globals = globalFilters,
+                            onGlobals = onGlobalFilters,
+                            /*
+                             * Only real folders, so nobody files into one that does not
+                             * exist. The chosen account's own, because a rule filing into
+                             * another account's folder is one the server will refuse.
+                             * Rules kept for every account offer what they all have.
+                             */
+                            folders = accounts
+                                .filter { filterAccount == null || it.key == filterAccount }
+                                .map { account -> account.mailboxes.map { it.name }.toSet() }
+                                .reduceOrNull { all, next -> all intersect next }
+                                .orEmpty().sorted(),
                             saving = filtersSaving,
                             error = filtersError,
                             supported = filtersSupported,

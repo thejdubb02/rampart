@@ -4,6 +4,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -14,6 +15,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -40,8 +42,15 @@ import androidx.compose.ui.unit.dp
  */
 @Composable
 internal fun FiltersPage(
-    /** Null while the server's script is still being fetched. */
+    /** Null while the chosen account's script is still being read. */
     script: Script?,
+    /** Every signed in account, so a rule can be kept for one of them or for all. */
+    accounts: List<AccountMailboxes>,
+    /** Which account is being edited, or null for the set that goes to all of them. */
+    chosen: String?,
+    onChoose: (String?) -> Unit,
+    globals: GlobalFilters,
+    onGlobals: (GlobalFilters) -> Unit,
     /** Folders to offer for "file into", so nobody types a folder name that does not exist. */
     folders: List<String>,
     saving: Boolean,
@@ -49,55 +58,193 @@ internal fun FiltersPage(
     supported: Boolean,
     onSave: (Script) -> Unit,
 ) {
+    Section("Filters", "Rules run on the server, so they work with Rampart closed.")
+    Where(accounts, chosen, onChoose)
+    Spacer(Modifier.height(14.dp))
+
+    if (chosen == null) {
+        Everywhere(globals, accounts, folders, saving, error, onGlobals)
+        return
+    }
+    OneAccount(script, chosen, globals, folders, saving, error, supported, onSave)
+}
+
+/** Which set of rules is on the screen. Always shown, so the global set is one click away. */
+@Composable
+private fun Where(accounts: List<AccountMailboxes>, chosen: String?, onChoose: (String?) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+            selected = chosen == null,
+            onClick = { onChoose(null) },
+            label = { Text("Everywhere") },
+        )
+        accounts.forEach { account ->
+            FilterChip(
+                selected = chosen == account.key,
+                onClick = { onChoose(account.key) },
+                label = { Text(account.email) },
+            )
+        }
+    }
+}
+
+/**
+ * The rules kept for every account, and which accounts they are kept off.
+ *
+ * Saved to each account's own server rather than run here, so they work the same way an
+ * account's own rules do: at delivery, with Rampart closed.
+ */
+@Composable
+private fun Everywhere(
+    globals: GlobalFilters,
+    accounts: List<AccountMailboxes>,
+    folders: List<String>,
+    saving: Boolean,
+    error: String?,
+    onGlobals: (GlobalFilters) -> Unit,
+) {
+    Note(
+        "These rules are saved to every account below, so each server runs its own copy of " +
+            "them. An account signed in later gets them too.",
+    )
+    Spacer(Modifier.height(10.dp))
+    RuleList(globals.rules, folders, saving) { onGlobals(globals.copy(rules = it)) }
+
+    if (accounts.size > 1) {
+        Spacer(Modifier.height(18.dp))
+        Text("Where these go", style = MaterialTheme.typography.titleSmall)
+        accounts.forEach { account ->
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Text(account.email, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                Switch(
+                    checked = globals.appliesTo(account.key),
+                    enabled = !saving,
+                    onCheckedChange = { on ->
+                        onGlobals(
+                            globals.copy(
+                                exceptions = if (on) globals.exceptions - account.key
+                                else globals.exceptions + account.key,
+                            ),
+                        )
+                    },
+                )
+            }
+        }
+    }
+    Problem(error)
+}
+
+/** One account: the rules it inherits, then its own. */
+@Composable
+private fun OneAccount(
+    script: Script?,
+    chosen: String,
+    globals: GlobalFilters,
+    folders: List<String>,
+    saving: Boolean,
+    error: String?,
+    supported: Boolean,
+    onSave: (Script) -> Unit,
+) {
     if (!supported) {
-        Section("Filters", "This server does not offer Sieve, so rules cannot be kept on it.")
+        Note("This server does not offer Sieve, so rules cannot be kept on it.")
         return
     }
     if (script == null) {
-        Section("Filters", "Rules run on the server, so they work with Rampart closed.")
         Spinner(Modifier.height(20.dp))
         return
     }
 
-    var editing by remember(script) { mutableStateOf<Rule?>(null) }
     var raw by remember(script) { mutableStateOf<String?>(null) }
-    var rules by remember(script) { mutableStateOf(script.rules) }
-
-    fun save(next: List<Rule>) {
-        rules = next
-        onSave(script.copy(rules = next))
-    }
-
-    Section("Filters", "Rules run on the server, so they work with Rampart closed.")
+    val inherited = globals.forAccount(chosen)
 
     if (!script.editable) {
         // Being plain about why, rather than showing an empty list that looks like a bug.
-        Text(
+        Note(
             "The filter script on this server was written by hand rather than by a rule " +
                 "builder, so Rampart shows it as it is instead of rewriting it.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.outline,
         )
         Spacer(Modifier.height(10.dp))
         RawScript(script.tail)
         return
     }
 
+    /*
+     * The account's own rules are what this screen edits, and the global set is put back
+     * on top on the way out. Saving the list as it is drawn would turn every inherited
+     * rule into a copy this account owns, and the global set could then never be changed
+     * or removed again.
+     */
+    RuleList(
+        rules = ownRules(script),
+        folders = folders,
+        saving = saving,
+        inherited = inherited,
+        extra = {
+            TextButton(
+                onClick = { raw = sieveOf(scriptFor(script, inherited)) },
+            ) { Text("Show the script") }
+        },
+        onChange = { next -> onSave(scriptFor(script.copy(rules = next), inherited)) },
+    )
+
+    Problem(error)
+    if (script.tail.isNotBlank()) {
+        Spacer(Modifier.height(10.dp))
+        Note(
+            "There is more in this script that Rampart did not write. It is kept exactly " +
+                "as it is and saving a rule here does not touch it.",
+        )
+    }
+
+    raw?.let { text ->
+        AlertDialog(
+            onDismissRequest = { raw = null },
+            title = { Text("The script as the server sees it") },
+            text = { RawScript(text) },
+            confirmButton = { TextButton(onClick = { raw = null }) { Text("Close") } },
+        )
+    }
+}
+
+/**
+ * A list of rules and the editor over it, used for one account's rules and for the set
+ * kept for all of them.
+ *
+ * [inherited] is drawn above the editable ones and cannot be changed here: a rule that
+ * belongs to every account is changed in one place, not in whichever account it was
+ * noticed in.
+ */
+@Composable
+private fun RuleList(
+    rules: List<Rule>,
+    folders: List<String>,
+    saving: Boolean,
+    inherited: List<Rule> = emptyList(),
+    extra: @Composable RowScope.() -> Unit = {},
+    onChange: (List<Rule>) -> Unit,
+) {
+    var editing by remember(rules, inherited) { mutableStateOf<Rule?>(null) }
+
+    inherited.forEach { rule ->
+        RuleRow(rule = rule, mine = false, onToggle = {}, onEdit = {}, onDelete = {})
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+    }
     rules.forEach { rule ->
         RuleRow(
             rule = rule,
-            onToggle = { save(rules.map { if (it.id == rule.id) it.copy(enabled = !it.enabled) else it }) },
+            mine = true,
+            onToggle = { onChange(rules.map { if (it.id == rule.id) it.copy(enabled = !it.enabled) else it }) },
             onEdit = { editing = rule },
-            onDelete = { save(rules.filterNot { it.id == rule.id }) },
+            onDelete = { onChange(rules.filterNot { it.id == rule.id }) },
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     }
-    if (rules.isEmpty()) {
-        Text(
-            "No rules yet.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.outline,
-        )
+    if (rules.isEmpty() && inherited.isEmpty()) {
+        Note("No rules yet.")
     }
 
     Spacer(Modifier.height(12.dp))
@@ -112,33 +259,11 @@ internal fun FiltersPage(
             },
             enabled = !saving,
         ) { Text("New rule") }
-        TextButton(onClick = { raw = sieveOf(script.copy(rules = rules)) }) { Text("Show the script") }
+        extra()
         if (saving) {
             Spacer(Modifier.width(4.dp))
             Spinner(Modifier.height(18.dp))
         }
-    }
-    error?.let {
-        Spacer(Modifier.height(8.dp))
-        Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-    }
-    if (script.tail.isNotBlank()) {
-        Spacer(Modifier.height(10.dp))
-        Text(
-            "There is more in this script that Rampart did not write. It is kept exactly " +
-                "as it is and saving a rule here does not touch it.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.outline,
-        )
-    }
-
-    raw?.let { text ->
-        AlertDialog(
-            onDismissRequest = { raw = null },
-            title = { Text("The script as the server sees it") },
-            text = { RawScript(text) },
-            confirmButton = { TextButton(onClick = { raw = null }) { Text("Close") } },
-        )
     }
 
     editing?.let { rule ->
@@ -148,12 +273,29 @@ internal fun FiltersPage(
             onClose = { editing = null },
             onDone = { edited ->
                 editing = null
-                save(
+                onChange(
                     if (rules.any { it.id == edited.id }) rules.map { if (it.id == edited.id) edited else it }
                     else rules + edited,
                 )
             },
         )
+    }
+}
+
+@Composable
+private fun Note(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.outline,
+    )
+}
+
+@Composable
+private fun Problem(error: String?) {
+    error?.let {
+        Spacer(Modifier.height(8.dp))
+        Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -168,9 +310,15 @@ private fun RawScript(text: String) {
     )
 }
 
-/** One rule in the list: what it does, in a sentence, and the switch that turns it off. */
+/**
+ * One rule in the list: what it does, in a sentence, and the switch that turns it off.
+ *
+ * [mine] false is a rule this account inherited from the set kept for all of them. It is
+ * shown because a screen that hides half of what runs against your mail is worse than one
+ * that shows it greyed, and it is not editable here for the same reason.
+ */
 @Composable
-private fun RuleRow(rule: Rule, onToggle: () -> Unit, onEdit: () -> Unit, onDelete: () -> Unit) {
+private fun RuleRow(rule: Rule, mine: Boolean, onToggle: () -> Unit, onEdit: () -> Unit, onDelete: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(vertical = 8.dp),
         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
@@ -190,12 +338,21 @@ private fun RuleRow(rule: Rule, onToggle: () -> Unit, onEdit: () -> Unit, onDele
                     color = MaterialTheme.colorScheme.error,
                 )
             }
+            if (!mine) {
+                Text(
+                    "Kept for every account. Change it under Everywhere.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
         }
-        if (rule.understood) {
+        if (rule.understood && mine) {
             TextButton(onClick = onEdit) { Text("Edit") }
         }
-        TextButton(onClick = onDelete) { Text("Delete") }
-        Switch(checked = rule.enabled, onCheckedChange = { onToggle() })
+        if (mine) {
+            TextButton(onClick = onDelete) { Text("Delete") }
+        }
+        Switch(checked = rule.enabled, enabled = mine, onCheckedChange = { onToggle() })
     }
 }
 

@@ -81,6 +81,11 @@ internal data class Test(val field: Field, val match: Match, val value: String)
  * arrived. [understood] false means the JSON held something this build does not show, and
  * the rule is then displayed but not editable: guessing at it is how somebody's filter
  * quietly changes meaning.
+ *
+ * [global] marks a rule that belongs to the set kept for every account rather than to this
+ * one. It is written into the metadata so the mark survives on the server: without it a
+ * global rule pushed to three accounts becomes three unrelated account rules the moment
+ * anything reads them back, and turning the set off could never remove them again.
  */
 internal data class Rule(
     val id: String = UUID.randomUUID().toString(),
@@ -91,6 +96,7 @@ internal data class Rule(
     val stop: Boolean = false,
     val enabled: Boolean = true,
     val understood: Boolean = true,
+    val global: Boolean = false,
     val raw: JsonObject? = null,
 )
 
@@ -173,7 +179,7 @@ private fun tailOf(body: String, rules: List<Rule>): String {
 }
 
 /** One rule out of the metadata, or null if it is not even shaped like one. */
-private fun ruleOf(element: kotlinx.serialization.json.JsonElement): Rule? {
+internal fun ruleOf(element: kotlinx.serialization.json.JsonElement): Rule? {
     val o = element as? JsonObject ?: return null
     val name = o["name"]?.jsonPrimitive?.content ?: return null
     var understood = true
@@ -214,6 +220,7 @@ private fun ruleOf(element: kotlinx.serialization.json.JsonElement): Rule? {
         all = o["matchType"]?.jsonPrimitive?.content != "any",
         stop = o["stopProcessing"]?.jsonPrimitive?.content == "true",
         enabled = o["enabled"]?.jsonPrimitive?.content != "false",
+        global = o["global"]?.jsonPrimitive?.content == "true",
         understood = understood && tests.isNotEmpty() && acts.isNotEmpty(),
         raw = o,
     )
@@ -268,11 +275,25 @@ private fun required(rules: List<Rule>): List<String> = buildList {
     if (rules.any { r -> r.tests.any { it.field == Field.BODY } }) add("body")
 }
 
-/** The rule as metadata. A rule read from JSON is written back as it arrived. */
-private fun metaOf(rule: Rule): JsonObject = rule.raw ?: buildJsonObject {
+/**
+ * The rule as metadata.
+ *
+ * A rule this build does not fully understand is written back byte for byte, because
+ * rebuilding it from a model that dropped a condition is how a filter silently changes
+ * meaning. One it does understand is rebuilt, and the JSON it arrived as is laid
+ * underneath rather than instead: an edit has to reach the file, and a key another client
+ * wrote and this one does not show has to survive us saving.
+ */
+internal fun metaOf(rule: Rule): JsonObject {
+    if (!rule.understood) return rule.raw ?: JsonObject(emptyMap())
+    return JsonObject(rule.raw.orEmpty() + built(rule))
+}
+
+private fun built(rule: Rule): JsonObject = buildJsonObject {
     put("id", rule.id)
     put("name", rule.name)
     put("enabled", rule.enabled)
+    put("global", rule.global)
     put("matchType", if (rule.all) "all" else "any")
     put(
         "conditions",

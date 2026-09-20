@@ -65,7 +65,9 @@ that lives in `roadmap.md` under the matching section number.
 - **2.1 Rich-text composer.** Have. Markers in the buffer, real HTML on send.
 - **2.2 Filters and rules.** Have. Bulwark's own JSON-in-a-comment format, read and
   written, so neither client destroys the other's rules. Anything a builder did not write
-  is kept verbatim.
+  is kept verbatim. Rules are kept per account or for every account at once; the set kept
+  for all of them is compiled into each account's own script and saved to that account's
+  server, so it runs at delivery like any other rule rather than needing Rampart open.
 - **2.3 IMAP alongside JMAP.** Have. Reading, writing, sending, folders, attachments,
   search, conversations through THREAD, and IDLE for push. Discovery from the address.
   OAuth2 is deliberately not being done, so Gmail and Microsoft are out until somebody

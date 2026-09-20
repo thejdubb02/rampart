@@ -564,6 +564,19 @@ private val SAMPLE_FILTERS = Script(
     tail = "# Delivery probes, managed outside any builder.\nif address :matches \"to\" \"zz-canary@*\" { discard; stop; }",
 )
 
+/** The set kept for every account, which an account's own screen shows above its own. */
+private val SAMPLE_GLOBALS = GlobalFilters(
+    listOf(
+        Rule(
+            id = "g1",
+            name = "Receipts",
+            tests = listOf(Test(Field.SUBJECT, Match.CONTAINS, "receipt")),
+            acts = listOf(Act.FileInto("Receipts")),
+            global = true,
+        ),
+    ),
+)
+
 private val MESSAGES = listOf(
     Summary("a", "Stalwart", "stalwart@example.org", "Your certificate renews in 7 days", "2026-09-16T09:12:00Z",
         "The certificate for mail.example.org will be renewed automatically on 23 September.", false),
@@ -657,6 +670,12 @@ private fun SettingsScreen(page: String) {
         filtersSupported = true,
         filtersSaving = false,
         filtersError = null,
+        // One account, with a rule it inherits above its own, which is the case that has
+        // two kinds of row on the screen at once.
+        filterAccount = "work",
+        onFilterAccount = {},
+        globalFilters = SAMPLE_GLOBALS,
+        onGlobalFilters = {},
         onFilters = {},
         onRestart = {},
             onClose = {},

@@ -797,6 +797,9 @@ private fun Reader(
     var filtersSaving by remember { mutableStateOf(false) }
     var filtersSupported by remember { mutableStateOf(true) }
     var filtersError by remember { mutableStateOf<String?>(null) }
+    // Which account's filters are on the screen, or null for the set kept for all of them.
+    var filterAccount by remember { mutableStateOf<String?>(null) }
+    var globalFilters by remember { mutableStateOf(Filters.read()) }
     // Who you write to, per account, read once and kept up to date as mail goes past.
     var books by remember { mutableStateOf<Map<String, List<Person>>>(emptyMap()) }
     // A folder operation waiting on a name, or on a yes.
@@ -1829,19 +1832,23 @@ private fun Reader(
             filters = Script(emptyList())
             return
         }
-        val all = quietly { jmap.sieveScripts() }.orEmpty()
-        val chosen = all.firstOrNull { it.active } ?: all.firstOrNull { it.name == "rampart" } ?: all.firstOrNull()
+        val chosen = theOneRunning(quietly { jmap.sieveScripts() }.orEmpty())
         filterScript = chosen
-        filters = if (chosen == null) Script(emptyList()) else scriptOf(quietly { jmap.sieveText(chosen) }.orEmpty())
+        val script = if (chosen == null) Script(emptyList()) else scriptOf(quietly { jmap.sieveText(chosen) }.orEmpty())
+        filters = script
+        // A machine that has never had the global set takes what the server is already
+        // running as the set, rather than showing nothing and then deleting it.
+        Filters.adopt(script)
+        globalFilters = Filters.read()
     }
 
     /*
      * Read when the settings pane opens, and only then. Two calls and a blob download is
      * not worth doing on every start for a screen most people open rarely.
      */
-    LaunchedEffect(settingsOpen, settingsAccount()) {
-        val key = settingsAccount()
-        if (!settingsOpen || key == null) return@LaunchedEffect
+    LaunchedEffect(settingsOpen, filterAccount) {
+        val key = filterAccount ?: return@LaunchedEffect
+        if (!settingsOpen) return@LaunchedEffect
         filters = null
         runCatching { loadFilters(key) }
             .onFailure { filtersError = it.message ?: "The filters could not be read." }
@@ -1863,6 +1870,38 @@ private fun Reader(
             // Re-read rather than trust: the server rewrites nothing, but an activation
             // that half worked should show as what is actually there.
             if (filtersError == null) loadFilters(key)
+        }
+    }
+
+    /*
+     * Saves the set kept for every account, and puts it on every account's server.
+     *
+     * Written here first and pushed after, so the record of what the set is survives an
+     * account being offline. Every account is visited even when the set was only switched
+     * off for one of them: turning it off has to remove the rules that were pushed last
+     * time, and a screen switch that changes nothing on the server would be a lie.
+     *
+     * An account that refuses is named rather than swallowed, and the others still get it.
+     * Failing them all because one server was down is the worse outcome.
+     */
+    fun saveGlobalFilters(next: GlobalFilters) {
+        globalFilters = next
+        Filters.write(next)
+        filtersSaving = true
+        val open = sessions.toList()
+        scope.launch {
+            val refused = withContext(Dispatchers.IO) {
+                open.filter { runCatching { pushGlobals(it.jmap, next.forAccount(it.key)) }.getOrDefault(false).not() }
+            }
+            filtersSaving = false
+            filtersError = if (refused.isEmpty()) {
+                null
+            } else {
+                "Saved here, but not on " + refused.joinToString(", ") { it.account.email } +
+                    ". That server either does not keep rules or has a filter script Rampart did not write."
+            }
+            // What is on the screen for one account has just changed underneath it.
+            filterAccount?.let { runCatching { loadFilters(it) } }
         }
     }
 
@@ -2595,7 +2634,11 @@ private fun Reader(
                     filtersSupported = filtersSupported,
                     filtersSaving = filtersSaving,
                     filtersError = filtersError,
-                    onFilters = { next -> settingsAccount()?.let { saveFilters(it, next) } },
+                    filterAccount = filterAccount,
+                    onFilterAccount = { filterAccount = it },
+                    globalFilters = globalFilters,
+                    onGlobalFilters = { saveGlobalFilters(it) },
+                    onFilters = { next -> filterAccount?.let { saveFilters(it, next) } },
                     onClose = { settingsOpen = false },
                 )
                 return@Row
