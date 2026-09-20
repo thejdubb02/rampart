@@ -9,6 +9,14 @@ same format so neither client destroys the other's rules. `Sieve.kt` has the det
 including the two things it will not do: it never rebuilds a rule it does not fully
 understand, and it never touches part of a script that no builder wrote.
 
+## Describing one in words
+
+With the assistant on, a rule can be typed as a sentence and built from it. The model never
+writes Sieve: it fills in the rule model, that is parsed exactly as a rule read off the
+server is parsed, and the script comes out of the same compiler. Anything it produces that
+this build would not have accepted from a person is refused with a sentence rather than
+approximated. Nothing is saved until it has been shown. See `docs/assistant.md` section 1.
+
 ## Two places a rule can live
 
 **Per account.** The account's own script, on its own server. This is the ordinary case.

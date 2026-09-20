@@ -27,6 +27,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
@@ -60,6 +65,16 @@ internal fun FiltersPage(
 ) {
     Section("Filters", "Rules run on the server, so they work with Rampart closed.")
     Where(accounts, chosen, onChoose)
+    Spacer(Modifier.height(6.dp))
+    // Which set is being edited, said in a sentence. The chips alone read as a filter on
+    // the list rather than as a choice of where a new rule would go.
+    Note(
+        if (chosen == null) {
+            "Rules kept for every account. Each server gets its own copy."
+        } else {
+            "Rules kept only on " + (accounts.firstOrNull { it.key == chosen }?.email ?: "this account") + "."
+        },
+    )
     Spacer(Modifier.height(14.dp))
 
     if (chosen == null) {
@@ -229,6 +244,9 @@ private fun RuleList(
 ) {
     var editing by remember(rules, inherited) { mutableStateOf<Rule?>(null) }
 
+    DescribeRule(folders) { made -> onChange(rules + made) }
+    Spacer(Modifier.height(14.dp))
+
     inherited.forEach { rule ->
         RuleRow(rule = rule, mine = false, onToggle = {}, onEdit = {}, onDelete = {})
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -278,6 +296,151 @@ private fun RuleList(
                     else rules + edited,
                 )
             },
+        )
+    }
+}
+
+/**
+ * A filter said in a sentence, built into a rule.
+ *
+ * The first thing the assistant is for, and the shape every later one should copy: the
+ * model proposes, nothing is saved without being read, and what it produces is an ordinary
+ * Sieve rule that keeps working with the model switched off forever. See [ruleOfAnswer]
+ * for why it cannot produce anything this build would not have accepted from a person.
+ */
+@Composable
+private fun DescribeRule(folders: List<String>, onMade: (Rule) -> Unit) {
+    val config = remember { Assistant.config() }
+    if (config.mode == AssistantMode.OFF) {
+        Note("Rules can be described in words. Turn the assistant on in Settings to do that.")
+        return
+    }
+
+    val scope = rememberCoroutineScope()
+    var words by remember { mutableStateOf("") }
+    var thinking by remember { mutableStateOf(false) }
+    var trouble by remember { mutableStateOf<String?>(null) }
+    var draft by remember { mutableStateOf<Rule?>(null) }
+    // The exact packet, held while it is being shown. Being asked the first time is not a
+    // dialog about a feature, it is this text, before it goes anywhere.
+    var asking by remember { mutableStateOf<String?>(null) }
+
+    fun send(packet: String) {
+        thinking = true
+        trouble = null
+        scope.launch {
+            val outcome = runCatching {
+                withContext(Dispatchers.IO) {
+                    val key = Secrets.loadNamed(Assistant.KEY)
+                    val reply = Llm.ask(config, key, packet)
+                    Assistant.record(Assistant.FILTER, reply.tokensIn, reply.tokensOut, config)
+                    reply
+                }
+            }
+            thinking = false
+            outcome.fold(
+                onSuccess = { reply ->
+                    ruleOfAnswer(reply.text, folders).fold(
+                        onSuccess = { draft = it },
+                        onFailure = { trouble = it.message },
+                    )
+                },
+                onFailure = { trouble = it.message ?: "The model could not be reached." },
+            )
+        }
+    }
+
+    fun make() {
+        if (words.isBlank()) return
+        Assistant.whyNot(Assistant.FILTER, config)?.let {
+            trouble = it
+            return
+        }
+        val packet = rulePacket(config, words, folders)
+        // Agreed once, on this install, by reading what actually goes. After that it is a
+        // decision somebody made and can see in Settings, not one to interrupt them for.
+        if (Assistant.agreed(Assistant.FILTER)) send(packet) else asking = packet
+    }
+
+    OutlinedTextField(
+        value = words,
+        onValueChange = { words = it },
+        label = { Text("Describe a filter") },
+        placeholder = { Text("If I get a DMARC report, mark it read and delete it") },
+        enabled = !thinking,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Spacer(Modifier.height(6.dp))
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+    ) {
+        Button(onClick = { make() }, enabled = !thinking && words.isNotBlank()) { Text("Make a rule") }
+        if (thinking) Spinner(Modifier.height(18.dp))
+        trouble?.let {
+            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+
+    /*
+     * Shown, never saved on its own. A rule that deletes mail is not a thing to find out
+     * about afterwards, and the sentence under it is the same one the list uses, so what is
+     * agreed to here is what appears there.
+     */
+    draft?.let { rule ->
+        Spacer(Modifier.height(10.dp))
+        Surface(
+            shape = MaterialTheme.shapes.medium,
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
+                Text(rule.name, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    summarise(rule),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = { draft = null }) { Text("Discard") }
+                    TextButton(
+                        onClick = {
+                            draft = null
+                            words = ""
+                            onMade(rule)
+                        },
+                    ) { Text("Add it") }
+                }
+            }
+        }
+    }
+
+    asking?.let { packet ->
+        AlertDialog(
+            onDismissRequest = { asking = null },
+            title = { Text("This is what would be sent") },
+            text = {
+                Column {
+                    Text(
+                        "What you typed and the names of your folders. No mail, no addresses, " +
+                            "and nothing else from this machine.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    RawScript(packet)
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        Assistant.agree(Assistant.FILTER)
+                        asking = null
+                        send(packet)
+                    },
+                ) { Text("Send it") }
+            },
+            dismissButton = { TextButton(onClick = { asking = null }) { Text("Cancel") } },
         )
     }
 }

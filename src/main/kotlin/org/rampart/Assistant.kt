@@ -77,6 +77,15 @@ object Assistant {
     /** The features that can be agreed to separately. Used as ledger and consent keys. */
     const val SUMMARISE = "summarise"
 
+    /**
+     * Describing a filter in words and having the rule built from it.
+     *
+     * Its own agreement, because what leaves the machine is not what leaves for a summary.
+     * This sends one sentence somebody typed and a list of folder names. A summary sends
+     * the mail.
+     */
+    const val FILTER = "filter"
+
     /** Settings as saved, or the defaults, which are off. */
     fun config(): AssistantConfig {
         val saved = read()
