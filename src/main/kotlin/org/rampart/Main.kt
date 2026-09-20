@@ -5514,7 +5514,26 @@ internal fun Message(
                         onScroll = { dy -> bodyScope.launch { bodyScroll.scrollBy(dy) } },
                         onBlank = { engineBlank = true },
                     )
-                    else HtmlBody(rendered, carried, emptyMap())
+                    else {
+                        /*
+                         * Never silently.
+                         *
+                         * A message shown plainly because the engine would not draw it
+                         * looks like a message the sender wrote plainly, and the difference
+                         * matters when somebody is deciding whether to trust what they are
+                         * reading. It also stops the next report of this being "it looks
+                         * wrong" with nothing to go on.
+                         */
+                        if (engineBlank) {
+                            Text(
+                                "This message would not draw, so it is shown as plain text.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline,
+                            )
+                            Spacer(Modifier.height(10.dp))
+                        }
+                        HtmlBody(rendered, carried, emptyMap())
+                    }
                     }
 
                     // Only the ones the body did not already put on screen, which is the ones

@@ -109,21 +109,27 @@ internal fun WebBody(
         }
     }
     /*
-     * If nothing ever answers, show the message anyway.
+     * If nothing ever answers, hand the message back rather than showing a box.
      *
-     * Every version of this fault has ended the same way: a panel left at the height it
-     * started with, which is a blank strip where the mail should be, with nothing on
-     * screen or in a log saying so. The measuring is worth doing because a message sized
-     * to its content scrolls with the rest of the pane instead of inside a box. It is not
-     * worth a blank message when it fails.
+     * **This is what "still white in the latest version" turned out to be.** The panel
+     * that never heard a height was given a fixed one and left to scroll itself, on the
+     * theory that the page was fine and only the measuring had failed. When the page is
+     * not fine, that theory produces exactly what was reported: an empty rectangle of a
+     * fixed size where the mail should be, with nothing on screen saying anything is
+     * wrong. The measurement not arriving is not a layout problem to work around; on a
+     * page that loaded it always arrives, so its absence is the engine telling us it is
+     * not drawing.
      *
-     * So after three seconds of no answer the panel takes the whole pane and the page
-     * scrolls itself, which is what webmail does and is always readable. Nothing here
-     * needs to know why the measuring did not work.
+     * So the message goes to the block renderer instead, which needs no engine and always
+     * draws something. Plainer than the real thing and readable, which beats a rectangle.
+     *
+     * Six seconds rather than three: the other check, [drewNothing], already catches a
+     * page that loaded with nothing in it at three, and this one is the last word on a
+     * slow machine rather than a race with it.
      */
     LaunchedEffect(document) {
-        delay(3_000)
-        if (!measured) height = UNMEASURED
+        delay(6_000)
+        if (!measured) onBlank()
     }
     bridge.onScroll = onScroll
     bridge.onBlank = onBlank
@@ -436,15 +442,6 @@ class WebBridge {
  * being drawn. Well over nine tenths of messages are shorter than this and never notice.
  */
 private const val TALLEST = 3_000
-
-/**
- * The panel a message gets when it never said how tall it was.
- *
- * Tall enough to be a message rather than a strip, short enough to sit inside any window
- * somebody has actually opened. The page scrolls itself at this size, so nothing is lost,
- * it is only read in a box rather than in the pane.
- */
-private const val UNMEASURED = 720
 
 private val WIRING = """
 (function () {
