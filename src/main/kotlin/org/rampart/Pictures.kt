@@ -68,12 +68,15 @@ internal fun drawable(type: String, bytes: ByteArray): Pair<String, ByteArray> {
  * those sit inside words.
  */
 internal fun withoutTofu(html: String): String =
-    html.replace(' ', ' ')   // narrow no-break space
-        .replace(' ', ' ')   // figure space
-        .replace(' ', ' ')   // punctuation space
-        .replace(' ', ' ')   // thin space
-        .replace(' ', ' ')   // hair space
-        .replace("​", "")    // zero-width space
-        .replace("‌", "")    // zero-width non-joiner
-        .replace("‍", "")    // zero-width joiner
-        .replace("﻿", "")    // byte order mark, arriving as a character
+    html.replace(INVISIBLE_SPACE, " ").replace(NOTHING_AT_ALL, "")
+
+/** Figure, punctuation, thin and hair spaces, and the narrow no-break space. */
+private val INVISIBLE_SPACE = Regex("[\u2007-\u200A\u202F]")
+
+/**
+ * The zero-width ones, and a byte order mark that arrived as a character.
+ *
+ * Nothing rather than a space: these sit inside words, so replacing them would break the
+ * word in half instead of joining it back up.
+ */
+private val NOTHING_AT_ALL = Regex("[\u200B-\u200D\uFEFF]")
