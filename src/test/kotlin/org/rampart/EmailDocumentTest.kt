@@ -303,4 +303,28 @@ class EmailDocumentTest {
         assertEquals(null, cidKey("  <>  "))
         assertEquals(null, cidKey(null))
     }
+
+    /**
+     * A highlight in a quoted signature is not a design decision about the page. It used to
+     * be: any coloured element six hundred pixels wide counted, so a forwarded thread with
+     * one yellow phrase in it was drawn on white in a dark window while a webmail client
+     * showed it dark like every other reply.
+     */
+    @Test
+    fun `a coloured corner of a message is not a design`() {
+        val html = """
+            <body><p>${"a real reply, several sentences long. ".repeat(30)}</p>
+            <table width="600"><tr><td style="background:#E6DF6C">Made in America</td></tr></table></body>
+        """.trimIndent()
+
+        assertTrue(page(html).document.contains("word-break: break-word"), "it was treated as designed")
+    }
+
+    @Test
+    fun `a wrapper that carries the whole message still is`() {
+        val html = """<body><table width="600" bgcolor="#123456"><tr><td>
+            ${"the entire newsletter lives in here. ".repeat(30)}</td></tr></table></body>"""
+
+        assertFalse(page(html).document.contains("word-break: break-word"), "a real design was overridden")
+    }
 }

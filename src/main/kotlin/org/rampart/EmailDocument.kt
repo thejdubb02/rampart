@@ -46,7 +46,7 @@ internal fun emailDocument(
      */
     dark: Boolean = false,
 ): EmailPage {
-    val source = Jsoup.parse(html)
+    val source = Jsoup.parse(withoutTofu(html))
     val clean = Cleaner(EMAIL_SAFELIST).clean(source)
     clean.outputSettings().prettyPrint(false)
     val held = resolveImages(clean, carried, remoteImages)
@@ -410,7 +410,20 @@ private fun paintsItself(document: Document, css: String): Boolean {
     // `body{background:...}` in the message's own stylesheet, which bodyRule() has already
     // copied across by this point but which may also have arrived in a rule of its own.
     if (BODY_BACKGROUND.containsMatchIn(css)) return true
-    return document.body().select("table, div, center, td").any { spansTheWidth(it) && colouredBackground(it) }
+    /*
+     * And it has to be most of the message, not a corner of it.
+     *
+     * Width alone was not enough. A quoted signature at the bottom of a forwarded thread
+     * puts a yellow highlight in a six-hundred-pixel table cell, which is wide enough to
+     * pass and is a highlight rather than a page. The whole message was then treated as
+     * designed and drawn on white in a dark window, where a webmail client shows it dark
+     * like every other reply. Holding at least half the text is what tells the wrapper
+     * that carries a newsletter apart from a cell that carries three words.
+     */
+    val whole = document.body().text().length
+    return document.body().select("table, div, center, td").any {
+        spansTheWidth(it) && colouredBackground(it) && it.text().length * 2 >= whole
+    }
 }
 
 /** A background colour that is not white and not transparent. */

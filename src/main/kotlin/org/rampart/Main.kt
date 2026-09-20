@@ -4415,7 +4415,12 @@ internal fun Message(
     val carriedData = remember(attachments, imageBytes) {
         attachments.mapNotNull { part ->
             val cid = cidKey(part.cid) ?: return@mapNotNull null
-            imageBytes[part.blobId]?.let { cid to dataUri(part.type, it) }
+            imageBytes[part.blobId]?.let { raw ->
+                // Written out again in a format the engine will draw. See [drawable]: the
+                // one that broke this was a CMYK JPEG, which lays out and paints nothing.
+                val (type, bytes) = drawable(part.type, raw)
+                cid to dataUri(type, bytes)
+            }
         }.toMap()
     }
     /*
