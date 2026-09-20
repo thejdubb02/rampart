@@ -840,6 +840,8 @@ private fun Reader(
     var body by remember { mutableStateOf<Body?>(null) }
     var attachments by remember { mutableStateOf<List<Attachment>>(emptyList()) }
     var thread by remember { mutableStateOf<List<Summary>>(emptyList()) }
+    /** Whether the open conversation is muted. Read off disk when the message changes. */
+    var conversationMuted by remember { mutableStateOf(false) }
     var bodyError by remember { mutableStateOf<String?>(null) }
     var inlineImages by remember { mutableStateOf<Map<String, ImageBitmap>>(emptyMap()) }
     // The same parts undecoded, for the engine, which wants the bytes rather than a bitmap.
@@ -1166,6 +1168,25 @@ private fun Reader(
      * A round that fails is skipped, not reported. The network dropping for a minute is not
      * something to put a red bar on screen for, and the next round fixes it.
      */
+    /**
+     * Marks arrivals in a muted conversation read and files them, without a word.
+     *
+     * Not through the ordinary move: that one reports failures and leaves an undo, and
+     * neither belongs to something nobody asked for at the moment it happens. Archive is
+     * where they go, never Trash. Mute means stop bothering me, not throw it away.
+     */
+    suspend fun hush(key: String, ids: List<String>) {
+        withContext(Dispatchers.IO) {
+            runCatching { session(key).jmap.setKeyword(ids, "\$seen", true) }
+            folderFor("archive", mailboxes[key].orEmpty())?.id?.let { into ->
+                runCatching { session(key).jmap.move(ids, into) }
+                runCatching { session(key).store?.forget(ids) }
+            }
+        }
+        val gone = ids.toSet()
+        emails = emails.filterNot { it.id in gone }
+    }
+
     val pushes = remember { Channel<Unit>(Channel.CONFLATED) }
     LaunchedEffect(sessions) {
         val states = mutableMapOf<String, String>()
@@ -1191,7 +1212,19 @@ private fun Reader(
                 // Anything this account changed can be in the folder on screen, not only in
                 // its inbox: mail read or filed in another client moves the open folder too.
                 if ((here?.first == open.key || unified()) && !showingResults) reload()
-                if (notifyOnArrival) arrivalText(found.fresh)?.let { (title, body) -> notify(title, body) }
+                /*
+                 * A muted conversation is quietened here, on the way in.
+                 *
+                 * This is the only place it can happen: nothing on the server knows what a
+                 * thread is the way this does, so a mute applies when Rampart next sees the
+                 * message rather than at delivery. Quietly, and never reported: a failed
+                 * hush is the message staying in the inbox, which is the state it was
+                 * already in.
+                 */
+                val hushed = found.fresh.filter { Muted.muted(open.key, it.threadId) }
+                if (hushed.isNotEmpty()) hush(open.key, hushed.map { it.id })
+                val announce = found.fresh.filterNot { it in hushed }
+                if (notifyOnArrival) arrivalText(announce)?.let { (title, body) -> notify(title, body) }
             }
             // Until every account has been looked at once there is nothing to compare
             // against, so those first rounds come quickly rather than half a minute apart.
@@ -1453,6 +1486,9 @@ private fun Reader(
          * out blank. The answer needs nothing but the address, which is already here.
          */
         showRemote = imageSenderKey(message.fromEmail) in allowedSenders
+        // Read here rather than during composition: it comes off disk, and a file read on
+        // every recomposition of the reading pane is a file read on every keystroke.
+        conversationMuted = Muted.muted(key, message.threadId)
         unsubscribed = null
         source = null
         attachments = emptyList()
@@ -1783,17 +1819,79 @@ private fun Reader(
     }
 
     /** Read or unread, from a row, without having to open the message to do it. */
-    fun markRead(message: Summary, read: Boolean) {
-        val key = accountOf(message) ?: return
-        emails = emails.map { if (it.id == message.id) it.copy(seen = read) else it }
-        if (selected?.id == message.id) selected = selected?.copy(seen = read)
+    /**
+     * Read or unread, for one message or for a whole conversation.
+     *
+     * The list, the conversation around the open message and the open message itself all
+     * move first and the server is told after, because the alternative is a row that stays
+     * bold for as long as the round trip takes.
+     */
+    fun setSeen(key: String, ids: Set<String>, read: Boolean) {
+        if (ids.isEmpty()) return
+        emails = emails.map { if (it.id in ids) it.copy(seen = read) else it }
+        thread = thread.map { if (it.id in ids) it.copy(seen = read) else it }
+        if (selected?.id in ids) selected = selected?.copy(seen = read)
         scope.launch {
-            io { session(key).jmap.setKeyword(listOf(message.id), "\$seen", read) }
+            io { session(key).jmap.setKeyword(ids.toList(), "\$seen", read) }
             // The copy on disk learns it too. Without this a reload served from the local
             // store shows the row unread again for the moment before the server answers,
             // which is the same flash by a different route.
             here?.second?.id?.let { box -> io { session(key).store?.put(box, emails) } }
         }
+    }
+
+    fun markRead(message: Summary, read: Boolean) {
+        accountOf(message)?.let { setSeen(it, setOf(message.id), read) }
+    }
+
+    /*
+     * The same three acts, done to a whole conversation.
+     *
+     * Kept apart from the single-message versions rather than folded into them, because
+     * what they leave behind is different: one message archived leaves the rest of the
+     * thread in the inbox, and the undo for the conversation has to put twelve back. See
+     * [conversationIds] for the two kinds of message they will not touch.
+     */
+    fun conversationOf(message: Summary): List<String> =
+        conversationIds(thread, identities[accountOf(message)].orEmpty().map { it.email }.toSet())
+
+    fun readConversation(message: Summary, read: Boolean) {
+        accountOf(message)?.let { setSeen(it, conversationOf(message).toSet(), read) }
+    }
+
+    fun fileConversation(message: Summary, role: String, verb: String) {
+        val key = accountOf(message) ?: return
+        val target = folderFor(role, mailboxes[key].orEmpty())?.id ?: return
+        val ids = conversationOf(message)
+        if (ids.isEmpty()) return
+        val from = sourceFolder(key)
+        scope.launch {
+            sayJunk(key, ids, from, target)
+            if (io { session(key).jmap.move(ids, target) } == null) return@launch
+            io { session(key).store?.forget(ids) }
+            val gone = ids.toSet()
+            emails = emails.filterNot { it.id in gone }
+            selected = null
+            body = null
+            thread = emptyList()
+            // Twelve messages filed by one click is exactly the act that has to be
+            // reversible, and a move is only ever undone by a move the other way.
+            undo = from?.let { Undoable(listOf(Move(key, ids, it)), verb) }
+        }
+    }
+
+    /**
+     * Mute: archive what is there and quieten what comes next.
+     *
+     * Both halves, because either on its own is half a feature. Archiving without
+     * remembering is the same conversation back in the inbox in ten minutes, and
+     * remembering without archiving leaves the pile that prompted it.
+     */
+    fun muteConversation(message: Summary, on: Boolean) {
+        val key = accountOf(message) ?: return
+        Muted.set(key, message.threadId, on)
+        conversationMuted = on
+        if (on) fileConversation(message, "archive", "Muted")
     }
 
     /*
@@ -2011,6 +2109,18 @@ private fun Reader(
             // Everything except where it already is, and except the three that have a
             // button of their own: offering Archive twice is how a menu stops being read.
             folders = boxes.filter { it.id != here?.second?.id && it.role !in MOVE_COVERED },
+            // Only where there is a conversation to act on. One message is not one.
+            conversation = thread.takeIf { it.size > 1 }?.let { all ->
+                ConversationActions(
+                    count = all.size,
+                    unread = all.count { !it.seen },
+                    muted = conversationMuted,
+                    onRead = { read -> readConversation(message, read) },
+                    onArchive = { fileConversation(message, "archive", "Archived") },
+                    onTrash = { fileConversation(message, "trash", "Deleted") },
+                    onMute = { on -> muteConversation(message, on) },
+                )
+            },
         )
     }
 
@@ -4431,6 +4541,25 @@ internal data class MessageActions(
     val moveInto: ((String) -> Unit)? = null,
     /** The folders that move can offer, already in the order the sidebar shows them. */
     val folders: List<Mailbox> = emptyList(),
+    /**
+     * The whole conversation, as one act.
+     *
+     * Separate from the buttons above, which are all about the one message on screen. A
+     * thread is what people think in and the list already collapses one into a single row,
+     * so a row standing for twelve messages that archives one of them is the row lying.
+     */
+    val conversation: ConversationActions? = null,
+)
+
+/** What can be done to a conversation. Null where the open message is not in one. */
+internal data class ConversationActions(
+    val count: Int,
+    val unread: Int,
+    val muted: Boolean,
+    val onRead: (Boolean) -> Unit,
+    val onArchive: () -> Unit,
+    val onTrash: () -> Unit,
+    val onMute: (Boolean) -> Unit,
 )
 
 @Composable
@@ -4866,6 +4995,8 @@ internal fun Message(
                             modifier = Modifier.padding(bottom = 12.dp),
                         )
                     }
+
+                    actions.conversation?.let { ConversationBar(it) }
 
                     // The rest of the conversation sits around this message in date order,
                     // one line each. Reading the thread is then scrolling, not going back
@@ -5336,6 +5467,74 @@ internal fun String.asFullLocalTime(): String = runCatching {
  * One message in a conversation that is not the one being read: who, when, and the first
  * line of it. Clicking it opens that message where this one is.
  */
+/**
+ * One line above a conversation: how big it is, and one menu for acting on all of it.
+ *
+ * A menu rather than four more buttons. The row of message buttons already runs to nine
+ * and off the edge of a narrow pane, and these are not the same kind of act: pressing
+ * Archive up there means this message, and pressing it in here means the twelve.
+ */
+@Composable
+private fun ConversationBar(actions: ConversationActions) {
+    var open by remember { mutableStateOf(false) }
+    Row(
+        Modifier.fillMaxWidth().padding(bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "${actions.count} messages" +
+                if (actions.unread > 0) ", ${actions.unread} unread" else "",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline,
+        )
+        if (actions.muted) {
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "Muted",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.clip(MaterialTheme.shapes.small)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(horizontal = 7.dp, vertical = 2.dp),
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        Box {
+            TextButton(onClick = { open = true }) { Text("Whole conversation") }
+            DropdownMenu(open, onDismissRequest = { open = false }) {
+                DropdownMenuItem(
+                    text = { Text(if (actions.unread > 0) "Mark all read" else "Mark all unread") },
+                    onClick = { open = false; actions.onRead(actions.unread > 0) },
+                )
+                DropdownMenuItem(
+                    text = { Text("Archive all") },
+                    onClick = { open = false; actions.onArchive() },
+                )
+                DropdownMenuItem(
+                    text = { Text("Delete all") },
+                    onClick = { open = false; actions.onTrash() },
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                DropdownMenuItem(
+                    text = { Text(if (actions.muted) "Stop muting it" else "Mute it") },
+                    onClick = { open = false; actions.onMute(!actions.muted) },
+                )
+            }
+        }
+    }
+    if (actions.muted) {
+        // Said plainly, because it is the one promise here the server cannot keep on its
+        // own and somebody would otherwise read a silent hour as the mute not working.
+        Text(
+            "New messages in this conversation are marked read and archived while Rampart " +
+                "is running.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline,
+            modifier = Modifier.padding(bottom = 10.dp),
+        )
+    }
+}
+
 @Composable
 private fun ThreadRow(message: Summary, onClick: () -> Unit) {
     Row(

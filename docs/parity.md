@@ -24,7 +24,9 @@ Worth stating plainly, because the list below is long and it is easy to read it 
 "nothing works yet".
 
 Read, compose, reply, reply-all and forward, answering as the address the message was
-sent to. Threaded conversations. A unified inbox across accounts. Drafts that save
+sent to. Threaded conversations, with the whole conversation markable, archivable,
+deletable and mutable as one thing, and a mute that quietens what arrives in it later. A
+unified inbox across accounts. Drafts that save
 themselves. Attachments up and down, with the pictures a message carries drawn where the
 sender put them. Multi-select with batch archive, delete, spam, not-spam and mark-read,
 all undoable, and single messages undoable too. Starring. Tags as JMAP keywords, so they
