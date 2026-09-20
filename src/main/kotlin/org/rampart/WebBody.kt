@@ -163,7 +163,7 @@ internal fun WebBody(
                         fresh.engine.executeScript(WIRING)
                     }
                 }
-                val zoom = zoomFor(density, scale)
+                val zoom = zoomFor(density, scale, panelScale(panel))
                 view.zoom = zoom
                 view.engine.load(asUrl(document))
                 ticker.getAndSet(measure(view, zoom, { bridge.onHeight(it) }, { bridge.onBlank() }))?.stop()
@@ -199,7 +199,11 @@ internal fun WebBody(
  */
 private fun measure(view: WebView, zoom: Double, report: (Int) -> Unit, blank: () -> Unit): javafx.animation.Timeline {
     val timeline = javafx.animation.Timeline()
-    timeline.cycleCount = 24
+    // Fifteen seconds rather than six. A picture fetched from the sender's own server, which
+    // is what agreeing to remote pictures means, can decode long after the document loads,
+    // and a measurement that stopped before it did left the message in a panel too short for
+    // it with the rest scrolling inside a box.
+    timeline.cycleCount = 60
     var ticks = 0
     val tick = javafx.event.EventHandler<javafx.event.ActionEvent> {
         ticks++
@@ -244,6 +248,20 @@ private fun drewNothing(view: WebView): Boolean = runCatching {
  */
 internal fun zoomFor(density: Float, scale: Float, engineScale: Float = javafxScale()): Double =
     (density / engineScale.coerceAtLeast(0.1f) * scale).coerceIn(0.5f, 3f).toDouble()
+
+/**
+ * What this panel's own screen is drawing at, or 1 where it cannot say.
+ *
+ * **Asked of the panel rather than of the primary screen**, which is the same number only
+ * on a machine with one monitor. With a laptop at 150% and a monitor beside it at 100%, the
+ * message on whichever of them is not the primary was laid out at the other one's scale:
+ * two thirds the size of the interface around it, or half as large again, and either way
+ * the layout it was designed for. Java knows which screen a component is on and what that
+ * screen's transform is, so nothing here has to guess.
+ */
+private fun panelScale(panel: JFXPanel): Float = runCatching {
+    panel.graphicsConfiguration?.defaultTransform?.scaleX?.toFloat()
+}.getOrNull()?.takeIf { it > 0f } ?: javafxScale()
 
 /** What JavaFX is drawing at, or 1 where it cannot say, which is every headless run. */
 private fun javafxScale(): Float =
@@ -336,12 +354,18 @@ private fun unpack(document: String, beside: java.nio.file.Path): String {
 }
 
 /**
- * Big enough to be worth a file of its own.
+ * Anything bigger than a placeholder becomes a file.
  *
- * Well under where the ceiling has been seen, because the point is not to find the edge.
+ * **The threshold used to be a hundred thousand characters, which was an attempt to sit
+ * just under a ceiling nobody has documented.** The only size anybody has measured is the
+ * one that failed, so a threshold picked from it is a guess, and the cost of guessing low
+ * is a few small files in a temporary directory while the cost of guessing high is a blank
+ * rectangle where a picture should be. Two thousand characters is about fifteen hundred
+ * bytes: big enough to leave the blocked-picture placeholder inline, small enough that no
+ * real picture is ever handed over as text again.
  */
 private val INLINE_PICTURE =
-    Regex("""src="data:(image/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=]{100000,})"""")
+    Regex("""src="data:(image/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=]{2000,})"""")
 
 /** What to call the file, so the engine knows what it is holding without being told. */
 private fun extensionFor(type: String): String =

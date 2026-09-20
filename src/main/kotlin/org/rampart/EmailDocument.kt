@@ -150,8 +150,8 @@ private val DANGEROUS_CSS = Regex(
  * draws it", so it left both out of the attachment list as already on screen, and the body
  * never drew them: they were in the message, downloaded, and nowhere to be seen or saved.
  *
- * Matched exactly, the way [resolveImages] matches, so a name that differs in case is
- * listed as a file rather than silently belonging to neither list.
+ * Spelled by [cidKey], the way every other comparison here spells it, so the two lists
+ * cannot disagree about what a part is called.
  */
 internal fun citedCids(html: String?): Set<String> {
     if (html.isNullOrBlank()) return emptySet()
@@ -169,8 +169,22 @@ internal fun citedCids(html: String?): Set<String> {
 private fun cidOf(src: String): String? {
     val trimmed = src.trim()
     if (!trimmed.startsWith("cid:", ignoreCase = true)) return null
-    return trimmed.drop(4).trim().trim('<', '>').ifBlank { null }
+    return trimmed.drop(4).let(::cidKey)
 }
+
+/**
+ * One Content-ID, spelled the one way everything here compares them.
+ *
+ * **Lower case, because a `cid:` URL is case insensitive and a Content-ID header is not
+ * reliably either.** RFC 2392 says so, and Outlook does not care: a message can carry
+ * `Content-ID: <image001.jpg@01DD4818.FA40AB20>` and refer to it as `cid:Image001.jpg@...`
+ * in the body. Compared as written, the part is not found, the picture is deleted from the
+ * message by [resolveImages], and the attachment list has already decided it is drawn in
+ * the body, so it is in neither place. That is a picture the reader will never see and no
+ * message anywhere saying why.
+ */
+internal fun cidKey(raw: String?): String? =
+    raw?.trim()?.trim('<', '>')?.trim()?.lowercase()?.ifBlank { null }
 
 private fun resolveImages(
     document: Document,

@@ -1408,7 +1408,19 @@ private fun Reader(
         inlineBytes = emptyMap()
         invitation = null
         answering = null
-        showRemote = false
+        /*
+         * Decided here, before anything is fetched, and not two dozen lines further down.
+         *
+         * It used to be answered after the body, the attachments, the pictures, the
+         * invitation and the whole thread had come back, which is a second or more on a
+         * cold mailbox. Everything in that window was drawn with the pictures blocked,
+         * including for a sender whose pictures were agreed to months ago, and the message
+         * was then rebuilt from scratch and handed to the engine a second time. So a
+         * sender who had been allowed still opened with holes where the pictures are, and
+         * the load that would have corrected it was one more chance for a message to come
+         * out blank. The answer needs nothing but the address, which is already here.
+         */
+        showRemote = imageSenderKey(message.fromEmail) in allowedSenders
         unsubscribed = null
         source = null
         attachments = emptyList()
@@ -4406,7 +4418,7 @@ internal fun Message(
      */
     val carriedData = remember(attachments, imageBytes) {
         attachments.mapNotNull { part ->
-            val cid = part.cid?.trim()?.trim('<', '>')?.ifBlank { null } ?: return@mapNotNull null
+            val cid = cidKey(part.cid) ?: return@mapNotNull null
             imageBytes[part.blobId]?.let { cid to dataUri(part.type, it) }
         }.toMap()
     }
@@ -4472,7 +4484,7 @@ internal fun Message(
     // two have to be joined up before anything can be drawn in place.
     val carried = remember(attachments, images) {
         attachments.mapNotNull { part ->
-            val cid = part.cid?.trim()?.trim('<', '>')?.ifBlank { null } ?: return@mapNotNull null
+            val cid = cidKey(part.cid) ?: return@mapNotNull null
             images[part.blobId]?.let { cid to it }
         }.toMap()
     }
@@ -5109,7 +5121,7 @@ internal fun Message(
                     // it actually refers to rather than the ones that happen to have a
                     // Content-ID. See [citedCids]: Outlook gives one to every part.
                     val files = attachments
-                        .filter { it.cid?.trim()?.trim('<', '>') !in shown }
+                        .filter { cidKey(it.cid) !in shown }
                         // The card above is the invitation. Listing invite.ics underneath it
                         // offers somebody a file whose entire content is already on screen.
                         .filter { invitation == null || !it.type.equals("text/calendar", ignoreCase = true) }

@@ -66,6 +66,21 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "0.1.$(git rev-list --count HEAD)" deploy/install.ps1 --clobber
 
+      # Conveyor's background mode writes a manifest that only asks Windows to look for a
+      # new version on its own schedule, which is at most once every eight hours. See
+      # deploy/onlaunch.py for what is added and why it is added rather than switching
+      # Conveyor to aggressive.
+      - name: Tell Windows to look every time Rampart starts
+        if: inputs.release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="0.1.$(git rev-list --count HEAD)"
+          gh release download "$TAG" --pattern rampart.appinstaller --clobber
+          python3 deploy/onlaunch.py rampart.appinstaller
+          gh release upload "$TAG" rampart.appinstaller --clobber
+
       - name: Say how to install it
         if: inputs.release
         env:

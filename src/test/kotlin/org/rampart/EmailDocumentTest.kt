@@ -279,4 +279,28 @@ class EmailDocumentTest {
         assertEquals(emptySet(), citedCids(null))
         assertEquals(emptySet(), citedCids("<p>no pictures here</p>"))
     }
+
+    /**
+     * Outlook writes `Content-ID: <image001.jpg@01DD.FA40>` and then refers to it in the
+     * body as `cid:IMAGE001.jpg@01dd.fa40`. Compared as written, the part is not found,
+     * the picture is deleted from the message, and the attachment list has already decided
+     * it is drawn in the body. The reader sees it nowhere.
+     */
+    @Test
+    fun `a Content-ID that differs only in case is the same picture`() {
+        val html = """<img src="cid:IMAGE001.JPG@01DD.FA40">"""
+        val carried = mapOf("image001.jpg@01dd.fa40" to "data:image/png;base64,AAAA")
+
+        val out = emailDocument(html, carried).document
+
+        assertTrue(out.contains("data:image/png;base64,AAAA"), "the carried picture was not found")
+    }
+
+    @Test
+    fun `and the attachment list spells it the same way`() {
+        assertEquals(setOf("logo@example.com"), citedCids("""<img src="cid:LOGO@Example.COM">"""))
+        assertEquals("a@b", cidKey("  <A@B>  "))
+        assertEquals(null, cidKey("  <>  "))
+        assertEquals(null, cidKey(null))
+    }
 }
