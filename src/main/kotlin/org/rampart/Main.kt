@@ -1499,10 +1499,6 @@ private fun Reader(
 
         fetchedThread?.let { thread = it.await().getOrNull() ?: emptyList() }
 
-        // Already answered for this sender, so it is not asked again. The question is
-        // whether to tell them the message was opened, and that was settled the first time.
-        if (imageSenderKey(message.fromEmail) in allowedSenders) showRemote = true
-
         // A draft is not something to read. Clicking one puts it back in the composer,
         // under the id it is already saved at, so carrying on writing replaces that copy
         // instead of leaving the old one behind.

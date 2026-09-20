@@ -246,7 +246,7 @@ private fun drewNothing(view: WebView): Boolean = runCatching {
  * Bounded, because a preference that can make a message unreadable in either direction is
  * a setting somebody can break the application with.
  */
-internal fun zoomFor(density: Float, scale: Float, engineScale: Float = javafxScale()): Double =
+internal fun zoomFor(density: Float, scale: Float, engineScale: Float): Double =
     (density / engineScale.coerceAtLeast(0.1f) * scale).coerceIn(0.5f, 3f).toDouble()
 
 /**
@@ -261,11 +261,7 @@ internal fun zoomFor(density: Float, scale: Float, engineScale: Float = javafxSc
  */
 private fun panelScale(panel: JFXPanel): Float = runCatching {
     panel.graphicsConfiguration?.defaultTransform?.scaleX?.toFloat()
-}.getOrNull()?.takeIf { it > 0f } ?: javafxScale()
-
-/** What JavaFX is drawing at, or 1 where it cannot say, which is every headless run. */
-private fun javafxScale(): Float =
-    runCatching { javafx.stage.Screen.getPrimary().outputScaleX.toFloat() }.getOrDefault(1f)
+}.getOrNull()?.takeIf { it > 0f } ?: 1f
 
 /**
  * The document, as something the engine will take the bytes of.
