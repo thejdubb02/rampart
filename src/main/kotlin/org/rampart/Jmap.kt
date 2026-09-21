@@ -69,6 +69,13 @@ data class Mailbox(
     val unread: Int,
     /** The folder this one sits inside, or null at the top level. */
     val parentId: String? = null,
+    /**
+     * How many messages the folder holds, or 0 when the server did not say.
+     *
+     * Already in the listing that produced [unread]. Kept so a filter can say how many
+     * matched against the folder itself, rather than asking again just to draw a number.
+     */
+    val total: Int = 0,
 )
 
 data class Summary(
@@ -157,6 +164,77 @@ data class Body(
     /** Every Received line, newest first. Only the topmost is ever trusted. */
     val received: List<String> = emptyList(),
 )
+
+/**
+ * The Email/query filter for one folder under [filters].
+ *
+ * Null means the conditions match nothing, and the caller must not send the query: an
+ * empty OR is not a filter the protocol accepts, and leaving the condition off would
+ * match the whole folder instead.
+ *
+ * Unread, starred and attachment are properties of one FilterCondition, and several
+ * properties in one object are already an AND (RFC 8621 4.4.1). That covers those three
+ * with nothing extra.
+ *
+ * Known sender and tagged are not one property. `from` matches a single string, and
+ * `hasKeyword` matches a single keyword. Each is asked as an OR of the values we
+ * actually hold: the addresses in this account's book, and the user keywords already in
+ * the local copy. A FilterOperator is the protocol's own OR, and it is worth building.
+ * The alternative is filtering the page already in hand, which would mean "among the
+ * last hundred" rather than "in this folder", the same mistake the unread toggle was
+ * written to avoid. Falling all the way back to the local copy would also drop
+ * attachment, which only this protocol can answer, so a message with a file and a tag
+ * would depend on which toggle was asked first.
+ *
+ * Tagged cannot be said as "any keyword that is not a protocol one". The OR is the
+ * keywords [tagsOf] would show, which is the same set the sidebar lists. A label that
+ * has never appeared on a fetched message is not in that set yet.
+ *
+ * `from` is a case-insensitive substring, because that is what the RFC defines, not an
+ * exact address. The book is the list, and the book is capped.
+ */
+internal fun emailQueryFilter(
+    mailboxId: String,
+    filters: QuickFilters,
+    knownSenders: Collection<String> = emptyList(),
+    userKeywords: Collection<String> = emptyList(),
+): JsonObject? {
+    val addresses = knownSenders.map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { it.lowercase() }
+    val tags = userKeywords.filter { tagsOf(listOf(it)).isNotEmpty() }.distinct()
+    if (filters.knownSender && addresses.isEmpty()) return null
+    if (filters.tagged && tags.isEmpty()) return null
+    val narrow = buildJsonObject {
+        put("inMailbox", mailboxId)
+        if (filters.unread) put("notKeyword", "\$seen")
+        if (filters.starred) put("hasKeyword", "\$flagged")
+        if (filters.attachment) put("hasAttachment", true)
+    }
+    val extra = ArrayList<JsonObject>(2)
+    if (filters.knownSender) {
+        extra += buildJsonObject {
+            put("operator", "OR")
+            putJsonArray("conditions") {
+                addresses.forEach { add(buildJsonObject { put("from", it) }) }
+            }
+        }
+    }
+    if (filters.tagged) {
+        extra += buildJsonObject {
+            put("operator", "OR")
+            putJsonArray("conditions") {
+                tags.forEach { add(buildJsonObject { put("hasKeyword", it) }) }
+            }
+        }
+    }
+    if (extra.isEmpty()) return narrow
+    return buildJsonObject {
+        put("operator", "AND")
+        putJsonArray("conditions") {
+            add(narrow)
+            extra.forEach { add(it) }
+        }
+    }
+}
 
 internal class Jmap private constructor(
     private val credential: String,
@@ -262,6 +340,9 @@ internal class Jmap private constructor(
                 role = o["role"]?.str(),
                 unread = o["unreadEmails"]?.jsonPrimitive?.intOrNull ?: 0,
                 parentId = o["parentId"]?.str(),
+                // totalEmails rides in the same Mailbox/get as the unread count. Reading it
+                // here is not a second request.
+                total = o["totalEmails"]?.jsonPrimitive?.intOrNull ?: 0,
             )
         }.sortedWith(compareBy({ if (it.role == "inbox") 0 else 1 }, { it.name.lowercase() }))
     }
@@ -292,16 +373,25 @@ internal class Jmap private constructor(
      * messages in it readable: the list asks for the next hundred when it gets near the
      * bottom rather than trying to hold all of them.
      */
-    override fun emails(mailboxId: String, limit: Int, from: Int, unreadOnly: Boolean): List<Summary> {
+    override fun emails(
+        mailboxId: String,
+        limit: Int,
+        from: Int,
+        unreadOnly: Boolean,
+        filters: QuickFilters,
+        knownSenders: Collection<String>,
+        userKeywords: Collection<String>,
+    ): List<Summary> {
+        // Null is "these conditions match nothing", not "ask for the whole folder".
+        // An empty book or a tag list with nothing but protocol keywords must not fall
+        // through into an unfiltered query.
+        val filter = emailQueryFilter(mailboxId, filters, knownSenders, userKeywords) ?: return emptyList()
         val responses = call(
             invoke("Email/query", "q") {
-                // Filtered on the server, not here. Hiding the read ones out of the page we
-                // happen to hold would show "unread" meaning "unread among the last
-                // hundred", which is a different and much less useful thing.
-                putJsonObject("filter") {
-                    put("inMailbox", mailboxId)
-                    if (unreadOnly) put("notKeyword", "\$seen")
-                }
+                // Filtered on the server, not here. Hiding rows out of the page we happen
+                // to hold would mean "among the last hundred", which is a different and
+                // much less useful thing than "in this folder".
+                put("filter", filter)
                 put("collapseThreads", true)
                 putJsonArray("sort") {
                     add(buildJsonObject { put("property", "receivedAt"); put("isAscending", false) })

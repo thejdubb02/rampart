@@ -137,6 +137,13 @@ internal class Imap private constructor(
                     // some servers and a round trip on the rest.
                     unread = if (selectable) runCatching { folder.unreadMessageCount }.getOrDefault(0) else 0,
                     parentId = parent,
+                    // The same listing. -1 is "not known yet" on a folder we have not
+                    // opened, and a count we do not have is 0 rather than a crash.
+                    total = if (selectable) {
+                        runCatching { folder.messageCount }.getOrDefault(-1).coerceAtLeast(0)
+                    } else {
+                        0
+                    },
                 )
             }
             if (folder.type and Folder.HOLDS_FOLDERS != 0) {
@@ -156,19 +163,35 @@ internal class Imap private constructor(
      * is then megabytes to draw a list, so the envelope and the flags are fetched and the
      * body is left until something opens it.
      */
-    override fun emails(mailboxId: String, limit: Int, from: Int, unreadOnly: Boolean): List<Summary> {
+    override fun emails(
+        mailboxId: String,
+        limit: Int,
+        from: Int,
+        unreadOnly: Boolean,
+        filters: QuickFilters,
+        knownSenders: Collection<String>,
+        userKeywords: Collection<String>,
+    ): List<Summary> {
+        // Tagged, known sender and attachment have no honest SEARCH. Refusing here, rather
+        // than running the flag search and pretending the rest was applied, is what keeps
+        // a caller from showing the whole folder under a toggle that did nothing. The
+        // caller answers those from the saved copy, or leaves the toggle disabled.
+        if (filters.tagged || filters.knownSender || filters.attachment) {
+            throw Unsupported(Lacks.LOCAL_COPY)
+        }
         val folder = store.getFolder(mailboxId) as IMAPFolder
         if (folder.type and Folder.HOLDS_MESSAGES == 0) return emptyList()
+        val term = quickSearchTerm(filters)
         return useFolder(mailboxId, Folder.READ_ONLY) { open ->
             val count = open.messageCount
             if (count == 0) {
                 emptyList()
-            } else if (unreadOnly) {
+            } else if (term != null) {
                 // A SEARCH rather than a fetch and a filter. Reading a folder of thousands
                 // to find the four unread ones is the download this method exists to avoid,
                 // and the server can answer it without sending anything.
                 summaries(
-                    open.search(FlagTerm(Flags(Flags.Flag.SEEN), false))
+                    open.search(term)
                         .reversed()
                         .drop(from)
                         .take(limit),
@@ -881,6 +904,11 @@ internal enum class Lacks(val why: String) {
     SERVER_THREADS("This server does not group messages into conversations."),
     IDENTITIES("This server has no place to keep a sign-off, so signatures are set in Rampart."),
     CONTACTS("This server has no address book. Contacts come from the people you write to."),
+    /**
+     * Tagged, a known sender, or an attachment. None of those is one IMAP SEARCH term,
+     * and inventing one would either miss the mail or look like it had worked.
+     */
+    LOCAL_COPY("This filter has to be answered from the saved copy of the folder. This server cannot answer it."),
 }
 
 /**
@@ -1178,6 +1206,28 @@ internal fun groupContaining(response: String, uid: Long): List<Long> {
  * Null when there is nothing left to search for, because an empty IMAP search term matches
  * every message in the folder.
  */
+/**
+ * The IMAP SEARCH for the toggles the protocol can actually answer.
+ *
+ * Unread and starred are flags, and [searchTerm] already shows how two terms are
+ * combined with [AndTerm]. Tagged, known sender and attachment are not built here.
+ * IMAP has no "any user flag", no attachment flag, and a sender list would be one
+ * [FromStringTerm] per address in the book. Those are answered from the saved copy
+ * by the caller. [Imap.emails] refuses them rather than searching as though they
+ * were not set.
+ *
+ * Null when nothing here was asked for. That is the ordinary page, and it stays a
+ * fetch by sequence number: an empty search term matches every message.
+ */
+internal fun quickSearchTerm(filters: QuickFilters): SearchTerm? {
+    val unread = if (filters.unread) FlagTerm(Flags(Flags.Flag.SEEN), false) else null
+    val starred = if (filters.starred) FlagTerm(Flags(Flags.Flag.FLAGGED), true) else null
+    return when {
+        unread != null && starred != null -> AndTerm(unread, starred)
+        else -> unread ?: starred
+    }
+}
+
 internal fun searchTerm(text: String): SearchTerm? {
     val words = bareSubject(text).split(Regex("\\s+")).filter { it.isNotBlank() }
     if (words.isEmpty()) return null

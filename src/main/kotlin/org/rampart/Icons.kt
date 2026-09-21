@@ -74,6 +74,13 @@ internal interface IconPack {
     val Unread: ImageVector
     val Read: ImageVector
     val Contacts: ImageVector
+
+    /** A price tag, for a message carrying a label somebody made. */
+    val Tag: ImageVector
+
+    /** A paperclip, for a message with a file attached. */
+    val Attachment: ImageVector
+
     val Search: ImageVector
     val Dashboard: ImageVector
 
@@ -172,6 +179,20 @@ internal object LineIcons : IconPack {
     override val Contacts = icon(
         "Contacts",
         "M9 3.4a2.7 2.7 0 1 1 0 5.4 2.7 2.7 0 0 1 0-5.4M3.6 15.4a5.4 5.4 0 0 1 10.8 0",
+    )
+
+    /*
+     * Nothing already in the set is a tag or a paperclip. Page is a document, Link is a
+     * chain, and Folder is a folder. A filter chip that borrowed one of those would mean
+     * the wrong thing, so these two are new, in both packs, the same as every other glyph.
+     */
+    override val Tag = icon(
+        "Tag",
+        "M2.8 4.2h5.2l6.2 6.2-4.6 4.6-6.2-6.2V4.2z M6.2 6.6h.1",
+    )
+    override val Attachment = icon(
+        "Attachment",
+        "M11.8 7.2v5.2a2.8 2.8 0 0 1-5.6 0V5.4a1.8 1.8 0 0 1 3.6 0v6.2",
     )
     override val Ask = icon(
         "Ask",
@@ -294,6 +315,8 @@ internal object HeavyIcons : IconPack by LineIcons {
     override val label = "Heavy"
     override val Inbox by lazy { heavy(LineIcons.Inbox) }
     override val Contacts by lazy { heavy(LineIcons.Contacts) }
+    override val Tag by lazy { heavy(LineIcons.Tag) }
+    override val Attachment by lazy { heavy(LineIcons.Attachment) }
     override val Dashboard by lazy { heavy(LineIcons.Dashboard) }
     override val Search by lazy { heavy(LineIcons.Search) }
     override val Archive by lazy { heavy(LineIcons.Archive) }

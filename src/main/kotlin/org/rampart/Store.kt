@@ -305,21 +305,61 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         }
     }
 
-    /** A folder, newest first, as far as we have it. */
-    fun messages(mailbox: String, limit: Int = 100, from: Int = 0, unreadOnly: Boolean = false): List<Summary> {
-        val unread = if (unreadOnly) " AND seen = 0" else ""
-        return connection.prepareStatement(
-            "SELECT * FROM message WHERE mailbox = ?$unread ORDER BY receivedAt DESC LIMIT ? OFFSET ?",
-        ).use { s ->
-            s.setString(1, mailbox)
-            s.setInt(2, limit)
-            s.setInt(3, from)
-            s.executeQuery().use { rows ->
+    /**
+     * A folder, newest first, as far as we have it.
+     *
+     * [unreadOnly] is the old flag. When the caller does not pass [filters], it becomes
+     * the unread toggle, so there is still one path through [matchesQuick].
+     *
+     * Unread, starred and known sender are ordinary columns, so they are part of the
+     * WHERE and the LIMIT applies after them. Tagged is not a column: it is "any
+     * keyword [tagsOf] would show", including the snooze prefix that is not a fixed
+     * word, so those rows are kept with [matchesQuick] and only then paged. Doing the
+     * LIMIT first would make tagged mean "tagged among this page".
+     *
+     * Attachment has no column and is not given one here. A caller that still asks
+     * gets nothing back, which is wrong in a way that is obvious, rather than the
+     * whole folder, which looks like the toggle worked.
+     */
+    fun messages(
+        mailbox: String,
+        limit: Int = 100,
+        from: Int = 0,
+        unreadOnly: Boolean = false,
+        filters: QuickFilters = QuickFilters(unread = unreadOnly),
+        knownSenders: Collection<String> = emptyList(),
+    ): List<Summary> {
+        if (filters.attachment) return emptyList()
+        val known = knownSenders.map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct()
+        if (filters.knownSender && known.isEmpty()) return emptyList()
+        val where = ArrayList<String>()
+        where += "mailbox = ?"
+        if (filters.unread) where += "seen = 0"
+        if (filters.starred) where += "flagged = 1"
+        if (filters.knownSender) where += "lower(senderEmail) IN (${holders(known.size)})"
+        val sql = buildString {
+            append("SELECT * FROM message WHERE ")
+            append(where.joinToString(" AND "))
+            append(" ORDER BY receivedAt DESC")
+            // Tagged is applied after the read, so the page is cut there instead.
+            if (!filters.tagged) append(" LIMIT ? OFFSET ?")
+        }
+        val rows = connection.prepareStatement(sql).use { s ->
+            var at = 1
+            s.setString(at++, mailbox)
+            if (filters.knownSender) known.forEach { s.setString(at++, it) }
+            if (!filters.tagged) {
+                s.setInt(at++, limit)
+                s.setInt(at, from)
+            }
+            s.executeQuery().use { found ->
                 buildList {
-                    while (rows.next()) add(summaryOf(rows))
+                    while (found.next()) add(summaryOf(found))
                 }
             }
         }
+        if (!filters.tagged) return rows
+        return rows.filter { matchesQuick(it, filters, known.toSet()) }.drop(from).take(limit)
     }
 
     /**
