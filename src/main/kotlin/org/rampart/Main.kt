@@ -142,6 +142,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import java.awt.Desktop
 import java.net.URI
 import java.nio.file.Files
@@ -1232,6 +1233,48 @@ private fun Reader(
         }
         val gone = ids.toSet()
         emails = emails.filterNot { it.id in gone }
+    }
+
+    /**
+     * The next few messages are fetched before anybody asks for them.
+     *
+     * Opening a message nobody has read is one round trip, and one round trip is the whole
+     * remaining wait now that the list and the open path have stopped making dozens. A body
+     * already in the local store opens with none at all, and the reading pane already
+     * prefers that copy, so this changes nothing about how a message is shown. It only fills
+     * the store earlier.
+     *
+     * Worth far more here than it would be for a web client against JMAP, because on IMAP
+     * what a message costs is waiting rather than bytes: fetching one nobody has clicked on
+     * is almost free, and it removes the pause entirely when they do.
+     *
+     * **It never marks anything read.** The body is fetched with the same call the reading
+     * pane uses, which does not touch the seen flag. A read ahead that quietly marked mail
+     * read would destroy real information to save a moment.
+     *
+     * Restarted whenever the list or the selection changes, which cancels the previous run,
+     * so changing folder does not leave the old folder still being read. One at a time and
+     * only a screenful: a folder of thirty thousand must not read itself into the store, and
+     * on IMAP every fetch takes the folder lock, so a burst of them would be in front of the
+     * message somebody actually clicked.
+     */
+    LaunchedEffect(emails.firstOrNull()?.id, emails.size, selected?.id, here) {
+        val key = here?.first?.takeIf { it != ALL_ACCOUNTS } ?: return@LaunchedEffect
+        val store = session(key).store ?: return@LaunchedEffect
+        // A moment's grace, so the list paints and a reader who is already clicking gets the
+        // connection to themselves rather than queueing behind a fetch nobody asked for.
+        delay(600)
+        for (row in emails.take(READ_AHEAD)) {
+            if (row.id == selected?.id) continue
+            withContext(Dispatchers.IO) {
+                if (store.body(row.id) == null) {
+                    runCatching { store.putBody(row.id, session(key).jmap.body(row.id)) }
+                }
+            }
+            // Between messages rather than inside one, because a fetch in flight cannot be
+            // taken back. This is where a reader clicking something gets in front.
+            yield()
+        }
     }
 
     val pushes = remember { Channel<Unit>(Channel.CONFLATED) }
@@ -6213,3 +6256,11 @@ internal fun pickedAfter(
         else -> emptySet()
     }
 }
+
+/**
+ * How many messages are fetched ahead of being asked for. See the read ahead in [Reader].
+ *
+ * About a screenful. Enough that the ones somebody is looking at are already here, few
+ * enough that opening a folder does not quietly download it.
+ */
+private const val READ_AHEAD = 12
