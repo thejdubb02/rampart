@@ -26,6 +26,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.ui.draw.rotate
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Size
@@ -122,6 +126,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.rememberWindowState
@@ -159,70 +164,64 @@ import kotlinx.coroutines.CancellationException
 private val WHEN = DateTimeFormatter.ofPattern("d MMM  HH:mm").withZone(ZoneId.systemDefault())
 
 /**
- * The update, as a card in the corner rather than a bar across the top.
+ * The update, as a line in the window's own bottom bar rather than a card over the mail.
  *
- * It used to take the full width above the mail, which is a lot of screen for something
- * that can wait, and it said "Installing" with nothing moving: an update that takes most of
- * a minute and shows no sign of working looks like one that has hung. The bar underneath is
- * indeterminate on purpose. Windows does not report progress on an MSIX install, and a
- * percentage made up here would be a lie about something people are waiting on.
+ * It used to float over the bottom right of the reading pane, which is exactly where a
+ * message sits, and it offered Later: a decision nobody needed to make, since a bar that
+ * waits indefinitely already does what Later was for. Nothing here fades in and out on its
+ * own, and nothing shows when there is nothing to say: this sits under a client somebody
+ * leaves open for days, so quiet has to be the default rather than an afterthought.
+ *
+ * The one animation is a slow fade on the icon, and only while [state] is [Waiting]: that
+ * is the state that can sit unread for as long as somebody leaves it, so it is the only one
+ * that earns something to draw the eye. [busy][UpdateBarState.busy] states get the app's own
+ * spinner instead, which says "working" rather than "look at me", and a [Failed] bar is
+ * read from the words alone.
  */
 @Composable
-internal fun UpdateCard(
-    version: String,
-    installing: Boolean,
-    note: String?,
-    /** True once the package has been fetched and is waiting to be put in place. */
-    waiting: Boolean,
-    onRestart: () -> Unit,
-    onLater: () -> Unit,
-) {
-    Box(Modifier.fillMaxSize().padding(18.dp), contentAlignment = Alignment.BottomEnd) {
-        Surface(
-            shape = MaterialTheme.shapes.medium,
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            shadowElevation = 6.dp,
-            modifier = Modifier.width(320.dp),
-        ) {
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 13.dp)) {
-                Text(
-                    when {
-                        note != null -> note
-                        installing -> "Installing Rampart $version"
-                        else -> "Rampart $version is ready"
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    when {
-                        installing -> "Rampart will close and open again by itself."
-                        // The whole point of fetching it in the background: doing nothing
-                        // is a complete answer, and saying so is what makes Later honest.
-                        waiting -> "It is downloaded. It goes in next time you close Rampart, or now."
-                        else -> "It installs in about a minute, and Rampart restarts into it."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline,
-                )
-                if (installing) {
-                    Spacer(Modifier.height(11.dp))
-                    LinearProgressIndicator(Modifier.fillMaxWidth())
-                } else {
-                    Spacer(Modifier.height(6.dp))
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        TextButton(onClick = onLater) { Text("Later") }
-                        Spacer(Modifier.width(4.dp))
-                        Button(onClick = onRestart) { Text("Install now") }
-                    }
-                }
-            }
-        }
+internal fun UpdateBar(state: UpdateBarState, onClick: () -> Unit) {
+    if (state is UpdateBarState.Hidden) return
+    val clickable = state is UpdateBarState.Waiting || state is UpdateBarState.Failed
+    val iconAlpha = if (state is UpdateBarState.Waiting) {
+        val cycle = rememberInfiniteTransition(label = "update-ready")
+        val alpha by cycle.animateFloat(
+            initialValue = 0.5f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(1400, easing = LinearEasing), RepeatMode.Reverse),
+            label = "update-ready-alpha",
+        )
+        alpha
+    } else {
+        1f
+    }
+    Row(
+        Modifier.fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            // `enabled` rather than a hand-built if/else choosing between a clickable
+            // modifier and a bare one: the platform already has a disabled state for a
+            // clickable, and reaching for it here is one call instead of a branch.
+            .clickable(
+                enabled = clickable,
+                onClickLabel = when (state) {
+                    is UpdateBarState.Failed -> "Try installing Rampart ${state.version} again"
+                    is UpdateBarState.Waiting -> "Install Rampart ${state.version} now"
+                    else -> null
+                },
+                role = Role.Button,
+                onClick = onClick,
+            )
+            .padding(horizontal = 12.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            RampartIcons.Download,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary.copy(alpha = iconAlpha),
+            modifier = Modifier.size(14.dp),
+        )
+        Spacer(Modifier.width(7.dp))
+        Text(state.label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+        if (state.busy) Spinner(size = 13.dp, thickness = 2.dp)
     }
 }
 
@@ -828,12 +827,8 @@ private fun Reader(
     var contactsLoading by remember { mutableStateOf(false) }
     var contactsError by remember { mutableStateOf<String?>(null) }
     var signatureError by remember { mutableStateOf<String?>(null) }
-    var installing by remember { mutableStateOf(false) }
-    var installNote by remember { mutableStateOf<String?>(null) }
-    /** The version already fetched and waiting, which is what makes the button quick. */
-    var waiting by remember { mutableStateOf<String?>(null) }
-    /** The version the card was sent away for. It does not come back for that one. */
-    var putOff by remember { mutableStateOf<String?>(null) }
+    /** What the bottom bar says about updates. See [UpdateBarState]. */
+    var barState by remember { mutableStateOf<UpdateBarState>(UpdateBarState.Hidden) }
     var notifyOnArrival by remember { mutableStateOf(Settings.notifyOnArrival()) }
     var order by remember { mutableStateOf(Settings.order()) }
     // Not remembered between runs on purpose: opening the app into a folder that is hiding
@@ -1158,7 +1153,7 @@ private fun Reader(
      */
     LaunchedEffect(Unit) {
         while (true) {
-            if (!installing) update = withContext(Dispatchers.IO) { Updates.newerVersion() }
+            if (!barState.busy) update = withContext(Dispatchers.IO) { Updates.newerVersion() }
             delay(30 * 60_000L)
         }
     }
@@ -1177,22 +1172,35 @@ private fun Reader(
      */
     LaunchedEffect(update) {
         val version = update ?: return@LaunchedEffect
-        if (waiting == version || installing) return@LaunchedEffect
-        if (withContext(Dispatchers.IO) { Updates.stage() }) waiting = version
+        val already = (barState as? UpdateBarState.Waiting)?.version == version
+        if (already || barState.busy) return@LaunchedEffect
+        if (withContext(Dispatchers.IO) { Updates.stage() }) barState = UpdateBarState.Waiting(version)
     }
 
-    // Windows closes this window when the new version is in place, so still being here
-    // three minutes later means it did not happen. Said plainly rather than left on
-    // "Installing" forever, and the next check offers it again.
-    LaunchedEffect(installing) {
-        if (!installing) return@LaunchedEffect
-        delay(3 * 60_000L)
-        // The bar stops with the message, not twenty seconds after it. A progress bar under
-        // the words "that did not install" is the app arguing with itself.
-        installing = false
-        installNote = "That did not install. Windows will fetch it in the background instead."
-        delay(20_000L)
-        installNote = null
+    /**
+     * What a click on the bar means: check what is actually newest right now, fetch it
+     * first if that turns out not to be what is already on disk, then hand it to Windows.
+     *
+     * The re-check is the whole point of this function. [from] may have been staged hours
+     * or days ago, and "regardless of how many versions behind you are" means a click must
+     * never quietly install something that stopped being current while it sat waiting; see
+     * [Updates.targetVersion]. A working install is never observed from here: Windows kills
+     * this process to swap the files in, partway through the wait inside
+     * [Updates.restartToUpdate], so nothing after that call runs, which is the success case
+     * rather than a bug in this function.
+     */
+    suspend fun installLatest(from: String) {
+        barState = UpdateBarState.Staging(from)
+        val fresh = withContext(Dispatchers.IO) { Updates.newerVersion() }
+        val target = Updates.targetVersion(from, fresh)
+        if (target != from && !withContext(Dispatchers.IO) { Updates.stage() }) {
+            barState = Updates.afterFailure(target, Updates.lastProblem)
+            return
+        }
+        barState = UpdateBarState.Installing(target)
+        if (!withContext(Dispatchers.IO) { Updates.restartToUpdate() }) {
+            barState = Updates.afterFailure(target, Updates.lastProblem)
+        }
     }
 
     LaunchedEffect(sessions.size) {
@@ -3298,9 +3306,6 @@ private fun Reader(
             Sidebar(
                 asking = chatOpen,
                 onAsk = { chatOpen = !chatOpen },
-                // Only once the card has been sent away, so there is one notice at a time.
-                updateWaiting = update?.takeIf { it == putOff },
-                onUpdate = { putOff = null },
                 search = {
                     SearchBar(
                         query = query,
@@ -3512,7 +3517,15 @@ private fun Reader(
                             }
                         }
                     },
-                    update = update,
+                    // Not the raw `update` signal: that flips true as soon as a newer
+                    // version is merely known, which can be before it has actually been
+                    // staged. This page's own button reads the same state the bottom bar
+                    // does, so it is never offered before there is something to install.
+                    update = when (val current = barState) {
+                        is UpdateBarState.Waiting -> current.version
+                        is UpdateBarState.Failed -> current.version
+                        else -> null
+                    },
                     notifyOnArrival = notifyOnArrival,
                     onNotifyOnArrival = { notifyOnArrival = it; Settings.setNotifyOnArrival(it) },
                     onMessageMode = { messageMode = it },
@@ -3521,7 +3534,23 @@ private fun Reader(
                     iconPack = icons,
                     onIconPack = onIcons,
                     onAddAccount = onAddAccount,
-                    onRestart = { Updates.restartToUpdate(); onQuit() },
+                    /*
+                     * The same re-check-and-restage flow the bottom bar's own click runs,
+                     * not a bare `restartToUpdate()`. Before the bar existed this button
+                     * called that directly and then quit itself, which is now wrong twice
+                     * over: `restartToUpdate()` alone can install a version that went stale
+                     * while it sat staged, and quitting here raced the install, since the
+                     * process that is actually supposed to end this one is PowerShell's own
+                     * `-ForceTargetApplicationShutdown`, not a call made from inside it.
+                     */
+                    onRestart = {
+                        val from = when (val current = barState) {
+                            is UpdateBarState.Waiting -> current.version
+                            is UpdateBarState.Failed -> current.version
+                            else -> null
+                        }
+                        if (from != null) scope.launch { installLatest(from) }
+                    },
                     filters = filters,
                     filtersSupported = filtersSupported,
                     filtersSaving = filtersSaving,
@@ -3765,6 +3794,14 @@ private fun Reader(
             }
         }
         }
+        UpdateBar(barState) {
+            val from = when (val current = barState) {
+                is UpdateBarState.Waiting -> current.version
+                is UpdateBarState.Failed -> current.version
+                else -> null
+            }
+            if (from != null) scope.launch { installLatest(from) }
+        }
     }
 
         /*
@@ -3789,32 +3826,6 @@ private fun Reader(
                 }
             }
         }
-    }
-
-    update?.takeIf { it != putOff || installing }?.let { version ->
-        UpdateCard(
-            version = version,
-            installing = installing,
-            note = installNote,
-            waiting = waiting == version,
-            onRestart = {
-                // The window stays up while Windows fetches the package, which can be most
-                // of a minute, and Windows closes it at the swap. Quitting first would leave
-                // nothing on screen during the wait, which looks exactly like a button that
-                // did nothing.
-                if (Updates.restartToUpdate()) {
-                    installing = true
-                } else {
-                    // Not a packaged copy. Closing is still the right move: Windows installs
-                    // it on its own, only later.
-                    onQuit()
-                }
-            },
-            // Remembered rather than forgotten, so the card does not come back in half an
-            // hour for the same version. Nagging is what makes people stop reading a notice,
-            // and the sidebar still says it is there.
-            onLater = { putOff = version },
-        )
     }
 
     if (showPalette) {
@@ -3902,9 +3913,6 @@ internal fun Sidebar(
     onTagBounds: (String, Rect) -> Unit = { _, _ -> },
     /** The search field, drawn at the top. Absent while the sidebar is narrowed. */
     search: @Composable () -> Unit = {},
-    /** A version fetched and waiting, once the card offering it has been sent away. */
-    updateWaiting: String? = null,
-    onUpdate: () -> Unit = {},
 ) {
     Column(
         Modifier.width(if (collapsed) 60.dp else 232.dp).fillMaxHeight()
@@ -4171,28 +4179,17 @@ internal fun Sidebar(
                 }
             }
             /*
-             * The version line, and where an update that was put off goes.
-             *
-             * Somewhere quiet and always in the same place, rather than a card that comes
-             * back every half hour. It is one line at the bottom of the sidebar, it says
-             * what is waiting, and it opens the card again when clicked.
+             * The version line, quiet and always in the same place at the bottom of the
+             * sidebar. What to do about a newer one is entirely the bottom bar's job now,
+             * so this says nothing else and never reopens anything on a click.
              */
-            if (updateWaiting != null) {
+            Updates.current?.let {
                 Text(
-                    "$updateWaiting is ready to install",
+                    it,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.clickable { onUpdate() }.padding(start = 12.dp, top = 2.dp),
+                    color = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.padding(start = 12.dp, top = 2.dp),
                 )
-            } else {
-                Updates.current?.let {
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.padding(start = 12.dp, top = 2.dp),
-                    )
-                }
             }
         }
     }

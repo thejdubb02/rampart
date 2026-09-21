@@ -154,8 +154,13 @@ object Updates {
         // Single quotes and concatenation rather than an interpolated double-quoted string.
         // The whole script crosses Java's Windows argument quoting as one argument, and a
         // double quote inside it is the thing most likely not to survive the trip.
-        "try { Add-AppxPackage -AppInstallerFile '$APPINSTALLER' -ForceTargetApplicationShutdown } " +
-            "catch { }; " +
+        //
+        // The catch writes the exception's message rather than swallowing it. A refusal
+        // used to leave nothing to read, which is how "Windows will fetch it in the
+        // background instead" got said about an install that was never staged: there was
+        // no way to tell that failure apart from one that had actually gone in.
+        "try { Add-AppxPackage -AppInstallerFile '$APPINSTALLER' -ForceTargetApplicationShutdown " +
+            "-ErrorAction Stop } catch { Write-Output \$_.Exception.Message }; " +
             "\$f = (Get-AppxPackage -Name $PACKAGE).PackageFamilyName; " +
             "Start-Process ('shell:appsFolder\\' + \$f + '!$PACKAGE')",
     )
@@ -199,8 +204,35 @@ object Updates {
      * thread for the rest of the session. There is nothing to report when that happens: the
      * button still works, and the next check starts it again.
      */
-    fun stage(): Boolean = runCatching {
-        updater() ?: return false
+    /**
+     * One outcome of running a PowerShell install step: the exit code and everything it
+     * printed, or [timedOut] when it was still running after the time given to it and was
+     * killed rather than waited on further.
+     */
+    private data class Ran(val exitCode: Int, val output: String, val timedOut: Boolean)
+
+    /**
+     * Runs one of the two install commands and reports what happened, without deciding what
+     * it means: [stage] and [restartToUpdate] disagree about that, in particular about
+     * whether reaching a return at all is itself the failure (see the KDoc on
+     * [restartToUpdate]), so that judgement stays with each caller.
+     *
+     * Null, with [lastProblem] already set, when nothing ran at all: not a packaged build,
+     * the manifest is not being served yet, or the network could not be reached.
+     *
+     * **Into a file, not down a pipe.** Both ways of reading a pipe hang here. A pipe holds
+     * a few tens of kilobytes. Wait for the process first and a refusal long enough to fill
+     * it leaves PowerShell blocked on a write nobody is reading while this side waits for an
+     * exit that cannot come. Read the pipe first instead and a process that hangs without
+     * closing its output blocks the read for ever, which quietly skips past the timeout
+     * below. A file has neither end of that: the process writes as much as it likes to
+     * somewhere with no reader, the timeout is the only thing that decides how long this
+     * waits, and the output is read afterwards when there is nothing left to deadlock
+     * against. Deleted on every path, including the one where starting the process throws,
+     * because a file left behind every failed attempt is a slow leak in the temp directory.
+     */
+    private fun runPowerShell(command: List<String>, timeoutMinutes: Long): Ran? = runCatching {
+        updater() ?: return null
         // Asked before PowerShell is started at all. A manifest that is not being served yet
         // is a reason to come back in a minute, not a failed install, and running the command
         // anyway turns the first into the second.
@@ -208,57 +240,56 @@ object Updates {
             true -> Unit
             false -> {
                 lastProblem = NOT_READY
-                return false
+                return null
             }
             null -> {
                 lastProblem = "Rampart could not reach the download."
-                return false
+                return null
             }
         }
-        /*
-         * **Into a file, not down a pipe.** Both ways of reading a pipe hang here.
-         *
-         * A pipe holds a few tens of kilobytes. Wait for the process first and a refusal
-         * long enough to fill it leaves PowerShell blocked on a write nobody is reading
-         * while this side waits for an exit that cannot come. Read the pipe first instead
-         * and a process that hangs without closing its output blocks the read for ever,
-         * which quietly skips past the timeout below. A file has neither end of that: the
-         * process writes as much as it likes to somewhere with no reader, the timeout is
-         * the only thing that decides how long this waits, and the output is read
-         * afterwards when there is nothing left to deadlock against.
-         */
         val log = Files.createTempFile("rampart-update", ".log")
         try {
-        val process = ProcessBuilder(stageCommand())
-            .redirectErrorStream(true)
-            .redirectOutput(log.toFile())
-            .start()
-        if (!process.waitFor(30, java.util.concurrent.TimeUnit.MINUTES)) {
-            process.destroyForcibly()
-            lastProblem = "The download did not finish."
-            return false
-        }
-        // Read rather than thrown away. What Windows refused for is the only thing that
-        // makes a failure here fixable by anybody.
-        val said = runCatching { Files.readString(log) }.getOrDefault("").trim()
-        if (process.exitValue() == 0) {
-            lastProblem = null
-            true
-        } else {
-            lastProblem = said.lines().firstOrNull { it.isNotBlank() }
-                ?: "Windows would not stage the update and did not say why."
-            false
-        }
+            val process = ProcessBuilder(command)
+                .redirectErrorStream(true)
+                .redirectOutput(log.toFile())
+                .start()
+            if (!process.waitFor(timeoutMinutes, java.util.concurrent.TimeUnit.MINUTES)) {
+                process.destroyForcibly()
+                Ran(exitCode = -1, output = "", timedOut = true)
+            } else {
+                // Read rather than thrown away. What Windows refused for is the only thing
+                // that makes a failure here fixable by anybody.
+                val said = runCatching { Files.readString(log) }.getOrDefault("").trim()
+                Ran(process.exitValue(), said, timedOut = false)
+            }
         } finally {
-            // On every path, including the one where starting the process throws. A file
-            // left behind every failed attempt is a slow leak in the temp directory.
             runCatching { Files.deleteIfExists(log) }
         }
-    }.getOrDefault(false)
+    }.getOrNull()
+
+    fun stage(): Boolean {
+        val ran = runPowerShell(stageCommand(), timeoutMinutes = 30) ?: return false
+        return when {
+            ran.timedOut -> {
+                lastProblem = "The download did not finish."
+                false
+            }
+            ran.exitCode == 0 -> {
+                lastProblem = null
+                true
+            }
+            else -> {
+                lastProblem = ran.output.lines().firstOrNull { it.isNotBlank() }
+                    ?: "Windows would not stage the update and did not say why."
+                false
+            }
+        }
+    }
 
     /**
      * Installs the published version and restarts into it. Returns false when this is not a
-     * packaged copy, and the caller then just closes.
+     * packaged copy, when the manifest is not being served yet, or when the swap did not
+     * happen; [lastProblem] says which, in a sentence rather than a code.
      *
      * It does not go through the package's own launcher. That launcher only checks for an
      * update when Conveyor is set to `aggressive`, which we deliberately are not, because
@@ -266,12 +297,28 @@ object Updates {
      * in background mode it prints "Not in aggressive mode, launching the app" and does
      * exactly that, so the restart button was restarting without updating. Read out of the
      * shipped binary, not guessed.
+     *
+     * **A working install is never observed from in here.** `-ForceTargetApplicationShutdown`
+     * closes whichever process is holding the package open, which is this one, so success
+     * ends with the JVM being killed partway through the wait below rather than with this
+     * function returning true. What is waited for and read out only matters for the failure
+     * case: the swap did not happen, this process is still alive to say so, and a plain
+     * sentence in the bar beats what Justin hit on 2026-09-21, where a deferred update
+     * applied at close and the app would not start again, with nothing saying why.
      */
-    fun restartToUpdate(): Boolean = runCatching {
-        updater() ?: return false
-        ProcessBuilder(updateCommand()).start()
-        true
-    }.getOrDefault(false)
+    fun restartToUpdate(): Boolean {
+        val ran = runPowerShell(updateCommand(), timeoutMinutes = 3) ?: return false
+        // Reaching here at all is the failure case, whatever ran.exitCode says: a genuine
+        // success ends with -ForceTargetApplicationShutdown killing this process mid-wait,
+        // never with this function observing an exit code. See the KDoc above.
+        lastProblem = if (ran.timedOut) {
+            "The install did not finish. Rampart is still on the version you had."
+        } else {
+            ran.output.lines().firstOrNull { it.isNotBlank() }
+                ?: "The install did not go in. Rampart is still on the version you had."
+        }
+        return false
+    }
 
     /**
      * Compares dotted versions a segment at a time. A segment that is not a number sorts
@@ -288,4 +335,72 @@ object Updates {
         }
         return false
     }
+
+    /**
+     * Which version a click should end on, given what is already [staged] and a [fresh]
+     * check run at the moment of the click.
+     *
+     * "Regardless of how many versions behind you are" means a click must never quietly
+     * install whatever happened to be staged hours or days ago without asking again first.
+     * [fresh] is null when the check itself could not be answered, which is not the same as
+     * nothing new being published: [staged] is the safest thing to install then, since it
+     * is already known to exist and is already sitting on disk.
+     */
+    internal fun targetVersion(staged: String, fresh: String?): String = fresh ?: staged
+
+    /**
+     * What the bar should show after a stage or install attempt has returned false.
+     *
+     * [NOT_READY] is not a failure: it means the release is still landing, and the honest
+     * answer is to wait and stay clickable rather than to alarm somebody about a state that
+     * clears itself on its own within a minute. Everything else is shown as what it is, and
+     * the bar stays clickable either way so it can be tried again.
+     */
+    internal fun afterFailure(version: String, problem: String?): UpdateBarState =
+        if (problem == NOT_READY) UpdateBarState.Waiting(version)
+        else UpdateBarState.Failed(version, problem ?: "The update did not go in.")
 }
+
+/**
+ * What the bottom bar says about updates right now.
+ *
+ * One value rather than the separate booleans this used to be (`installing`, `waiting`,
+ * `putOff`, `installNote`). Those could combine into a state nobody meant to reach, such as
+ * a card that was somehow both installing and put off, because nothing stopped them being
+ * set independently. A sealed type only allows the states that are actually distinct.
+ */
+internal sealed class UpdateBarState {
+    /** No newer version known, or nothing staged yet. The bar says nothing about updates. */
+    object Hidden : UpdateBarState()
+
+    /** [version] is fetched and waiting on disk. A click starts the install. */
+    data class Waiting(val version: String) : UpdateBarState()
+
+    /** Re-checking what is actually newest and fetching it, because a click must never
+     *  install something that stopped being current while it sat staged. */
+    data class Staging(val version: String) : UpdateBarState()
+
+    /** Handed to Windows. The app is expected to close during this and come back as
+     *  [version]; still being here after a while means the swap did not happen. */
+    data class Installing(val version: String) : UpdateBarState()
+
+    /** [message] is why the last attempt did not work. Clicking tries again for [version]. */
+    data class Failed(val version: String, val message: String) : UpdateBarState()
+}
+
+/** True while a click is being worked through, which is when the bar must not be clicked again. */
+internal val UpdateBarState.busy: Boolean
+    get() = this is UpdateBarState.Staging || this is UpdateBarState.Installing
+
+/**
+ * The one line the bar shows for each state, kept beside the states themselves so the
+ * wording cannot drift from whatever caused it.
+ */
+internal val UpdateBarState.label: String
+    get() = when (this) {
+        UpdateBarState.Hidden -> ""
+        is UpdateBarState.Waiting -> "Rampart $version is ready"
+        is UpdateBarState.Staging -> "Fetching Rampart $version"
+        is UpdateBarState.Installing -> "Installing Rampart $version"
+        is UpdateBarState.Failed -> message
+    }

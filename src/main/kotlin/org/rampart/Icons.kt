@@ -77,6 +77,9 @@ internal interface IconPack {
     val Search: ImageVector
     val Dashboard: ImageVector
 
+    /** An arrow into an open tray, for a package that has been fetched and is waiting. */
+    val Download: ImageVector
+
     /** Hollow for a message left as the sender built it, solid for one turned dark. */
     val Bulb: ImageVector
 
@@ -175,6 +178,9 @@ internal object LineIcons : IconPack {
     override val Search = icon("Search", "M8.1 2.6a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11M12.2 12.2 15.6 15.6")
     // Three bars of different heights, which is what a chart looks like at 16 pixels.
     override val Dashboard = icon("Dashboard", "M3.4 15V9.6M9 15V3.4M14.6 15v-8")
+
+    /** An arrow landing in an open tray, for something fetched and waiting to be installed. */
+    override val Download = icon("Download", "M9 2.6V10M9 10 5.8 6.8M9 10 12.2 6.8M3.4 12V15H14.6V12")
     override val Back = icon("Back", "M15 9H3.6M8 3.6 2.6 9l5.4 5.4")
     override val Collapse = icon("Collapse", "m10.5 4-5 5 5 5")
     override val Expand = icon("Expand", "m7 4 5 5-5 5")

@@ -30,8 +30,17 @@ class UpdateCommandTest {
     /** A failed install must still leave the person with a running app. */
     @Test
     fun itStartsRampartAgainEvenIfTheInstallFails() {
-        assertTrue("catch { }" in script)
-        assertTrue(script.indexOf("Start-Process") > script.indexOf("catch { }"))
+        assertTrue("catch {" in script)
+        assertTrue(script.indexOf("Start-Process") > script.indexOf("catch {"))
+    }
+
+    /**
+     * The catch used to be empty, and a refusal left nothing to read: the bar could not
+     * tell a failed install apart from one that had never been staged.
+     */
+    @Test
+    fun theRefusalReasonIsCapturedRatherThanSwallowed() {
+        assertTrue("Write-Output" in script && "Exception.Message" in script, script)
     }
 
     /**

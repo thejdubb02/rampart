@@ -379,15 +379,15 @@ class Screenshots {
             }
         }
         shoot("update", 1000, 700, dark) {
-            Box(Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
                 Panes()
-                UpdateCard("0.1.44", installing = false, note = null, waiting = true, onRestart = {}, onLater = {})
+                UpdateBar(UpdateBarState.Waiting("0.1.44")) {}
             }
         }
         shoot("update-installing", 1000, 700, dark) {
-            Box(Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
                 Panes()
-                UpdateCard("0.1.44", installing = true, note = null, waiting = true, onRestart = {}, onLater = {})
+                UpdateBar(UpdateBarState.Installing("0.1.44")) {}
             }
         }
         shoot("palette", 1000, 700, dark) {
