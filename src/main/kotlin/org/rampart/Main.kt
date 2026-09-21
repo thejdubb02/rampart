@@ -225,6 +225,109 @@ internal fun UpdateBar(state: UpdateBarState, onClick: () -> Unit) {
     }
 }
 
+/**
+ * What changed, shown once right after Rampart has just been the target of an update, or
+ * again on demand from the version line at the bottom of the sidebar (the only way back
+ * on once suppressed; see below). [changes] is already filtered to what has not been seen
+ * yet, newest first: the same order [changelog] and Settings' own Changes() page already
+ * read in, so nothing here re-sorts release notes a different way depending on where they
+ * are looked at from. The row layout mirrors that page's for the same reason. Empty reads
+ * as "you're all caught up" rather than a blank dialog, which is what a manual reopen sees
+ * once the automatic one has already been through everything there was.
+ *
+ * Closing always calls [onClose] with the checkbox's state, whatever it is: recording the
+ * running version as seen happens either way, because the checkbox decides whether the
+ * *next* update announces itself, not whether this viewing counted. It starts unchecked
+ * every time, including on a reopen of an already-suppressed dialog, which is deliberate:
+ * there is nowhere else in this build to flip [Settings.changelogSuppressed] back off
+ * (that page lives outside what this change is allowed to touch), so opening this by hand
+ * and pressing "Got it" without ticking the box is itself how suppression is lifted.
+ */
+@Composable
+private fun ChangelogDialog(changes: List<Change>, onClose: (suppress: Boolean) -> Unit) {
+    var suppress by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = { onClose(suppress) },
+        title = { Text("What's new in Rampart") },
+        text = {
+            Column {
+                Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
+                    if (changes.isEmpty()) {
+                        Text(
+                            "You're all caught up.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
+                    }
+                    changes.forEach { change ->
+                        val running = isRunning(change)
+                        Row(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
+                            Column(Modifier.width(96.dp)) {
+                                Text(
+                                    change.version,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = if (running) FontWeight.SemiBold else FontWeight.Normal,
+                                    color = if (running) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurface,
+                                )
+                                Text(
+                                    change.date,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.outline,
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(change.what, style = MaterialTheme.typography.bodyMedium)
+                                if (running) {
+                                    Text(
+                                        "This is the version you are running.",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    Modifier.clickable(role = Role.Checkbox) { suppress = !suppress },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(checked = suppress, onCheckedChange = { suppress = it })
+                    Text("Don't show this again", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { onClose(suppress) }) { Text("Got it") } },
+    )
+}
+
+/**
+ * Which changes the person running this has not been shown yet: everything in [all] whose
+ * version is newer than [seen], in whatever order [all] already carries them.
+ *
+ * A pure function rather than an inline filter written twice, because both the automatic
+ * startup dialog and a manual reopen from the version line ask this question and there
+ * must be exactly one definition of "since last seen" for the two to agree on. [changelog]
+ * hands its list newest first already, and nothing here reorders it a second way.
+ */
+internal fun unseenChanges(all: List<Change>, seen: String): List<Change> =
+    all.filter { Updates.isNewer(it.version, seen) }
+
+/**
+ * What just happened to `update.stage`, from [Updates.stage]'s own boolean plus whatever it
+ * left in [Updates.lastProblem]. Shared by both places that attempt a stage, the bar's own
+ * effect and [installLatest]'s re-check, so there is one definition of "not ready yet"
+ * rather than two that could quietly drift apart.
+ */
+private fun stageOutcome(staged: Boolean): UpdateStageCategory = when {
+    staged -> UpdateStageCategory.STAGED
+    Updates.lastProblem == Updates.NOT_READY -> UpdateStageCategory.NOT_READY
+    else -> UpdateStageCategory.FAILED
+}
+
 /** One signed in mailbox. Several of these is the point; the password is in none of them. */
 internal class Session(val account: SavedAccount, val jmap: MailBackend) {
     val key: String get() = "${account.email}@${account.server}"
@@ -829,6 +932,33 @@ private fun Reader(
     var signatureError by remember { mutableStateOf<String?>(null) }
     /** What the bottom bar says about updates. See [UpdateBarState]. */
     var barState by remember { mutableStateOf<UpdateBarState>(UpdateBarState.Hidden) }
+    /**
+     * What [ChangelogDialog] is showing, or null while it is closed. Worked out once, when
+     * this composable is first entered, from whatever is already known synchronously
+     * ([Updates.current], the changelog baked into this build, and what was last recorded
+     * seen): no network call decides whether this appears, only whether a newer package
+     * exists at all, which the update bar already asks about on its own schedule.
+     *
+     * A fresh install, or an existing one updating into the very first build to carry this
+     * feature, has [Settings.changelogSeen] empty. There is nothing to compare the running
+     * version against then, so nothing is shown; the running version is recorded as seen
+     * instead, purely so the *next* update has a baseline and does not stay silent forever.
+     */
+    var changelogDialog by remember {
+        mutableStateOf<List<Change>?>(
+            Updates.current?.let { running ->
+                val seen = Settings.changelogSeen()
+                when {
+                    seen.isEmpty() -> {
+                        Settings.setChangelogSeen(running)
+                        null
+                    }
+                    Settings.changelogSuppressed() || !Updates.isNewer(running, seen) -> null
+                    else -> unseenChanges(changelog(), seen)
+                }
+            },
+        )
+    }
     var notifyOnArrival by remember { mutableStateOf(Settings.notifyOnArrival()) }
     var order by remember { mutableStateOf(Settings.order()) }
     // Not remembered between runs on purpose: opening the app into a folder that is hiding
@@ -1096,48 +1226,58 @@ private fun Reader(
     suspend fun loadCard(key: String, id: String, force: Boolean = false) {
         if (!force && cards[id]?.loaded == true) return
         val kept = io { session(key).store?.body(id) }
-        if (kept != null) updateCard(id) { copy(body = kept) }
-        coroutineScope {
-            // The body and the parts list do not depend on each other and each is a round
-            // trip, so they go out together rather than one after the other.
-            val fetchedBody = async(Dispatchers.IO) { tried { session(key).jmap.body(id) } }
-            val fetchedParts = async(Dispatchers.IO) { tried { session(key).jmap.attachments(id) } }
-            val fresh = fetchedBody.await().fold(
-                onSuccess = { it.also { b -> io { session(key).store?.putBody(id, b) } } },
-                onFailure = { e ->
-                    // Only a failure when there was nothing kept. Offline, with a copy on
-                    // disk, is a card that opens rather than an error where it should be.
-                    if (kept == null) updateCard(id) { copy(bodyError = whyFailed(e)) }
-                    kept
-                },
-            )
-            if (fresh != null) updateCard(id) { copy(body = fresh) }
-            val parts = fetchedParts.await().getOrNull() ?: emptyList()
-            /*
-             * Finished only when there is actually a body, which is not the same as having
-             * tried. A fetch that failed with nothing on disk leaves an error where the
-             * message should be, and calling that loaded would mean the card never asked
-             * again: opening it a second time would return early and show the same error
-             * for as long as the conversation stayed open, with the network long since back.
-             *
-             * Marked here rather than after the pictures below, because a card with its body
-             * and its parts list is complete enough not to be fetched from the top again.
-             */
-            updateCard(id) { copy(attachments = parts, loaded = fresh != null) }
-            // Images the message carries with it are drawn. Fetching them asks the server
-            // this account is already signed in to, so it tells the sender nothing, which
-            // is the whole difference between these and the remote ones that stay blocked.
-            val embedded = parts.filter { it.inline && it.type.startsWith("image/") }
-            if (embedded.isEmpty()) return@coroutineScope
-            val blobs = embedded.map { part ->
-                async(Dispatchers.IO) { tried { session(key).jmap.blob(part) }.getOrNull()?.let { part.blobId to it } }
-            }.awaitAll().filterNotNull().toMap()
-            val images = blobs.mapNotNull { (blobId, raw) ->
-                // A part that claims to be an image and is not must not take the card down
-                // with it.
-                runCatching { Image.makeFromEncoded(raw).toComposeImageBitmap() }.getOrNull()?.let { blobId to it }
-            }.toMap()
-            updateCard(id) { copy(imageBytes = blobs, images = images) }
+        if (kept != null) {
+            Diagnostics.count(Metric.MESSAGE_OPEN_CACHE_HIT)
+            updateCard(id) { copy(body = kept) }
+        }
+        // Spans the round trip below, cache hit or not: the card always re-asks the server
+        // even when a kept copy is shown first, so this is the number that answers "why did
+        // opening this message feel slow just now."
+        Diagnostics.time(Metric.MESSAGE_OPEN_FETCH) {
+            coroutineScope {
+                // The body and the parts list do not depend on each other and each is a round
+                // trip, so they go out together rather than one after the other.
+                val fetchedBody = async(Dispatchers.IO) { tried { session(key).jmap.body(id) } }
+                val fetchedParts = async(Dispatchers.IO) { tried { session(key).jmap.attachments(id) } }
+                val fresh = fetchedBody.await().fold(
+                    onSuccess = { it.also { b -> io { session(key).store?.putBody(id, b) } } },
+                    onFailure = { e ->
+                        // Only a failure when there was nothing kept. Offline, with a copy on
+                        // disk, is a card that opens rather than an error where it should be.
+                        if (kept == null) updateCard(id) { copy(bodyError = whyFailed(e)) }
+                        kept
+                    },
+                )
+                if (fresh != null) updateCard(id) { copy(body = fresh) }
+                val parts = fetchedParts.await().getOrNull() ?: emptyList()
+                /*
+                 * Finished only when there is actually a body, which is not the same as having
+                 * tried. A fetch that failed with nothing on disk leaves an error where the
+                 * message should be, and calling that loaded would mean the card never asked
+                 * again: opening it a second time would return early and show the same error
+                 * for as long as the conversation stayed open, with the network long since back.
+                 *
+                 * Marked here rather than after the pictures below, because a card with its body
+                 * and its parts list is complete enough not to be fetched from the top again.
+                 */
+                updateCard(id) { copy(attachments = parts, loaded = fresh != null) }
+                // Images the message carries with it are drawn. Fetching them asks the server
+                // this account is already signed in to, so it tells the sender nothing, which
+                // is the whole difference between these and the remote ones that stay blocked.
+                val embedded = parts.filter { it.inline && it.type.startsWith("image/") }
+                if (embedded.isEmpty()) return@coroutineScope
+                val blobs = embedded.map { part ->
+                    async(Dispatchers.IO) {
+                        tried { session(key).jmap.blob(part) }.getOrNull()?.let { part.blobId to it }
+                    }
+                }.awaitAll().filterNotNull().toMap()
+                val images = blobs.mapNotNull { (blobId, raw) ->
+                    // A part that claims to be an image and is not must not take the card down
+                    // with it.
+                    runCatching { Image.makeFromEncoded(raw).toComposeImageBitmap() }.getOrNull()?.let { blobId to it }
+                }.toMap()
+                updateCard(id) { copy(imageBytes = blobs, images = images) }
+            }
         }
     }
 
@@ -1153,7 +1293,17 @@ private fun Reader(
      */
     LaunchedEffect(Unit) {
         while (true) {
-            if (!barState.busy) update = withContext(Dispatchers.IO) { Updates.newerVersion() }
+            if (!barState.busy) {
+                val found = withContext(Dispatchers.IO) { Updates.newerVersion() }
+                update = found
+                // A failed check and "nothing newer" both come back null from newerVersion:
+                // CURRENT covers both here rather than claiming a distinction this call site
+                // cannot actually tell apart.
+                Diagnostics.event(
+                    Metric.UPDATE_CHECK,
+                    if (found != null) UpdateCheckCategory.NEWER_FOUND else UpdateCheckCategory.CURRENT,
+                )
+            }
             delay(30 * 60_000L)
         }
     }
@@ -1174,7 +1324,9 @@ private fun Reader(
         val version = update ?: return@LaunchedEffect
         val already = (barState as? UpdateBarState.Waiting)?.version == version
         if (already || barState.busy) return@LaunchedEffect
-        if (withContext(Dispatchers.IO) { Updates.stage() }) barState = UpdateBarState.Waiting(version)
+        val staged = withContext(Dispatchers.IO) { Updates.stage() }
+        Diagnostics.event(Metric.UPDATE_STAGE, stageOutcome(staged))
+        if (staged) barState = UpdateBarState.Waiting(version)
     }
 
     /**
@@ -1193,12 +1345,20 @@ private fun Reader(
         barState = UpdateBarState.Staging(from)
         val fresh = withContext(Dispatchers.IO) { Updates.newerVersion() }
         val target = Updates.targetVersion(from, fresh)
-        if (target != from && !withContext(Dispatchers.IO) { Updates.stage() }) {
-            barState = Updates.afterFailure(target, Updates.lastProblem)
-            return
+        if (target != from) {
+            val staged = withContext(Dispatchers.IO) { Updates.stage() }
+            Diagnostics.event(Metric.UPDATE_STAGE, stageOutcome(staged))
+            if (!staged) {
+                barState = Updates.afterFailure(target, Updates.lastProblem)
+                return
+            }
         }
         barState = UpdateBarState.Installing(target)
         if (!withContext(Dispatchers.IO) { Updates.restartToUpdate() }) {
+            // A genuine success never reaches here: Windows kills this process mid-call, so
+            // FAILED is the only outcome this call site can ever actually record for
+            // update.apply. See [Updates.restartToUpdate]'s own KDoc.
+            Diagnostics.event(Metric.UPDATE_APPLY, UpdateApplyCategory.FAILED)
             barState = Updates.afterFailure(target, Updates.lastProblem)
         }
     }
@@ -1359,13 +1519,16 @@ private fun Reader(
         if (key == ALL_ACCOUNTS || showingResults || loadingMore || exhausted || loading) return
         loadingMore = true
         scope.launch {
-            val page = io { session(key).jmap.emails(mailbox.id, from = emails.size, unreadOnly = unreadOnly) }.orEmpty()
-            // Ids already on screen are dropped rather than trusted: mail arriving between
-            // two pages shifts every position down, and the seam is where it shows up twice.
-            val known = emails.map { it.id }.toSet()
-            emails = emails + page.filterNot { it.id in known }
-            exhausted = page.size < 100
-            loadingMore = false
+            Diagnostics.time(Metric.LIST_PAGE_LOAD) {
+                val page = io { session(key).jmap.emails(mailbox.id, from = emails.size, unreadOnly = unreadOnly) }
+                    .orEmpty()
+                // Ids already on screen are dropped rather than trusted: mail arriving between
+                // two pages shifts every position down, and the seam is where it shows up twice.
+                val known = emails.map { it.id }.toSet()
+                emails = emails + page.filterNot { it.id in known }
+                exhausted = page.size < 100
+                loadingMore = false
+            }
         }
     }
 
@@ -3170,15 +3333,20 @@ private fun Reader(
                             }
                         }
                         try {
-                            withContext(Dispatchers.IO) {
-                                account.jmap.send(outgoing, identity, drafts.id, folderFor("sent", boxes)?.id)
-                                // Written down only once it has actually gone. A tracked id
-                                // for a message that failed to send would sit in the list
-                                // forever waiting for an open that cannot come.
-                                pendingTrack?.let { account.store?.track(it) }
-                                // The sent message is its own copy in Sent, so the working
-                                // copy in Drafts is now a duplicate of mail already gone.
-                                draftId?.let { runCatching { account.jmap.destroy(listOf(it)) } }
+                            // Measured from here, not from the undo wait above: that pause is
+                            // deliberate UX, not server latency, and counting it would make
+                            // every send look exactly [Settings.undoSeconds] slower than it was.
+                            Diagnostics.time(Metric.SEND_COMPOSE_TO_SENT) {
+                                withContext(Dispatchers.IO) {
+                                    account.jmap.send(outgoing, identity, drafts.id, folderFor("sent", boxes)?.id)
+                                    // Written down only once it has actually gone. A tracked id
+                                    // for a message that failed to send would sit in the list
+                                    // forever waiting for an open that cannot come.
+                                    pendingTrack?.let { account.store?.track(it) }
+                                    // The sent message is its own copy in Sent, so the working
+                                    // copy in Drafts is now a duplicate of mail already gone.
+                                    draftId?.let { runCatching { account.jmap.destroy(listOf(it)) } }
+                                }
                             }
                             // Who you write to counts for more than who writes to you,
                             // so a sent message is the strongest signal the book gets.
@@ -3196,6 +3364,7 @@ private fun Reader(
                             draftId = null
                         } catch (e: Exception) {
                             sendError = whyFailed(e)
+                            Diagnostics.event(Metric.SEND_FAILURE, sendFailureCategoryOf(e))
                         } finally {
                             sending = false
                         }
@@ -3352,6 +3521,7 @@ private fun Reader(
                 onAddAccount = onAddAccount,
                 collapsed = collapsed,
                 onToggleCollapsed = { collapsed = !collapsed; Settings.setSidebarCollapsed(collapsed) },
+                onViewChangelog = { changelogDialog = unseenChanges(changelog(), Settings.changelogSeen()) },
                 folderMenu = { key, box, job -> folderAsk = FolderAsk(key, box, job) },
                 onSelect = { key, mailbox -> here = key to mailbox },
                 onWrite = {
@@ -3367,6 +3537,16 @@ private fun Reader(
                     error = folderError,
                     onClose = { folderAsk = null; folderError = null },
                     onConfirm = { answer -> doFolderJob(ask, answer) },
+                )
+            }
+            changelogDialog?.let { changes ->
+                ChangelogDialog(
+                    changes = changes,
+                    onClose = { suppress ->
+                        Updates.current?.let { Settings.setChangelogSeen(it) }
+                        Settings.setChangelogSuppressed(suppress)
+                        changelogDialog = null
+                    },
                 )
             }
             VerticalDivider()
@@ -3893,6 +4073,9 @@ internal fun Sidebar(
     onDashboard: () -> Unit = {},
     onAddAccount: () -> Unit,
     onWrite: () -> Unit,
+    /** The version line at the bottom is clicked to see what changed. A no-op default so
+     *  the screenshot tests, which have no changelog to open, need not pass one. */
+    onViewChangelog: () -> Unit = {},
     /** What a right-click on a folder can ask for. Null hides the menu entirely. */
     folderMenu: ((String, Mailbox, FolderJob) -> Unit)? = null,
     onSelect: (String, Mailbox) -> Unit,
@@ -4051,33 +4234,28 @@ internal fun Sidebar(
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Spacer(Modifier.height(8.dp))
 
-        accounts.forEach { account ->
-            if (collapsed) {
+        /*
+         * One compact control instead of a full width row per account: which addresses
+         * this is signed into is not news anybody reads on every glance down the sidebar.
+         * It folds into a stack of faces that reads at a glance as "there is more than
+         * one" and opens straight onto Settings, already on Accounts, on a single click.
+         * See [AccountStack] for the cap and what the last slot does past it.
+         */
+        if (collapsed) {
+            // Overlapping is a horizontal idea: stacked vertically in a 44dp rail it would
+            // just be circles touching edge to edge, so collapsed keeps the plain column
+            // of bare faces it has always had, which is already as compact as this gets.
+            accounts.forEach { account ->
                 Box(Modifier.padding(vertical = 4.dp)) { Avatar(account.name, account.email, 26.dp) }
-            } else {
-                Row(
-                    Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).padding(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Avatar(account.name, account.email, 26.dp)
-                    Spacer(Modifier.width(9.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            shortAccountName(account.name, account.email),
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            account.email,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
+            }
+        } else {
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 4.dp, horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                AccountStack(accounts, onClick = onSettings)
+                Spacer(Modifier.weight(1f))
+                AddAccountFace(onClick = onAddAccount)
             }
         }
 
@@ -4127,12 +4305,13 @@ internal fun Sidebar(
                 )
             }
         } else {
+            // "Add account" used to live here as its own text row; that job now belongs to
+            // the "+" beside the stack of faces above, so this row is icons only.
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                TextButton(onClick = onAddAccount) { Text("Add account", style = MaterialTheme.typography.bodySmall) }
                 IconButton(onClick = onDashboard, modifier = Modifier.size(28.dp)) {
                     Icon(
                         RampartIcons.Dashboard,
@@ -4180,18 +4359,143 @@ internal fun Sidebar(
             }
             /*
              * The version line, quiet and always in the same place at the bottom of the
-             * sidebar. What to do about a newer one is entirely the bottom bar's job now,
-             * so this says nothing else and never reopens anything on a click.
+             * sidebar. What to do about a newer one is still entirely the bottom bar's
+             * job, and this still says nothing about one. It is clickable now for a
+             * second, unrelated reason: it is the one place in the window that always
+             * names the version running right now, which makes it the natural way back
+             * to the changelog once the dialog that shows automatically has been
+             * dismissed, or switched off entirely with its own checkbox.
              */
             Updates.current?.let {
                 Text(
                     it,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.padding(start = 12.dp, top = 2.dp),
+                    modifier = Modifier.padding(start = 12.dp, top = 2.dp)
+                        .clickable(onClickLabel = "What changed in Rampart", role = Role.Button, onClick = onViewChangelog),
                 )
             }
         }
+    }
+}
+
+/** The face size the account stack and its "+" use, matching the old per-row avatar. */
+private val ACCOUNT_FACE_SIZE = 26.dp
+
+/** How much of one face the next one covers. */
+private val ACCOUNT_FACE_OVERLAP = 12.dp
+
+/** The ring drawn around each face, in the sidebar's own background, so an overlap reads
+ *  as one face sitting in front of another rather than two circles merging into one. */
+private val ACCOUNT_FACE_RING = 2.dp
+
+/** How many real faces the stack shows before the rest are folded into a "+N" badge. */
+private const val MAX_ACCOUNT_FACES = 3
+
+/**
+ * The overlapped stack of avatars that replaced a full width row per account.
+ *
+ * Justin's own description of what he wanted: "show both icons overlapped showing its
+ * logged into two or more emails, when you click on it it takes you the email settings
+ * page." One account is not a stack: its avatar is shown alone, still clickable, because
+ * reaching account settings from your own picture is a pattern nobody has to be taught
+ * (macOS, Slack and Google all do exactly this even when there is only one account signed
+ * in), and swapping to a different control the moment a second account arrives would make
+ * this change shape under somebody's finger rather than just grow.
+ *
+ * Capped at [MAX_ACCOUNT_FACES] real faces. A stack that keeps widening for every account
+ * stops reading as "there is more than one" and starts reading as the list this replaced;
+ * past the cap the last slot becomes a "+N" badge instead, the same size as a face, so the
+ * stack does not change width again as further accounts are added.
+ */
+@Composable
+private fun AccountStack(accounts: List<AccountMailboxes>, onClick: () -> Unit) {
+    val faceBox = ACCOUNT_FACE_SIZE + ACCOUNT_FACE_RING * 2
+    val shown = accounts.take(MAX_ACCOUNT_FACES)
+    // A plain Row would still measure each face at its full width even though later ones
+    // are drawn shifted over the one before, leaving a gap of dead space between the last
+    // visible face and whatever sits next to the stack. Sized explicitly instead, to the
+    // width the faces actually cover once overlapped, so the "+" beside it sits where it
+    // looks like it should rather than where an unshifted row would have put it.
+    val width = faceBox + (faceBox - ACCOUNT_FACE_OVERLAP) * maxOf(0, shown.size - 1)
+    Box(
+        Modifier.size(width = width, height = faceBox)
+            .clip(MaterialTheme.shapes.small)
+            .clickable(onClickLabel = "Account settings", role = Role.Button, onClick = onClick),
+    ) {
+        if (accounts.size <= 1) {
+            accounts.firstOrNull()?.let { account ->
+                Face { Avatar(account.name, account.email, ACCOUNT_FACE_SIZE) }
+            }
+        } else {
+            val overflow = accounts.size - shown.size
+            shown.forEachIndexed { index, account ->
+                Box(Modifier.offset(x = (faceBox - ACCOUNT_FACE_OVERLAP) * index)) {
+                    // The badge takes the last shown slot rather than sitting beside it, so
+                    // that account's own avatar is hidden too: the count it shows has to be
+                    // one more than the accounts past the cap, not just the accounts past it.
+                    if (overflow > 0 && index == shown.lastIndex) {
+                        Face { OverflowBadge(overflow + 1) }
+                    } else {
+                        Face { Avatar(account.name, account.email, ACCOUNT_FACE_SIZE) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * One face in the stack, ringed in the sidebar's own background so it reads as sitting in
+ * front of whatever it overlaps rather than merging into it.
+ */
+@Composable
+private fun Face(content: @Composable () -> Unit) {
+    Box(
+        Modifier.size(ACCOUNT_FACE_SIZE + ACCOUNT_FACE_RING * 2)
+            .background(MaterialTheme.colorScheme.background, CircleShape),
+        contentAlignment = Alignment.Center,
+    ) { content() }
+}
+
+/**
+ * What the stack's last slot shows once there are more accounts than [MAX_ACCOUNT_FACES].
+ * Sized and coloured like a face rather than drawn as one, so it reads as "more" rather
+ * than as somebody's unlabelled initials.
+ */
+@Composable
+private fun OverflowBadge(count: Int) {
+    Box(
+        Modifier.size(ACCOUNT_FACE_SIZE).background(MaterialTheme.colorScheme.surfaceVariant, CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            "+$count",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * The "add another account" affordance beside the stack. Justin asked for "a plus button
+ * to login to another one or something", so a plain "+" rather than a new glyph added to
+ * the icon pack: [IconPack] is a large surface shared by every theme, and a button used in
+ * exactly one place does not earn a new member on it. Its hit target is its own, separate
+ * from [AccountStack]'s, so clicking it calls [onClick] (the existing onAddAccount)
+ * directly rather than opening Settings first.
+ */
+@Composable
+private fun AddAccountFace(onClick: () -> Unit) {
+    Box(
+        Modifier.size(ACCOUNT_FACE_SIZE)
+            .clip(CircleShape)
+            .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
+            .clickable(onClickLabel = "Add another account", role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("+", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.outline)
     }
 }
 

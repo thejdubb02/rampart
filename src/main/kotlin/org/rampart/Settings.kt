@@ -178,6 +178,35 @@ object Settings {
 
     fun setTrackingCursor(value: Long) = write { put("trackingCursor", JsonPrimitive(value)) }
 
+    /**
+     * Where the diagnostics companion is, or empty when there is not one.
+     *
+     * The same shape as [trackingServer]: empty is the normal case for a stranger who has
+     * never run one, and the Diagnostics settings page's reporting half is then visibly
+     * unavailable rather than silently missing.
+     */
+    fun diagnosticsServer(): String = read()["diagnosticsServer"]?.jsonPrimitive?.contentOrNull.orEmpty()
+
+    fun setDiagnosticsServer(value: String) = write { put("diagnosticsServer", JsonPrimitive(value.trim())) }
+
+    /**
+     * Whether the numbers [Diagnostics] gathers locally get aggregated and sent on to
+     * [diagnosticsServer]. Never the raw events, never a message, never anything that names
+     * a folder, a sender or a subject: see `Diagnostics.kt` for what actually goes and why
+     * nothing else can.
+     *
+     * True whenever a server is configured and nobody has said otherwise, on the same logic
+     * open tracking's own setting already settled: the whole reason to build this is to see
+     * the data, so a build that ships with an endpoint reports by default, and a stranger
+     * who never configures one gets nothing sent because there is nowhere for it to go.
+     * Explicitly written once touched, so turning it off stays off even if the endpoint is
+     * later changed or a fresh build ships with a different one baked in.
+     */
+    fun diagnosticsReporting(): Boolean =
+        read()["diagnosticsReporting"]?.jsonPrimitive?.booleanOrNull ?: diagnosticsServer().isNotBlank()
+
+    fun setDiagnosticsReporting(value: Boolean) = write { put("diagnosticsReporting", JsonPrimitive(value)) }
+
     /** Which loader is drawn while Rampart waits. Kept apart from the theme, like the icons. */
     fun loader(): String = read()["loader"]?.jsonPrimitive?.contentOrNull.orEmpty()
 
@@ -296,5 +325,26 @@ object Settings {
             },
         )
     }
+
+    /**
+     * The version the changelog dialog last showed, or empty before it ever has.
+     *
+     * Empty is also what an install made before this feature existed carries, and that is
+     * deliberate: there is nothing to compare it against, so the first run after upgrading
+     * to a build with this feature records the running version silently rather than
+     * showing a dialog for however many releases came before anyone could see one.
+     */
+    fun changelogSeen(): String = read()["changelogSeen"]?.jsonPrimitive?.contentOrNull.orEmpty()
+
+    fun setChangelogSeen(version: String) = write { put("changelogSeen", JsonPrimitive(version)) }
+
+    /**
+     * Whether the changelog dialog has been switched off. Off (shown) by default; once
+     * somebody ticks "Don't show this again" this stays true across every future update
+     * until they turn it back on themselves.
+     */
+    fun changelogSuppressed(): Boolean = read()["changelogSuppressed"]?.jsonPrimitive?.booleanOrNull ?: false
+
+    fun setChangelogSuppressed(value: Boolean) = write { put("changelogSuppressed", JsonPrimitive(value)) }
 
 }

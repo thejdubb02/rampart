@@ -47,6 +47,7 @@ fun main() {
 
     server.createContext("/o/") { exchange -> pixel(exchange, log) }
     server.createContext("/opens") { exchange -> opens(exchange, log, token) }
+    server.createContext("/diag") { exchange -> diag(exchange, log, token) }
     /*
      * Never behind anything. A health check that answers 200 from a login page says the
      * service is up when it is not, which is the trap the rules file calls out by name.
@@ -116,6 +117,189 @@ private fun opens(exchange: HttpExchange, log: Log, token: String) {
         append("]}")
     }
     reply(exchange, 200, body.toByteArray(), "application/json")
+}
+
+/**
+ * Rampart's own diagnostics: how long things took and how often something happened,
+ * aggregated by the client over a few minutes before it ever reaches here.
+ *
+ * Authenticated the same way [opens] is, because this is data about how the install is
+ * running rather than about anybody's mail, but it is still nobody's business but the
+ * person who runs the client and whoever they choose to run this for them.
+ */
+private fun diag(exchange: HttpExchange, log: Log, token: String) {
+    if (exchange.requestMethod != "POST") {
+        reply(exchange, 405, """{"error":"use POST"}""".toByteArray(), "application/json")
+        return
+    }
+    val given = exchange.requestHeaders.getFirst("Authorization").orEmpty().removePrefix("Bearer ").trim()
+    if (!sameToken(given, token)) {
+        reply(exchange, 401, """{"error":"unauthorised"}""".toByteArray(), "application/json")
+        return
+    }
+    // A batch is a handful of small numbers; anything past this is not the client we wrote,
+    // and reading it into memory to find that out is the wrong way to learn it.
+    val raw = exchange.requestBody.use { it.readNBytes(MAX_DIAG_BODY_BYTES + 1) }
+    if (raw.size > MAX_DIAG_BODY_BYTES) {
+        reply(exchange, 413, """{"error":"too large"}""".toByteArray(), "application/json")
+        return
+    }
+    val items = runCatching { parseDiagBatch(String(raw, Charsets.UTF_8)) }.getOrDefault(emptyList())
+    val stamped = items.map { it.copy(at = System.currentTimeMillis()) }
+    runCatching { log.recordDiagnostics(stamped) }
+    reply(exchange, 200, """{"stored":${stamped.size}}""".toByteArray(), "application/json")
+}
+
+private const val MAX_DIAG_BODY_BYTES = 64 * 1024
+
+/**
+ * The metric names this service will actually keep, mirrored by name from the client's own
+ * closed allowlist in `Diagnostics.kt`. The two are two different Gradle modules and cannot
+ * share the enum itself, so this is a second copy of the same list rather than a reference
+ * to it: a metric added on one side and not the other is caught here as "not stored", never
+ * as a crash.
+ *
+ * This is a second line of defence, not the first. The client cannot construct an event
+ * outside its own [Metric][org.rampart.Metric] enum in the first place; this exists for the
+ * case that matters more than usual, which is a future bug on that side, not a caller who
+ * has the token and wants to send something else. Either way, an unrecognised metric is
+ * simply not stored, the same silent refusal [parseDiagBatch] gives anything malformed.
+ */
+private val KNOWN_METRICS = setOf(
+    "message.open.total", "message.open.fetch", "message.open.render",
+    "message.open.cache_hit", "message.open.read_ahead_hit",
+    "list.load.cold", "list.load.warm", "list.page.load", "list.commands",
+    "search.query", "search.fallback",
+    "send.compose_to_sent", "send.failure",
+    "sync.poll", "sync.push_latency", "sync.push_reconnect",
+    "app.startup", "app.crash",
+    "update.check", "update.stage", "update.apply",
+)
+
+/**
+ * The one shape this service reads as input: `{"items":[{"metric":"...", ...}, ...]}`.
+ *
+ * Hand-rolled for the same reason [quoted] is: this service's only dependency is the
+ * SQLite driver, by design, and a JSON library would be a bigger addition than the parser
+ * below. It is a general enough reader of JSON values that it does not need to know this
+ * service's own shape to parse it, but it is not trying to be a complete one: malformed
+ * input becomes an empty result rather than an exception, because a client that sent
+ * something broken should get nothing stored, not a stack trace shown to whoever holds
+ * the token.
+ */
+internal fun parseDiagBatch(text: String): List<DiagAggregate> {
+    val root = parseJson(text) as? Map<*, *> ?: return emptyList()
+    val items = root["items"] as? List<*> ?: return emptyList()
+    return items.mapNotNull { raw ->
+        val item = raw as? Map<*, *> ?: return@mapNotNull null
+        val metric = (item["metric"] as? String)?.takeIf { it.length in 1..80 && it in KNOWN_METRICS }
+            ?: return@mapNotNull null
+        val category = (item["category"] as? String)?.takeIf { it.isNotBlank() && it.length <= 80 }
+        val count = (item["count"] as? Double)?.toLong()?.takeIf { it > 0 } ?: return@mapNotNull null
+        DiagAggregate(
+            metric = metric,
+            category = category,
+            count = count,
+            sum = item["sum"] as? Double,
+            min = item["min"] as? Double,
+            max = item["max"] as? Double,
+            at = 0L,
+        )
+    }.take(200)
+}
+
+/** Parses one JSON value from [text], or null on anything that is not well formed. */
+internal fun parseJson(text: String): Any? = runCatching {
+    val reader = JsonReader(text)
+    reader.value()
+}.getOrNull()
+
+/**
+ * A small recursive-descent reader for the only JSON shapes a diagnostics batch is ever
+ * built from: an object holding an array of flat objects, whose own values are only
+ * strings and numbers. No boolean, no `null` literal and no escape beyond a literal quote
+ * or backslash: none of those appear in a metric name, a category token or a count, so
+ * reading them would be generality this shape never asks for. Values come back as
+ * `Map<String, Any?>`, `List<Any?>`, `String` or `Double`, which is enough for
+ * [parseDiagBatch] to pick apart without this class knowing anything about diagnostics.
+ */
+private class JsonReader(private val text: String) {
+    private var i = 0
+
+    fun value(): Any? {
+        skipWs()
+        if (i >= text.length) return null
+        return when (text[i]) {
+            '{' -> obj()
+            '[' -> arr()
+            '"' -> str()
+            else -> num()
+        }
+    }
+
+    private fun skipWs() {
+        while (i < text.length && text[i].isWhitespace()) i++
+    }
+
+    private fun obj(): Map<String, Any?> {
+        val map = LinkedHashMap<String, Any?>()
+        i++ // {
+        skipWs()
+        if (i < text.length && text[i] == '}') { i++; return map }
+        while (i < text.length) {
+            skipWs()
+            val key = str()
+            skipWs()
+            if (i >= text.length || text[i] != ':') break
+            i++
+            map[key] = value()
+            skipWs()
+            if (i < text.length && text[i] == ',') { i++; continue }
+            if (i < text.length && text[i] == '}') { i++; break }
+            break
+        }
+        return map
+    }
+
+    private fun arr(): List<Any?> {
+        val list = ArrayList<Any?>()
+        i++ // [
+        skipWs()
+        if (i < text.length && text[i] == ']') { i++; return list }
+        while (i < text.length) {
+            list.add(value())
+            skipWs()
+            if (i < text.length && text[i] == ',') { i++; skipWs(); continue }
+            if (i < text.length && text[i] == ']') { i++; break }
+            break
+        }
+        return list
+    }
+
+    private fun str(): String {
+        if (i >= text.length || text[i] != '"') return ""
+        i++
+        val sb = StringBuilder()
+        while (i < text.length && text[i] != '"') {
+            val c = text[i]
+            if (c == '\\' && i + 1 < text.length) {
+                i++
+                sb.append(text[i]) // a literal quote or backslash; nothing else escapes here
+                i++
+            } else {
+                sb.append(c)
+                i++
+            }
+        }
+        if (i < text.length) i++ // closing quote
+        return sb.toString()
+    }
+
+    private fun num(): Double {
+        val start = i
+        while (i < text.length && (text[i].isDigit() || text[i] in "+-.eE")) i++
+        return text.substring(start, i).toDoubleOrNull() ?: 0.0
+    }
 }
 
 /**

@@ -645,6 +645,11 @@ internal class Imap private constructor(
      * for the next caller to reuse.
      */
     private fun <T> useFolder(mailboxId: String, mode: Int, block: (IMAPFolder) -> T): T = gate.withLock {
+        // One IMAP command issued through this gate, whether it reuses the folder already
+        // open or opens a fresh one: see the KDoc above for why reuse is the whole point,
+        // and Diagnostics.kt for why this number is worth keeping an eye on rather than
+        // trusting it to stay small.
+        Diagnostics.count(Metric.LIST_COMMANDS)
         val held = open
         // A folder already open for writing serves a reader too, so a read after a move does
         // not re-select the folder for the sake of the weaker mode.

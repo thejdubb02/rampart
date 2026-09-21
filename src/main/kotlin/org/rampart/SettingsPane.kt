@@ -58,6 +58,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.isTraySupported
 import androidx.compose.foundation.Image
+import kotlin.math.roundToInt
 
 /**
  * Settings, as a pane rather than a dialog.
@@ -170,6 +171,7 @@ internal fun SettingsPane(
                         "away" -> AwayPage(vacation, vacationError, onVacation)
                         "tracking" -> TrackingPage(onTrackingServer)
                         "assistant" -> AssistantPage(accounts)
+                        "diagnostics" -> DiagnosticsPage()
                         "about" -> AboutPage(update, onRestart)
                     }
                 }
@@ -197,6 +199,7 @@ private val SettingsPages: List<Triple<String, String, String>> = listOf(
     Triple("away", "Away reply", "Mail"),
     Triple("tracking", "Open tracking", "Mail"),
     Triple("assistant", "Assistant", "Mail"),
+    Triple("diagnostics", "Diagnostics", "Rampart"),
     Triple("about", "About", "Rampart"),
 )
 
@@ -857,6 +860,185 @@ private fun TrackingPage(onTrackingServer: (String) -> Unit = {}) {
             "registers at all.",
     )
 }
+
+/**
+ * What Rampart has measured about itself, and whether any of it leaves the machine.
+ *
+ * Two halves, deliberately drawn in that order. What is being measured works with nothing
+ * configured below and no toggle at all, because it answers "why did that message feel
+ * slow just now" from what is already on this computer. Sending anything on is the second,
+ * separate decision, and it is worded here in terms of what actually goes: numbers and a
+ * short list of named categories, never a message. See `Diagnostics.kt` for the allowlist
+ * this page can only ever be a window onto, never a way around.
+ */
+@Composable
+private fun DiagnosticsPage() {
+    val scope = rememberCoroutineScope()
+    var server by remember { mutableStateOf(Settings.diagnosticsServer()) }
+    var token by remember { mutableStateOf(Secrets.loadNamed(Diagnostics.TOKEN_NAME).orEmpty()) }
+    var reporting by remember { mutableStateOf(Settings.diagnosticsReporting()) }
+    var checking by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<String?>(null) }
+    var worked by remember { mutableStateOf(false) }
+    // Read once, when the page opens, the same way the settings fields below are: this is a
+    // read-out of what already happened, not a live feed that has to keep redrawing itself.
+    val events = remember { Diagnostics.recent() }
+
+    Section(
+        "What is being measured, right now",
+        "How long messages took to open, how many folder loads needed the server rather " +
+            "than the local copy, and what kind of trouble a send or a sync ran into. This " +
+            "works with nothing set up below: it is read from this computer alone.",
+    )
+
+    val totals = events.filter { it.metric == Metric.MESSAGE_OPEN_TOTAL.key }.take(8)
+    val fetches = events.filter { it.metric == Metric.MESSAGE_OPEN_FETCH.key }.take(8)
+    val renders = events.filter { it.metric == Metric.MESSAGE_OPEN_RENDER.key }.take(8)
+    val commands = events.filter { it.metric == Metric.LIST_COMMANDS.key }
+    val troubles = events.filter { it.category != null }.take(8)
+
+    if (totals.isEmpty() && commands.isEmpty() && troubles.isEmpty()) {
+        Text(
+            "Nothing yet this session. Open a few messages and a folder or two, then come " +
+                "back here.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline,
+        )
+    }
+    if (totals.isNotEmpty()) {
+        Text("Message open, most recent first", style = MaterialTheme.typography.labelLarge)
+        Text(totals.joinToString("   ") { msText(it.value) }, style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(6.dp))
+    }
+    if (fetches.isNotEmpty()) {
+        Text("Fetch, of the same", style = MaterialTheme.typography.labelLarge)
+        Text(fetches.joinToString("   ") { msText(it.value) }, style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(6.dp))
+    }
+    if (renders.isNotEmpty()) {
+        Text("Render, of the same", style = MaterialTheme.typography.labelLarge)
+        Text(renders.joinToString("   ") { msText(it.value) }, style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(6.dp))
+    }
+    if (commands.isNotEmpty()) {
+        Text(
+            "${commands.size} IMAP or JMAP commands issued, across the folder loads kept here.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline,
+        )
+        Spacer(Modifier.height(6.dp))
+    }
+    if (troubles.isNotEmpty()) {
+        Spacer(Modifier.height(8.dp))
+        Text("Recent trouble, by category", style = MaterialTheme.typography.labelLarge)
+        troubles.forEach { row ->
+            Text(
+                row.metric + ": " + row.category + (row.detail?.let { " ($it)" } ?: ""),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
+
+    Spacer(Modifier.height(18.dp))
+    Section(
+        "Sending it on",
+        "Aggregated counts and durations only, every few minutes: never a subject, a " +
+            "sender, a recipient, a folder's name or a search term, and never the text of " +
+            "an error, only which of a short list of categories it was.",
+    )
+    Row(
+        Modifier.fillMaxWidth()
+            .clickable { reporting = !reporting; Settings.setDiagnosticsReporting(reporting) }
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Send this on to the server below", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                if (server.isBlank()) "There is nowhere to send it until a server is saved below."
+                else "On by default once a server is saved. This is what turns it back off.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+        Switch(checked = reporting, onCheckedChange = { reporting = it; Settings.setDiagnosticsReporting(it) })
+    }
+    Spacer(Modifier.height(14.dp))
+
+    OutlinedTextField(
+        value = server,
+        onValueChange = { server = it; result = null },
+        label = { Text("Your diagnostics server") },
+        placeholder = { Text("https://img.example.com") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Spacer(Modifier.height(10.dp))
+    OutlinedTextField(
+        value = token,
+        onValueChange = { token = it; result = null },
+        label = { Text("The token you started it with") },
+        singleLine = true,
+        visualTransformation = PasswordVisualTransformation(),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Spacer(Modifier.height(12.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Button(
+            enabled = !checking,
+            onClick = {
+                checking = true
+                result = null
+                scope.launch {
+                    val problem = withContext(Dispatchers.IO) { Diagnostics.checkServer(server, token) }
+                    if (problem == null) {
+                        Settings.setDiagnosticsServer(server)
+                        result = Secrets.storeNamed(Diagnostics.TOKEN_NAME, token)
+                            ?: "Saved. Rampart can reach it."
+                        // The default depends on a server now being configured, so it is
+                        // re-read rather than assumed, the same as the tracking page's own
+                        // check-and-save does not need to: that one has no separate toggle.
+                        reporting = Settings.diagnosticsReporting()
+                        worked = true
+                    } else {
+                        result = problem
+                        worked = false
+                    }
+                    checking = false
+                }
+            },
+        ) { Text(if (checking) "Checking" else "Check and save") }
+        if (checking) {
+            Spacer(Modifier.width(12.dp))
+            Spinner(size = 20.dp, thickness = 2.dp)
+        }
+        if (server.isNotBlank() || token.isNotBlank()) {
+            Spacer(Modifier.width(8.dp))
+            TextButton(onClick = {
+                server = ""
+                token = ""
+                reporting = false
+                Settings.setDiagnosticsServer("")
+                Settings.setDiagnosticsReporting(false)
+                Secrets.storeNamed(Diagnostics.TOKEN_NAME, "")
+                result = "Removed. Nothing will be sent."
+                worked = false
+            }) { Text("Remove the server") }
+        }
+    }
+    result?.let {
+        Spacer(Modifier.height(10.dp))
+        Text(
+            it,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (worked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+        )
+    }
+}
+
+/** "182 ms", or "" for the rare event with no duration at all. */
+private fun msText(value: Double?): String = if (value == null) "" else "${value.roundToInt()} ms"
 
 /**
  * The model, if there is to be one.

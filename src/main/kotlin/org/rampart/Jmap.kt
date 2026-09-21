@@ -1209,6 +1209,11 @@ internal class Jmap private constructor(
      * server that happens not to offer it.
      */
     private fun call(vararg invocations: JsonArray, also: String? = null): List<JsonArray> {
+        // One round trip, however many method calls are batched inside it, which is the
+        // whole reason this file batches them: counted here, once per call, so a page load
+        // that quietly starts asking for more round trips again shows up as a number rather
+        // than a feeling.
+        Diagnostics.count(Metric.LIST_COMMANDS)
         val body = buildJsonObject {
             putJsonArray("using") {
                 add(CORE); add(MAIL); add(SUBMISSION)

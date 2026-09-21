@@ -45,4 +45,31 @@ class ChangelogTest {
         assertTrue(all.isNotEmpty(), "no changelog resource in the build")
         assertTrue(all.first().version.startsWith("0.1."))
     }
+
+    @Test
+    fun `only versions newer than what was last seen come back`() {
+        val all = listOf(
+            Change("0.1.44", "2026-09-21", "third"),
+            Change("0.1.43", "2026-09-20", "second"),
+            Change("0.1.42", "2026-09-19", "first"),
+        )
+        assertEquals(all.take(2), unseenChanges(all, "0.1.42"))
+    }
+
+    @Test
+    fun `nothing is unseen once the newest has already been shown`() {
+        val all = listOf(Change("0.1.44", "2026-09-21", "third"), Change("0.1.43", "2026-09-20", "second"))
+        assertTrue(unseenChanges(all, "0.1.44").isEmpty())
+    }
+
+    @Test
+    fun `skipping several releases surfaces every one missed, not just the latest`() {
+        val all = listOf(
+            Change("0.1.44", "2026-09-21", "third"),
+            Change("0.1.43", "2026-09-20", "second"),
+            Change("0.1.42", "2026-09-19", "first"),
+            Change("0.1.41", "2026-09-18", "already seen"),
+        )
+        assertEquals(all.take(3), unseenChanges(all, "0.1.41"))
+    }
 }

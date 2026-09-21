@@ -22,6 +22,28 @@ data class Fetch(
 )
 
 /**
+ * One line of Rampart's own diagnostics: how a named metric went, aggregated by the
+ * client over a short window before it was ever sent.
+ *
+ * **Everything the companion is allowed to know about this is in this class**, the same
+ * discipline [Fetch] already holds it to. A metric name and a category, both from closed
+ * allowlists in the client (`Diagnostics.kt`), a count and the shape of a duration. No
+ * message, no subject, no recipient, no folder, no account: the client's own aggregate has
+ * nowhere to put one, so there is nothing here for one to arrive in either.
+ */
+data class DiagAggregate(
+    val metric: String,
+    /** Null for a metric with no categories, only counts and durations. */
+    val category: String?,
+    val count: Long,
+    val sum: Double?,
+    val min: Double?,
+    val max: Double?,
+    /** When the companion received the batch, not whatever the client's own clock said. */
+    val at: Long,
+)
+
+/**
  * The log, in SQLite.
  *
  * SQLite because the whole service is one table and a few thousand rows a year, and
@@ -43,6 +65,14 @@ class Log(path: String) : AutoCloseable {
             )
             // The only query there is: everything since a time, in order.
             s.execute("CREATE INDEX IF NOT EXISTS fetch_at ON fetch(at)")
+            // Diagnostics, in the same database rather than a second file: this is still
+            // one companion doing more than one job, not two companions.
+            s.execute(
+                "CREATE TABLE IF NOT EXISTS diagnostic (" +
+                    "metric TEXT NOT NULL, category TEXT, count INTEGER NOT NULL, " +
+                    "sum REAL, min REAL, max REAL, at INTEGER NOT NULL)",
+            )
+            s.execute("CREATE INDEX IF NOT EXISTS diagnostic_at ON diagnostic(at)")
         }
     }
 
@@ -79,18 +109,75 @@ class Log(path: String) : AutoCloseable {
         }
 
     /**
-     * Throws away anything older than [days].
-     *
-     * A log that grows forever is a log somebody eventually has to deal with, and the
-     * client keeps its own copy of everything it has read, so the server's copy is a
-     * handover buffer rather than the record.
+     * Writes down one batch of aggregates a client sent, stamped with when the companion
+     * received them rather than trusting whatever clock the client is running on.
+     */
+    fun recordDiagnostics(items: List<DiagAggregate>) {
+        if (items.isEmpty()) return
+        connection.prepareStatement(
+            "INSERT INTO diagnostic (metric, category, count, sum, min, max, at) VALUES (?,?,?,?,?,?,?)",
+        ).use { s ->
+            items.forEach { item ->
+                s.setString(1, item.metric)
+                if (item.category == null) s.setNull(2, java.sql.Types.VARCHAR) else s.setString(2, item.category)
+                s.setLong(3, item.count)
+                if (item.sum == null) s.setNull(4, java.sql.Types.REAL) else s.setDouble(4, item.sum)
+                if (item.min == null) s.setNull(5, java.sql.Types.REAL) else s.setDouble(5, item.min)
+                if (item.max == null) s.setNull(6, java.sql.Types.REAL) else s.setDouble(6, item.max)
+                s.setLong(7, item.at)
+                s.addBatch()
+            }
+            s.executeBatch()
+        }
+    }
+
+    /**
+     * Everything recorded since [since], oldest first. No route serves this today: [Tracker]
+     * only ever writes to this table. It exists so the data can be checked without going
+     * around SQLite by hand, the same reason [since] above exists for [Fetch].
+     */
+    fun diagnosticsSince(since: Long, limit: Int = 5000): List<DiagAggregate> =
+        connection.prepareStatement(
+            "SELECT metric, category, count, sum, min, max, at FROM diagnostic WHERE at > ? ORDER BY at ASC LIMIT ?",
+        ).use { s ->
+            s.setLong(1, since)
+            s.setInt(2, limit)
+            s.executeQuery().use { rows ->
+                buildList {
+                    while (rows.next()) {
+                        add(
+                            DiagAggregate(
+                                metric = rows.getString(1),
+                                category = rows.getString(2),
+                                count = rows.getLong(3),
+                                sum = rows.getObject(4) as? Double,
+                                min = rows.getObject(5) as? Double,
+                                max = rows.getObject(6) as? Double,
+                                at = rows.getLong(7),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+
+    /**
+     * Throws away anything older than [days], from both tables. One knob for both: a
+     * diagnostics aggregate is exactly as disposable as a fetch is, and the client is the
+     * record for neither of them.
      */
     fun forgetOlderThan(days: Int, now: Long = System.currentTimeMillis()): Int {
         if (days <= 0) return 0
-        return connection.prepareStatement("DELETE FROM fetch WHERE at < ?").use { s ->
-            s.setLong(1, now - days * 24L * 60 * 60 * 1000)
+        val cutoff = now - days * 24L * 60 * 60 * 1000
+        val fetches = connection.prepareStatement("DELETE FROM fetch WHERE at < ?").use { s ->
+            s.setLong(1, cutoff)
             s.executeUpdate()
         }
+        val diagnostics = connection.prepareStatement("DELETE FROM diagnostic WHERE at < ?").use { s ->
+            s.setLong(1, cutoff)
+            s.executeUpdate()
+        }
+        return fetches + diagnostics
     }
 
     override fun close() = connection.close()

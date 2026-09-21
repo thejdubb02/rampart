@@ -32,13 +32,14 @@ IMAP. That is why it ships ahead of open tracking rather than behind it.
 ## Class 2: needs the companion server
 
 One optional service, in `server/` in this repo, with a Dockerfile and a compose file.
-**Built on 2026-09-18**; `server/README.md` is how to run one. One
-container, one hostname, one setting in Rampart. **There is one companion, not one per
-feature**, and everything that needs it lights up together when you point Rampart at it.
-Five separate addons would mean nobody runs any of them.
+**Built on 2026-09-18**; `server/README.md` is how to run one. One container, one
+hostname. **There is one companion, not one per feature**: running it once is the whole
+cost of everything below, rather than a separate box per feature that means nobody runs
+any of them. Each feature still gets its own field and its own token in Rampart's
+settings, deliberately, because wanting one of these does not mean wanting the other.
 
-Leave the setting empty and the features below are visibly unavailable, with one sentence
-saying why and a link here. They are never silently missing: a feature that is quietly
+Leave a setting empty and the feature it belongs to is visibly unavailable, with one
+sentence saying why and a link here. Never silently missing: a feature that is quietly
 absent reads as a broken app.
 
 What needs it today:
@@ -47,6 +48,16 @@ What needs it today:
   is not somewhere. The companion serves a 1x1 GIF at an id Rampart minted, keeps the log
   of what was fetched and when, and answers one authenticated question: what has opened
   since I last asked. `open-tracking.md` has the design.
+- **Diagnostics.** Local timing and health statistics work with no server and no setting
+  at all: the Diagnostics settings page shows them from this computer alone. Pointing
+  Rampart at a companion additionally sends the aggregate on, a few minutes at a time, so
+  real performance data can be looked at rather than guessed about. Off by default for a
+  stranger who never configures one; on by default once a build ships with a server
+  already filled in, because the point of building this is to actually see the numbers.
+  Never a subject, a sender, a recipient, a folder's name or a search term, and never the
+  text of an error, only which of a short list of categories it fell into. See
+  `Diagnostics.kt` in `src/main/kotlin/org/rampart/` for the full catalog and the no-PII
+  rules it enforces.
 
 What the companion is not, and will not become:
 
