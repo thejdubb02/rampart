@@ -74,6 +74,7 @@ Three things worth getting right:
 | Variable | Default | What it does |
 |---|---|---|
 | `RAMPART_TRACKER_TOKEN` | none, required | The shared secret on `/opens` and `/diag`. Give the same one to Rampart |
+| `RAMPART_DIAG_TOKEN` | none, optional | A second secret, valid on `/diag` only, never `/opens`. See below |
 | `RAMPART_TRACKER_KEEP_DAYS` | `400` | How long a fetch or a diagnostics batch is kept before it is thrown away. One knob for both |
 | `RAMPART_TRACKER_DB` | `/data/tracker.db` | Where the database lives |
 | `PORT` | `8080` | The port inside the container |
@@ -81,13 +82,22 @@ Three things worth getting right:
 The server is a handover buffer, not the record. Rampart keeps its own copy of everything
 it has read, so a short `KEEP_DAYS` loses nothing as long as Rampart runs occasionally.
 
+**Why there are two tokens.** `RAMPART_TRACKER_TOKEN` is the one thing worth protecting on
+this server: whose mail was opened, and when, on `/opens`. A build of Rampart that ships an
+inbound point baked in for every install of a public, open-source app cannot carry that
+token, because anyone who reads the source could then read that log. `RAMPART_DIAG_TOKEN`
+is what a build like that carries instead: it can post to `/diag` and do nothing else, so
+the source being public costs this server nothing worse than somebody posting junk numbers.
+Self-hosting your own copy for your own diagnostics never needs it; `RAMPART_TRACKER_TOKEN`
+alone still works on `/diag` the same as it always did.
+
 ## What it serves
 
 | Route | Auth | What |
 |---|---|---|
 | `GET /o/<id>.gif` | none, by necessity | A 1x1 transparent GIF, 42 bytes, `no-store`. Records the fetch |
 | `GET /opens?since=<ms>` | `Authorization: Bearer <token>` | Everything fetched since that moment, oldest first |
-| `POST /diag` | `Authorization: Bearer <token>` | Aggregated diagnostics, a batch at a time. See below |
+| `POST /diag` | `Authorization: Bearer <token>` or `<diag-token>` | Aggregated diagnostics, a batch at a time. See below |
 | `GET /health` | none, and never gate it | `ok` |
 
 `/o/` always answers 200 with an image, whatever the id. A 404 for an unknown id would tell

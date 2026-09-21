@@ -12,6 +12,10 @@ services:
     restart: unless-stopped
     environment:
       RAMPART_TRACKER_TOKEN: ${RAMPART_TRACKER_TOKEN:?set RAMPART_TRACKER_TOKEN in .env}
+      # A second, optional token, valid on /diag only, never /opens. Set this instead of
+      # baking RAMPART_TRACKER_TOKEN into a build that ships to more than one person: see
+      # README.md's "Why there are two tokens".
+      RAMPART_DIAG_TOKEN: ${RAMPART_DIAG_TOKEN:-}
       # How long the server keeps a fetch before throwing it away. The client keeps its own
       # copy of everything it has read, so this is a handover buffer, not the record.
       RAMPART_TRACKER_KEEP_DAYS: ${RAMPART_TRACKER_KEEP_DAYS:-400}

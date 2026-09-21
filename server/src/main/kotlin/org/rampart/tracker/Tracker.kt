@@ -35,6 +35,16 @@ fun main() {
         )
         kotlin.system.exitProcess(2)
     }
+    /*
+     * A second, optional token that only ever unlocks [diag], never [opens]. [token] above
+     * is the one thing this server was built to protect: whose mail was opened, and when.
+     * Handing that same value to every install of an app whose source is public would mean
+     * anyone who reads the source could read that log too. A build that ships an inbound
+     * point baked in for everyone gets this one instead: it can post diagnostics and do
+     * nothing else, so the source being public costs this server nothing worse than
+     * somebody posting junk numbers.
+     */
+    val diagToken = System.getenv("RAMPART_DIAG_TOKEN").orEmpty().takeIf { it.length >= 16 }
     val port = System.getenv("PORT")?.toIntOrNull() ?: 8080
     val log = Log(System.getenv("RAMPART_TRACKER_DB") ?: "/data/tracker.db")
     val keepDays = System.getenv("RAMPART_TRACKER_KEEP_DAYS")?.toIntOrNull() ?: 400
@@ -47,7 +57,7 @@ fun main() {
 
     server.createContext("/o/") { exchange -> pixel(exchange, log) }
     server.createContext("/opens") { exchange -> opens(exchange, log, token) }
-    server.createContext("/diag") { exchange -> diag(exchange, log, token) }
+    server.createContext("/diag") { exchange -> diag(exchange, log, token, diagToken) }
     /*
      * Never behind anything. A health check that answers 200 from a login page says the
      * service is up when it is not, which is the trap the rules file calls out by name.
@@ -123,17 +133,18 @@ private fun opens(exchange: HttpExchange, log: Log, token: String) {
  * Rampart's own diagnostics: how long things took and how often something happened,
  * aggregated by the client over a few minutes before it ever reaches here.
  *
- * Authenticated the same way [opens] is, because this is data about how the install is
- * running rather than about anybody's mail, but it is still nobody's business but the
- * person who runs the client and whoever they choose to run this for them.
+ * Accepts either [token] or [diagToken], unlike [opens] which only ever accepts [token].
+ * [diagToken] exists so a value that is public, because it ships in an app's own source,
+ * can still write here without being able to read [opens] back: see its own KDoc in
+ * [main] for why that split matters.
  */
-private fun diag(exchange: HttpExchange, log: Log, token: String) {
+private fun diag(exchange: HttpExchange, log: Log, token: String, diagToken: String?) {
     if (exchange.requestMethod != "POST") {
         reply(exchange, 405, """{"error":"use POST"}""".toByteArray(), "application/json")
         return
     }
     val given = exchange.requestHeaders.getFirst("Authorization").orEmpty().removePrefix("Bearer ").trim()
-    if (!sameToken(given, token)) {
+    if (!diagAuthorised(given, token, diagToken)) {
         reply(exchange, 401, """{"error":"unauthorised"}""".toByteArray(), "application/json")
         return
     }
@@ -339,6 +350,15 @@ internal fun sameToken(given: String, expected: String): Boolean {
         MessageDigest.getInstance("SHA-256").digest(expected.toByteArray()),
     )
 }
+
+/**
+ * Whether a caller may reach [diag]: either [token], which also reads [opens] back, or
+ * [diagToken], which never does. Pulled out of [diag] itself so the two-token rule has one
+ * place to be right and one place to be tested, instead of being read back out of an HTTP
+ * handler.
+ */
+internal fun diagAuthorised(given: String, token: String, diagToken: String?): Boolean =
+    sameToken(given, token) || (diagToken != null && sameToken(given, diagToken))
 
 /**
  * Who asked, as far as it can be told.

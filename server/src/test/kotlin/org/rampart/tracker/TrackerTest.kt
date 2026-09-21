@@ -87,6 +87,18 @@ class TrackerTest {
     }
 
     @Test
+    fun `diag takes either token, opens would only ever take the first`() {
+        // The main token still works on its own, the same as before this split existed.
+        assertTrue(diagAuthorised("main-token-value", "main-token-value", null))
+        assertTrue(diagAuthorised("main-token-value", "main-token-value", "public-token-value"))
+        // The public one works too, but only here: nothing calls diagAuthorised for /opens.
+        assertTrue(diagAuthorised("public-token-value", "main-token-value", "public-token-value"))
+        assertFalse(diagAuthorised("someone-elses-guess", "main-token-value", "public-token-value"))
+        // No public token configured: only the main one is accepted, same as before.
+        assertFalse(diagAuthorised("public-token-value", "main-token-value", null))
+    }
+
+    @Test
     fun `the pixel is a real GIF and is as small as one gets`() {
         assertEquals(42, PIXEL.size)
         assertEquals("GIF89a", PIXEL.take(6).map { it.toInt().toChar() }.joinToString(""))
