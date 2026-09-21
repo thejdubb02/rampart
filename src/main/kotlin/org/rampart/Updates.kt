@@ -39,6 +39,49 @@ object Updates {
     val current: String? = System.getProperty("app.version")?.takeIf { it.isNotBlank() }
 
     /**
+     * Why the last attempt did not work, in a sentence somebody can act on, or null.
+     *
+     * It used to be nothing at all. Both PowerShell commands swallowed their own errors and
+     * the process output was never read, so a failed update produced a card saying Windows
+     * would fetch it in the background whether or not anything had been staged, and there
+     * was no way to find out otherwise.
+     */
+    @Volatile
+    var lastProblem: String? = null
+        private set
+
+    /** Said when the release exists but its files are not being served yet. See [manifestReady]. */
+    internal const val NOT_READY =
+        "The new version is published but is not ready to download yet. Rampart will keep trying."
+
+    /**
+     * Whether the manifest Windows needs is actually being served yet.
+     *
+     * **A release's files are not downloadable the moment it is published.** Measured on
+     * 2026-09-21 against our own release: the API reported rampart.appinstaller as uploaded
+     * at 4198 bytes and signed in it downloaded, while the same anonymous URL that Windows
+     * and every reader fetches answered 404. It answered 404 on the first try and 200
+     * thirty seconds later. The release before it served throughout.
+     *
+     * That gap is exactly when Rampart notices a new version, so staging ran against a
+     * manifest that did not exist yet and failed every time. Asked first, so the difference
+     * between "not ready yet" and "did not install" is one Rampart can tell, and so the
+     * answer to the first is to wait rather than to report a failure.
+     */
+    internal fun manifestReady(url: String = APPINSTALLER): Boolean = runCatching {
+        val response = http.send(
+            HttpRequest.newBuilder(URI.create(url))
+                .timeout(Duration.ofSeconds(15))
+                .GET()
+                .build(),
+            HttpResponse.BodyHandlers.ofString(),
+        )
+        // The body is checked as well as the code, because a redirect to an error page is a
+        // 200 carrying something that is not a manifest.
+        response.statusCode() == 200 && response.body().contains("<AppInstaller")
+    }.getOrDefault(false)
+
+    /**
      * The published version, when it is newer than this one. Null for every other outcome,
      * including no network: an update check that failed is not something to interrupt
      * someone reading their mail about.
@@ -148,12 +191,30 @@ object Updates {
      */
     fun stage(): Boolean = runCatching {
         updater() ?: return false
-        val process = ProcessBuilder(stageCommand()).start()
-        if (!process.waitFor(30, java.util.concurrent.TimeUnit.MINUTES)) {
-            process.destroy()
+        // Asked before PowerShell is started at all. A manifest that is not being served yet
+        // is a reason to come back in a minute, not a failed install, and running the command
+        // anyway turns the first into the second.
+        if (!manifestReady()) {
+            lastProblem = NOT_READY
             return false
         }
-        process.exitValue() == 0
+        val process = ProcessBuilder(stageCommand()).redirectErrorStream(true).start()
+        if (!process.waitFor(30, java.util.concurrent.TimeUnit.MINUTES)) {
+            process.destroy()
+            lastProblem = "The download did not finish."
+            return false
+        }
+        // Read rather than thrown away. What Windows refused for is the only thing that
+        // makes a failure here fixable by anybody.
+        val said = process.inputStream.bufferedReader().use { it.readText() }.trim()
+        if (process.exitValue() == 0) {
+            lastProblem = null
+            true
+        } else {
+            lastProblem = said.lines().firstOrNull { it.isNotBlank() }
+                ?: "Windows would not stage the update and did not say why."
+            false
+        }
     }.getOrDefault(false)
 
     /**
