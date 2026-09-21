@@ -59,6 +59,8 @@ import java.awt.FileDialog
 import java.awt.Frame
 import java.nio.file.Path
 import kotlinx.coroutines.CancellationException
+import java.awt.Desktop
+import java.net.URI
 
 /**
  * A message on its way out, in the terms the writer used: addresses as they typed them,
@@ -243,6 +245,15 @@ internal fun plainTextOf(body: Body?): String =
  * once here and once in the test, which is exactly why a picture of it never showed that
  * the panel had no edge.
  */
+/**
+ * Where somebody is sent to set the companion server up.
+ *
+ * The published page rather than `docs/` or `server/` in the source tree: the reader has
+ * installed an application, not cloned a repository, and a path they cannot open is the
+ * same as no link at all.
+ */
+private const val TRACKER_SETUP = "https://github.com/thejdubb02/rampart/blob/main/server/README.md"
+
 @Composable
 internal fun ComposerFrame(full: Boolean = false, content: @Composable () -> Unit) {
     Surface(
@@ -292,6 +303,8 @@ internal fun Composer(
      * remembers that they touched it.
      */
     var chosen by remember(initial) { mutableStateOf(initial.tracked) }
+    /** Whether the reader has asked why the tracking toggle does nothing. */
+    var needsTracker by remember { mutableStateOf(false) }
     val firstRecipient = draft.recipients.firstOrNull().orEmpty()
     LaunchedEffect(firstRecipient, trackingReady) {
         if (!chosen && trackingReady && firstRecipient.isNotBlank()) {
@@ -436,16 +449,35 @@ internal fun Composer(
                     TextButton(onClick = { draft = draft.copy(receipt = !draft.receipt) }) {
                         Text(if (draft.receipt) "Receipt on" else "Receipt")
                     }
-                    // Only where a server has been set up. A toggle that silently does
-                    // nothing would mean every message going out believing it was tracked.
-                    if (trackingReady) {
-                        TextButton(onClick = { chosen = true; draft = draft.copy(tracked = !draft.tracked) }) {
-                            Text(
-                                if (draft.tracked) "Tracking on" else "Track",
-                                color = if (draft.tracked) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+                    /*
+                     * Always here, and off where no server has been set up, rather than
+                     * missing. A toggle that silently does nothing would mean every message
+                     * going out believing it was tracked, and a toggle that is simply absent
+                     * reads as a feature Rampart does not have rather than one that needs a
+                     * server. So the unconfigured case is a button that says why when it is
+                     * pressed, which is also why this is not a disabled button: a disabled
+                     * button cannot be asked anything.
+                     */
+                    TextButton(
+                        onClick = {
+                            if (trackingReady) {
+                                chosen = true
+                                draft = draft.copy(tracked = !draft.tracked)
+                            } else {
+                                needsTracker = !needsTracker
+                            }
+                        },
+                    ) {
+                        Text(
+                            if (draft.tracked && trackingReady) "Tracking on" else "Track",
+                            color = when {
+                                draft.tracked && trackingReady -> MaterialTheme.colorScheme.primary
+                                trackingReady -> MaterialTheme.colorScheme.onSurfaceVariant
+                                // Muted further than an ordinary button, so it reads as
+                                // unavailable before it is pressed rather than after.
+                                else -> MaterialTheme.colorScheme.outline
+                            },
+                        )
                     }
                     // Next to Discard rather than in the corner, because at panel width
                     // a title bar of its own would cost a line of the message.
@@ -457,6 +489,31 @@ internal fun Composer(
                         onClick = ::send,
                         enabled = !sending && draft.recipients.isNotEmpty(),
                     ) { Text(if (sending) "Sending" else "Send") }
+                }
+            }
+            /*
+             * Only after the toggle has been pressed, so a composer for somebody who does not
+             * want open tracking is not carrying a permanent line about a server they will
+             * never run. Empty is the normal case and should not look like something missing.
+             */
+            if (needsTracker && !trackingReady) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Knowing whether a message was opened needs the companion server, " +
+                            "because a picture has to be fetched from somewhere and this " +
+                            "application is not somewhere.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.weight(1f),
+                    )
+                    // The public setup page rather than a path inside the repository, which is
+                    // not something somebody who installed the application can open.
+                    TextButton(onClick = {
+                        runCatching { Desktop.getDesktop().browse(URI(TRACKER_SETUP)) }
+                    }) { Text("Set it up") }
                 }
             }
             HorizontalDivider()
