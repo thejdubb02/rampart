@@ -975,6 +975,9 @@ private fun Reader(
     var sending by remember { mutableStateOf(false) }
     var sendError by remember { mutableStateOf<String?>(null) }
     var update by remember { mutableStateOf<String?>(null) }
+    // Whether a check asked for from the About page, rather than the half-hourly one, is
+    // still in flight, so the button there can say so instead of doing nothing visibly.
+    var checkingUpdate by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var showingResults by remember { mutableStateOf(false) }
     /**
@@ -1396,6 +1399,21 @@ private fun Reader(
         }
     }
 
+    /**
+     * One round trip to GitHub, shared by the half-hourly poll below and the button on the
+     * About page. A failed check and "nothing newer" both come back null from
+     * [Updates.newerVersion]: CURRENT covers both here rather than claiming a distinction
+     * this call site cannot actually tell apart.
+     */
+    suspend fun checkForUpdate() {
+        val found = withContext(Dispatchers.IO) { Updates.newerVersion() }
+        update = found
+        Diagnostics.event(
+            Metric.UPDATE_CHECK,
+            if (found != null) UpdateCheckCategory.NEWER_FOUND else UpdateCheckCategory.CURRENT,
+        )
+    }
+
     /*
      * Asked once the window is up, and then every half hour, because a window that stays
      * open for a day would otherwise never hear about a build published after it started.
@@ -1408,17 +1426,7 @@ private fun Reader(
      */
     LaunchedEffect(Unit) {
         while (true) {
-            if (!barState.busy) {
-                val found = withContext(Dispatchers.IO) { Updates.newerVersion() }
-                update = found
-                // A failed check and "nothing newer" both come back null from newerVersion:
-                // CURRENT covers both here rather than claiming a distinction this call site
-                // cannot actually tell apart.
-                Diagnostics.event(
-                    Metric.UPDATE_CHECK,
-                    if (found != null) UpdateCheckCategory.NEWER_FOUND else UpdateCheckCategory.CURRENT,
-                )
-            }
+            if (!barState.busy) checkForUpdate()
             delay(30 * 60_000L)
         }
     }
@@ -3890,6 +3898,14 @@ private fun Reader(
                         is UpdateBarState.Waiting -> current.version
                         is UpdateBarState.Failed -> current.version
                         else -> null
+                    },
+                    checkingUpdate = checkingUpdate,
+                    onCheckNow = {
+                        if (!checkingUpdate) scope.launch {
+                            checkingUpdate = true
+                            checkForUpdate()
+                            checkingUpdate = false
+                        }
                     },
                     notifyOnArrival = notifyOnArrival,
                     onNotifyOnArrival = { notifyOnArrival = it; Settings.setNotifyOnArrival(it) },

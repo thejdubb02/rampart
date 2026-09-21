@@ -80,6 +80,9 @@ internal fun SettingsPane(
     onSignature: (Identity, String) -> Unit,
     onPickSignatureImage: () -> String?,
     update: String?,
+    /** Whether a check asked for from the About page's own button is still in flight. */
+    checkingUpdate: Boolean = false,
+    onCheckNow: () -> Unit = {},
     notifyOnArrival: Boolean,
     onNotifyOnArrival: (Boolean) -> Unit,
     /** Defaults so the screenshot harness, which never opens the real settings file, still compiles. */
@@ -177,7 +180,7 @@ internal fun SettingsPane(
                         "tracking" -> TrackingPage(onTrackingServer)
                         "assistant" -> AssistantPage(accounts)
                         "diagnostics" -> DiagnosticsPage()
-                        "about" -> AboutPage(update, onRestart)
+                        "about" -> AboutPage(update, checkingUpdate, onCheckNow, onRestart)
                     }
                 }
             }
@@ -1300,15 +1303,15 @@ private fun Dollars(label: String, value: Double, modifier: Modifier = Modifier,
 }
 
 @Composable
-private fun AboutPage(update: String?, onRestart: () -> Unit) {
+private fun AboutPage(update: String?, checkingUpdate: Boolean, onCheckNow: () -> Unit, onRestart: () -> Unit) {
     Section("Version", "Rampart updates itself in the background and asks before restarting.")
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
             Updates.current?.let { "You are on $it." } ?: "Running from source.",
             style = MaterialTheme.typography.bodyMedium,
         )
+        Spacer(Modifier.width(10.dp))
         if (update != null) {
-            Spacer(Modifier.width(10.dp))
             Text(
                 "$update is ready.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -1316,6 +1319,10 @@ private fun AboutPage(update: String?, onRestart: () -> Unit) {
             )
             Spacer(Modifier.width(6.dp))
             TextButton(onClick = onRestart) { Text("Restart now") }
+        } else {
+            TextButton(onClick = onCheckNow, enabled = !checkingUpdate) {
+                Text(if (checkingUpdate) "Checking..." else "Check for updates")
+            }
         }
     }
 
