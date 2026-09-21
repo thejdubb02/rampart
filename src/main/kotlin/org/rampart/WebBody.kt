@@ -66,6 +66,14 @@ internal fun WebBody(
      * which is what made the toolbar's switch cost a whole reload.
      */
     dark: Boolean = false,
+    /**
+     * How large the message is drawn, from [Settings.messageScale].
+     *
+     * Passed in rather than read here. Read here it was read once, when this panel happened
+     * to compose, so changing the size in Settings did nothing until the next message was
+     * opened: the setting looked broken and was only late.
+     */
+    scale: Float = 1.0f,
 ) {
     /*
      * Grows to whatever the message turns out to be, so the pane scrolls rather than the
@@ -94,7 +102,6 @@ internal fun WebBody(
      * preference on top of that rather than a correction somebody has to discover.
      */
     val density = LocalDensity.current.density
-    val scale = Settings.messageScale()
     // Held here rather than made in the factory: JavaFX calls it from the JS side and keeps
     // only a weak reference, so anything it can collect stops being callable a minute in.
     val bridge = remember { WebBridge() }

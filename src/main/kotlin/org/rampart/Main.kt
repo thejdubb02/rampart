@@ -845,6 +845,7 @@ private fun Reader(
     // Held rather than read where it is used, so changing it in Settings changes the
     // message already on screen instead of the one after next.
     var messageMode by remember { mutableStateOf(Settings.messageMode()) }
+    var messageScale by remember { mutableStateOf(Settings.messageScale()) }
     var chatOpen by remember { mutableStateOf(false) }
     var said by remember { mutableStateOf<List<Said>>(emptyList()) }
     var chatThinking by remember { mutableStateOf(false) }
@@ -2323,6 +2324,10 @@ private fun Reader(
             "contacts" -> { contactsOpen = true; settingsOpen = false; dashboardOpen = false }
             "dashboard" -> { dashboardOpen = true; settingsOpen = false; contactsOpen = false }
             "shortcuts" -> showShortcuts = true
+            "assistant" -> chatOpen = !chatOpen
+            // Only where there is a conversation. Muting one message is not a thing, and a
+            // command that quietly does nothing is worse than one that is not offered.
+            "mute" -> selected?.takeIf { thread.size > 1 }?.let { muteConversation(it, !conversationMuted) }
         }
     }
 
@@ -2893,6 +2898,7 @@ private fun Reader(
                     notifyOnArrival = notifyOnArrival,
                     onNotifyOnArrival = { notifyOnArrival = it; Settings.setNotifyOnArrival(it) },
                     onMessageMode = { messageMode = it },
+                    onMessageScale = { messageScale = it },
                     onTheme = onTheme,
                     iconPack = icons,
                     onIconPack = onIcons,
@@ -3171,6 +3177,7 @@ private fun Reader(
                 onSource = ::toggleSource,
                 paper = paper,
                 messageMode = messageMode,
+                messageScale = messageScale,
                 // Per message rather than a setting: it is a look at this one, and having
                 // to turn it back off in settings would make it a mode instead.
                 onPaper = { paper = it },
@@ -4790,6 +4797,8 @@ internal fun Message(
     paper: Boolean = false,
     /** "dark", "light", or empty to follow the window. See [Settings.messageMode]. */
     messageMode: String = "",
+    /** How large the message is drawn. See [Settings.messageScale]. */
+    messageScale: Float = 1.0f,
     onPaper: (Boolean) -> Unit = {},
     onTag: (keyword: String, on: Boolean) -> Unit = { _, _ -> },
     /** True while a field in here has focus, so a bare letter is not read as a shortcut. */
@@ -5539,6 +5548,7 @@ internal fun Message(
                         onScroll = { dy -> bodyScope.launch { bodyScroll.scrollBy(dy) } },
                         onBlank = { engineBlank = true },
                         dark = darkWindow && !paper,
+                        scale = messageScale,
                     )
                     else {
                         /*

@@ -95,6 +95,8 @@ internal fun SettingsPane(
     onLoader: (Loader) -> Unit = {},
     /** Told when the page messages are drawn on changes, so the open one changes with it. */
     onMessageMode: (String) -> Unit = {},
+    /** Told when the message text size changes, for the same reason. */
+    onMessageScale: (Float) -> Unit = {},
     /** Told when the tracking server changes, so the composer's toggle appears or goes. */
     onTrackingServer: (String) -> Unit = {},
     onRestart: () -> Unit,
@@ -137,7 +139,7 @@ internal fun SettingsPane(
                     when (page) {
                         "accounts" -> AccountsPage(accounts, onAddAccount, quotas)
                         "notifications" -> NotificationsPage(notifyOnArrival, onNotifyOnArrival)
-                        "reading" -> ReadingPage(onUndoBarSeconds, onMessageMode)
+                        "reading" -> ReadingPage(onUndoBarSeconds, onMessageMode, onMessageScale)
                         "filters" -> FiltersPage(
                             script = filters,
                             accounts = accounts,
@@ -368,6 +370,7 @@ private fun ThemesPage(
 private fun ReadingPage(
     onUndoBarSeconds: (Int) -> Unit = {},
     onMessageMode: (String) -> Unit = {},
+    onMessageScale: (Float) -> Unit = {},
 ) {
     var delay by remember { mutableStateOf(Settings.markReadDelay()) }
     Section(
@@ -446,12 +449,14 @@ private fun ReadingPage(
                 Modifier.fillMaxWidth().clickable {
                     messageScale = value
                     Settings.setMessageScale(value)
+                    onMessageScale(value)
                 }.padding(vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 RadioButton(selected = messageScale == value, onClick = {
                     messageScale = value
                     Settings.setMessageScale(value)
+                    onMessageScale(value)
                 })
                 Spacer(Modifier.width(8.dp))
                 Text(label, style = MaterialTheme.typography.bodyMedium)

@@ -417,6 +417,68 @@ class Screenshots {
         shoot("settings", 1200, 900, withArt) { SettingsScreen("accounts") }
         shoot("settings-reading", 1200, 900) { SettingsScreen("reading") }
         shoot("settings-filters", 1200, 900) { SettingsScreen("filters") }
+        shoot("settings-assistant", 1200, 900) { SettingsScreen("assistant") }
+        // A message that is part of a conversation, so the line above it and the menu that
+        // acts on all of it are both on screen.
+        shoot("conversation", 900, 700, dark) {
+            Message(
+                summary = MESSAGES[1],
+                body = Body(null, "That works for us. Tuesday morning is fine."),
+                thread = listOf(MESSAGES[0], MESSAGES[1], MESSAGES[2]),
+                actions = MessageActions(
+                    conversation = ConversationActions(
+                        count = 3,
+                        unread = 1,
+                        muted = false,
+                        onRead = {},
+                        onArchive = {},
+                        onTrash = {},
+                        onMute = {},
+                    ),
+                ),
+                onLink = {},
+            )
+        }
+        // The set kept for every account, with the account chips above it and the box that
+        // builds a rule from a sentence.
+        shoot("filters-everywhere", 1200, 760) {
+            Column(Modifier.padding(28.dp)) {
+                FiltersPage(
+                    script = SAMPLE_FILTERS,
+                    accounts = ACCOUNTS,
+                    chosen = null,
+                    onChoose = {},
+                    globals = SAMPLE_GLOBALS,
+                    onGlobals = {},
+                    folders = MAILBOXES.map { it.name },
+                    saving = false,
+                    error = null,
+                    supported = true,
+                    onSave = {},
+                )
+            }
+        }
+        // The assistant, mid-exchange, including what an action leaves behind in the
+        // transcript. That receipt is the whole audit trail, so it is worth a shot.
+        shoot("assistant", 420, 760, dark) {
+            ChatPane(
+                said = listOf(
+                    Said("user", "What came in from the hotel this week?"),
+                    Said("assistant", "Three, all from Tom. Two are about guest notes and one is the eblast proof."),
+                    Said("user", "Archive the guest notes ones."),
+                    Said("call", "{}"),
+                    Said("result", "Archived 2 messages."),
+                    Said("assistant", "Done. The eblast proof is still in your inbox."),
+                ),
+                thinking = false,
+                unavailable = null,
+                onSend = {},
+                onClear = {},
+                onClose = {},
+                onSettings = {},
+                model = "anthropic/claude-haiku-4-5",
+            )
+        }
         // The other icon pack, so a change to either set is visible in a diff.
         shoot("icons-heavy", 1400, 900, dark, HeavyIcons) { Panes() }
         shoot("composer", 1000, 640) {

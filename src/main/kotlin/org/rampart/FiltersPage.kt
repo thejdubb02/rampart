@@ -70,9 +70,10 @@ internal fun FiltersPage(
     // the list rather than as a choice of where a new rule would go.
     Note(
         if (chosen == null) {
-            "Rules kept for every account. Each server gets its own copy."
+            "Kept for every account below. Each server runs its own copy, and an account " +
+                "signed in later gets them too."
         } else {
-            "Rules kept only on " + (accounts.firstOrNull { it.key == chosen }?.email ?: "this account") + "."
+            "Kept only on " + (accounts.firstOrNull { it.key == chosen }?.email ?: "this account") + "."
         },
     )
     Spacer(Modifier.height(14.dp))
@@ -118,11 +119,6 @@ private fun Everywhere(
     error: String?,
     onGlobals: (GlobalFilters) -> Unit,
 ) {
-    Note(
-        "These rules are saved to every account below, so each server runs its own copy of " +
-            "them. An account signed in later gets them too.",
-    )
-    Spacer(Modifier.height(10.dp))
     RuleList(globals.rules, folders, saving) { onGlobals(globals.copy(rules = it)) }
 
     if (accounts.size > 1) {
