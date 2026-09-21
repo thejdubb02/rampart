@@ -40,22 +40,14 @@ internal fun conversationIds(thread: List<Summary>, mine: Set<String>): List<Str
 /**
  * Which messages in a conversation start with their body already open, the moment it is.
  *
- * The one that was clicked, because that is what opening a message has to mean, and
- * anything still unread beside it, because that is the mail worth an immediate look.
- * Everything else stays a one-line row until it is asked for.
+ * Only [opened] itself. Gmail, Apple Mail and Outlook all open a thread this way: the one
+ * message that was clicked, every other message a one-line row until its own click expands
+ * it. Expanding the whole thread by default was tried and made the top of a long
+ * conversation the clutter it is now trying not to be; one open message is what "read this
+ * one" means, and the collapsed rows below it are still one click away.
  *
- * Falls back to the newest message when neither applies, which only happens when [opened]
- * belongs to a conversation [thread] does not actually contain: the reading pane clears its
- * held thread the moment a click lands on a different conversation, for exactly this
- * reason, so a thread that disagrees about the message it was opened on is a stale one
- * rather than a real gap, and showing nothing at all would be the wrong answer to it.
  */
-internal fun initialExpanded(thread: List<Summary>, opened: Summary): Set<String> {
-    val inThread = thread.any { it.id == opened.id }
-    val unread = thread.filterNot { it.seen }.map { it.id }.toSet()
-    val expanded = if (inThread || thread.isEmpty()) unread + opened.id else unread
-    return expanded.ifEmpty { setOfNotNull(thread.lastOrNull()?.id) }
-}
+internal fun initialExpanded(opened: Summary): Set<String> = setOf(opened.id)
 
 /**
  * Conversations told to stop asking for attention.

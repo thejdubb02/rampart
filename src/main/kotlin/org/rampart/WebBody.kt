@@ -151,7 +151,7 @@ internal fun WebBody(
      * slow machine rather than a race with it.
      */
     LaunchedEffect(document) {
-        delay(15_000)
+        delay(6_000)
         if (!measured) onBlank()
     }
     bridge.onScroll = onScroll

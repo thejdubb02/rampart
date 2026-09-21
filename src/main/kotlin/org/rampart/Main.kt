@@ -19,6 +19,8 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -860,6 +862,51 @@ internal fun whyFailed(e: Throwable): String {
 }
 
 /**
+ * Addresses already in this account's book, lowercased.
+ *
+ * The book kept beside the accounts, not the server's contact cards: that file is the
+ * one every account has, and "someone I know" is "someone already in it". [memory] is
+ * the copy the window is holding, which is ahead of the file once mail has been read
+ * this session. The file is only opened when that copy has not been loaded yet.
+ */
+private fun knownAddresses(key: String, memory: Map<String, List<Person>>): Set<String> {
+    val people = memory[key] ?: AddressBook.read(AddressBook.file(key))
+    return people.map { it.email.trim().lowercase() }.filter { it.isNotEmpty() }.toSet()
+}
+
+/**
+ * One page of a folder under the quick filters.
+ *
+ * Unread and starred are asked of whichever protocol is live. Attachment too, where
+ * [asked] still has it, which is only JMAP. Tagged and known sender go to the server
+ * on JMAP (an OR of the keywords, an OR of the book) and to the saved copy on IMAP,
+ * because that protocol has no search term for either that stays honest on a real
+ * folder. A missing copy is an empty page, not the unfiltered folder.
+ */
+private fun quickPage(
+    backend: MailBackend,
+    store: Store?,
+    mailboxId: String,
+    asked: QuickFilters,
+    known: Collection<String>,
+    from: Int = 0,
+    limit: Int = 100,
+): List<Summary> {
+    if (backend is Imap && (asked.tagged || asked.knownSender)) {
+        return store?.messages(mailboxId, limit, from, filters = asked, knownSenders = known).orEmpty()
+    }
+    val words = if (asked.tagged) store?.keywords().orEmpty() else emptyList()
+    return backend.emails(
+        mailboxId,
+        limit = limit,
+        from = from,
+        filters = asked,
+        knownSenders = known,
+        userKeywords = words,
+    )
+}
+
+/**
  * Everything about one message that has to be fetched, or decided, before its card in the
  * thread stack can be drawn.
  *
@@ -1015,7 +1062,13 @@ private fun Reader(
     var order by remember { mutableStateOf(Settings.order()) }
     // Not remembered between runs on purpose: opening the app into a folder that is hiding
     // most of itself, with no memory of having asked for that, reads as lost mail.
-    var unreadOnly by remember { mutableStateOf(false) }
+    var quick by remember { mutableStateOf(QuickFilters()) }
+    /**
+     * Why a toggle could not be answered from the saved copy, when that is the only
+     * place left to ask. Null the rest of the time, including when the toggle is simply
+     * off. Cleared as soon as a later load does not need it.
+     */
+    var filterNote by remember { mutableStateOf<String?>(null) }
     var paper by remember { mutableStateOf(false) }
     // Not remembered: a panel is the right default every time, and a message that needed
     // the whole window last week is not a reason to open the next one that way.
@@ -1251,14 +1304,17 @@ private fun Reader(
         here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key
 
     /** The inbox of every signed in account, as one list. */
-    suspend fun everyInbox(): List<Summary> = merged(
+    suspend fun everyInbox(memory: Map<String, List<Person>>, asked: QuickFilters): List<Summary> = merged(
         sessions.associate { open ->
             val inbox = folderFor("inbox", mailboxes[open.key].orEmpty())
             open.key to (
                 inbox?.let {
                     runCatching {
                         if (showingResults && query.isNotBlank()) open.jmap.search(query, it.id)
-                        else open.jmap.emails(it.id, unreadOnly = unreadOnly)
+                        else {
+                            val known = if (asked.knownSender) knownAddresses(open.key, memory) else emptySet()
+                            quickPage(open.jmap, open.store, it.id, asked, known)
+                        }
                     }.getOrDefault(emptyList())
                 } ?: emptyList()
                 )
@@ -1469,16 +1525,53 @@ private fun Reader(
     suspend fun reload() {
         val (openKey, mailbox) = here ?: return
         val key = openKey
+        val memory = books
+        val canAttach = if (key == ALL_ACCOUNTS) sessions.none { it.jmap is Imap } else session(key).jmap !is Imap
+        // A toggle that cannot be answered must not stay on, or the row would say it is
+        // filtering a list that was fetched without it.
+        if (quick.attachment && !canAttach) quick = quick.copy(attachment = false)
+        val asked = quick.asked(canAttach)
+        val known = if (asked.knownSender && key != ALL_ACCOUNTS) {
+            io { knownAddresses(key, memory) }.orEmpty()
+        } else {
+            emptySet()
+        }
         /*
          * What is already on disk goes up first, and the server is asked afterwards.
          *
          * The spinner is only for a folder we have never seen: showing a blank pane and a
          * spinner over mail we already hold is the thing a local store exists to stop. A
          * folder read once opens instantly and corrects itself a moment later.
+         *
+         * A filtered list is not a picture of the folder. It is shown from the copy when
+         * the copy can answer it, and it does not get to set the cursor: the next plain
+         * open would otherwise skip mail the filter had hidden.
          */
-        val plain = key != ALL_ACCOUNTS && !showingResults && viewingTag == null
-        val cached = if (!plain) emptyList()
-        else io { session(key).store?.messages(mailbox.id, unreadOnly = unreadOnly) }.orEmpty()
+        val plain = key != ALL_ACCOUNTS && !showingResults && viewingTag == null && !asked.active
+        val imapLocal = key != ALL_ACCOUNTS && session(key).jmap is Imap && (asked.tagged || asked.knownSender)
+        if (imapLocal) {
+            loading = emails.isEmpty()
+            val found = io {
+                val kept = session(key).store ?: return@io null
+                kept.messages(mailbox.id, filters = asked, knownSenders = known)
+            }
+            filterNote = if (found == null) {
+                "This folder has no saved copy, so that filter cannot be answered."
+            } else {
+                null
+            }
+            emails = found.orEmpty()
+            learnFrom(emails)
+            loading = false
+            exhausted = emails.size < 100
+            return
+        }
+        filterNote = null
+        // Attachment is not in the copy. Showing the copy first would flash a page the
+        // toggle had not been applied to. Everything else the copy can answer is shown
+        // at once, filtered the same way the server is about to be asked.
+        val cached = if (key == ALL_ACCOUNTS || showingResults || viewingTag != null || asked.attachment) emptyList()
+        else io { session(key).store?.messages(mailbox.id, filters = asked, knownSenders = known) }.orEmpty()
         if (cached.isNotEmpty()) emails = cached
         /*
          * A spinner only where there is nothing to look at.
@@ -1535,11 +1628,11 @@ private fun Reader(
         } else if (key == ALL_ACCOUNTS) {
             // One account failing is not the whole list failing, so each is caught inside
             // rather than out here: the others still show.
-            withContext(Dispatchers.IO) { everyInbox() }
+            withContext(Dispatchers.IO) { everyInbox(memory, asked) }
         } else {
             io {
                 if (showingResults && query.isNotBlank()) session(key).jmap.search(query, mailbox.id)
-                else session(key).jmap.emails(mailbox.id, unreadOnly = unreadOnly)
+                else quickPage(session(key).jmap, session(key).store, mailbox.id, asked, known)
             }
                 // The server is still the authority on search, because it can see mail we
                 // have never fetched. The local copy is the answer when it cannot be
@@ -1575,12 +1668,24 @@ private fun Reader(
      */
     fun loadMore() {
         val (key, mailbox) = here ?: return
-        if (key == ALL_ACCOUNTS || showingResults || loadingMore || exhausted || loading) return
+        if (key == ALL_ACCOUNTS || showingResults || viewingTag != null || loadingMore || exhausted || loading) return
         loadingMore = true
+        val memory = books
+        val canAttach = session(key).jmap !is Imap
+        val asked = quick.asked(canAttach)
         scope.launch {
             Diagnostics.time(Metric.LIST_PAGE_LOAD) {
-                val page = io { session(key).jmap.emails(mailbox.id, from = emails.size, unreadOnly = unreadOnly) }
-                    .orEmpty()
+                val page = io {
+                    val known = if (asked.knownSender) knownAddresses(key, memory) else emptySet()
+                    quickPage(
+                        session(key).jmap,
+                        session(key).store,
+                        mailbox.id,
+                        asked,
+                        known,
+                        from = emails.size,
+                    )
+                }.orEmpty()
                 // Ids already on screen are dropped rather than trusted: mail arriving between
                 // two pages shifts every position down, and the seam is where it shows up twice.
                 val known = emails.map { it.id }.toSet()
@@ -2030,7 +2135,7 @@ private fun Reader(
             // assembled before the move, would put it back on screen.
             val standing = loaded.filterNot { it.id in filed }
             thread = standing
-            expanded = initialExpanded(standing, message)
+            expanded = initialExpanded(message)
             // Only now, because scrolling to where this card is about to land means knowing
             // the whole thread first: asked for before the earlier messages that push it
             // down the page were known about, it would scroll to where the card used to be.
@@ -3181,7 +3286,7 @@ private fun Reader(
             // A top level folder, on whichever account is showing. The same dialog the
             // right-click menu opens, with nothing to sit inside.
             "unread-only" -> {
-                unreadOnly = !unreadOnly
+                quick = quick.copy(unread = !quick.unread)
                 selected = null
                 scope.launch { reload() }
             }
@@ -3867,12 +3972,27 @@ private fun Reader(
                 order = order,
                 onOrder = { order = it; Settings.setOrder(it) },
                 rowActions = rowActions,
-                unreadOnly = unreadOnly,
-                onUnreadOnly = {
-                    unreadOnly = it
+                filters = quick,
+                onFilters = { next ->
+                    quick = next
                     selected = null
                     scope.launch { reload() }
                 },
+                onClearFilters = {
+                    quick = QuickFilters()
+                    selected = null
+                    scope.launch { reload() }
+                },
+                folderTotal = if (here?.first == ALL_ACCOUNTS) {
+                    sessions.sumOf { open -> folderFor("inbox", mailboxes[open.key].orEmpty())?.total ?: 0 }
+                } else {
+                    here?.second?.total ?: 0
+                },
+                attachmentReason = attachmentReason(
+                    imapAccount = here?.first?.let { it != ALL_ACCOUNTS && session(it).jmap is Imap } == true,
+                    mergedWithImap = here?.first == ALL_ACCOUNTS && sessions.any { it.jmap is Imap },
+                ),
+                filterNote = filterNote,
                 loadingMore = loadingMore,
                 onNeedMore = ::loadMore,
                 onSelect = { message, ctrl, shift ->
@@ -5038,6 +5158,116 @@ internal fun SearchBar(
     }
 }
 
+/**
+ * The toggles under the folder title.
+ *
+ * A row of its own, not squeezed into the title strip: five chips, a count and a
+ * clear button do not fit beside the folder name. They wrap, because the list is
+ * a narrow column and the labels are not optional.
+ *
+ * The count is how many rows have come back against how many the folder says it
+ * holds. It is absent until a toggle is on, because an unfiltered folder already
+ * has its name.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun QuickFilterRow(
+    filters: QuickFilters,
+    onFilters: (QuickFilters) -> Unit,
+    onClear: () -> Unit,
+    shown: Int,
+    folderTotal: Int,
+    attachmentReason: String?,
+    filterNote: String?,
+) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp)) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            FilterChip("Unread", RampartIcons.Unread, filters.unread) {
+                onFilters(filters.copy(unread = !filters.unread))
+            }
+            FilterChip("Starred", RampartIcons.Star, filters.starred) {
+                onFilters(filters.copy(starred = !filters.starred))
+            }
+            FilterChip("Tagged", RampartIcons.Tag, filters.tagged) {
+                onFilters(filters.copy(tagged = !filters.tagged))
+            }
+            FilterChip(
+                "Attachment",
+                RampartIcons.Attachment,
+                on = filters.attachment && attachmentReason == null,
+                enabled = attachmentReason == null,
+            ) {
+                onFilters(filters.copy(attachment = !filters.attachment))
+            }
+            FilterChip("Sender I Know", RampartIcons.Contacts, filters.knownSender) {
+                onFilters(filters.copy(knownSender = !filters.knownSender))
+            }
+            if (filters.active) {
+                Text(
+                    if (folderTotal > 0) "$shown of $folderTotal" else "$shown matched",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
+                )
+                Text(
+                    "Clear",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .clip(MaterialTheme.shapes.small)
+                        .clickable(onClick = onClear)
+                        .padding(horizontal = 6.dp, vertical = 3.dp),
+                )
+            }
+        }
+        val note = filterNote ?: attachmentReason
+        if (note != null) {
+            Text(
+                note,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.padding(top = 4.dp, start = 2.dp, end = 2.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun FilterChip(
+    label: String,
+    icon: ImageVector,
+    on: Boolean,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    val tint = when {
+        !enabled -> MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)
+        on -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.outline
+    }
+    Row(
+        Modifier
+            .clip(MaterialTheme.shapes.small)
+            .background(if (on && enabled) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 6.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(12.dp))
+        Spacer(Modifier.width(4.dp))
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = if (on && enabled) FontWeight.SemiBold else FontWeight.Normal,
+            color = tint,
+        )
+    }
+}
+
 @Composable
 internal fun MessageList(
     emails: List<Summary>,
@@ -5056,9 +5286,25 @@ internal fun MessageList(
     rowActions: RowActions = RowActions(),
     /** Dragging a row onto a tag. See [MessageRow]. */
     onDrag: ((Summary, Offset?) -> Unit)? = null,
-    /** Showing only what has not been read. Asked of the server, not filtered here. */
+    /**
+     * The old unread switch, kept so a caller that still passes it gets the unread
+     * toggle. The row below is the control. This is only the default for [filters].
+     */
     unreadOnly: Boolean = false,
-    onUnreadOnly: (Boolean) -> Unit = {},
+    /** Which toggles are on. Asked of the server, or of the saved copy, never of this list. */
+    filters: QuickFilters = QuickFilters(unread = unreadOnly),
+    onFilters: (QuickFilters) -> Unit = {},
+    /** Puts every toggle back. Shown only while [filters] is doing something. */
+    onClearFilters: () -> Unit = {},
+    /** How many messages the folder says it holds. 0 when it did not say. */
+    folderTotal: Int = 0,
+    /**
+     * Why the attachment toggle cannot be pressed, or null when it can. The chip stays
+     * on screen either way: a missing chip looks like a feature that was never there.
+     */
+    attachmentReason: String? = null,
+    /** Set when a toggle had to be answered from a copy that is not there. */
+    filterNote: String? = null,
     /** Whether the next page is already on its way, so the foot says so. */
     loadingMore: Boolean = false,
     /** Called when the list gets near its own bottom and wants the next page. */
@@ -5083,26 +5329,6 @@ internal fun MessageList(
         ) {
             Text(title, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // The count doubles as the switch, because a separate button beside a
-                // number that already says "2 unread" is two things saying one thing.
-                val unread = emails.count { !it.seen }
-                if (unread > 0 || unreadOnly) {
-                    Text(
-                        if (unreadOnly) "Unread only" else "$unread unread",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = if (unreadOnly) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (unreadOnly) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.outline,
-                        modifier = Modifier
-                            .clip(MaterialTheme.shapes.small)
-                            .background(
-                                if (unreadOnly) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                            )
-                            .clickable { onUnreadOnly(!unreadOnly) }
-                            .padding(horizontal = 7.dp, vertical = 2.dp),
-                    )
-                }
-                Spacer(Modifier.width(6.dp))
                 var sorting by remember { mutableStateOf(false) }
                 Box {
                     IconButton(onClick = { sorting = true }, modifier = Modifier.size(26.dp)) {
@@ -5165,6 +5391,15 @@ internal fun MessageList(
                 }
             }
         }
+        QuickFilterRow(
+            filters = filters,
+            onFilters = onFilters,
+            onClear = onClearFilters,
+            shown = emails.size,
+            folderTotal = folderTotal,
+            attachmentReason = attachmentReason,
+            filterNote = filterNote,
+        )
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         val scroll = rememberLazyListState()
         /*
@@ -5204,10 +5439,15 @@ internal fun MessageList(
             when {
                 loading -> Spinner(Modifier.align(Alignment.Center))
                 emails.isEmpty() -> Text(
-                    if (unreadOnly) "Nothing unread here." else "Nothing here.",
+                    filterNote ?: when {
+                        filters.unread && !filters.starred && !filters.tagged &&
+                            !filters.attachment && !filters.knownSender -> "Nothing unread here."
+                        filters.active -> "Nothing matches."
+                        else -> "Nothing here."
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.align(Alignment.Center),
+                    modifier = Modifier.align(Alignment.Center).padding(horizontal = 24.dp),
                 )
                 else -> LazyColumn(Modifier.fillMaxSize(), state = scroll) {
                     // LazyColumn only builds the rows on screen, so a folder with thirty
