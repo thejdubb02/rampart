@@ -128,13 +128,22 @@ internal class Store(private val connection: Connection) : AutoCloseable {
     }
 
     /**
-     * Writes down fetches the companion reported.
+     * Writes down fetches the companion reported, and returns the ones this call actually
+     * inserted.
      *
      * `INSERT OR IGNORE` on (id, at), so asking again over an overlapping window cannot
      * count one open twice. The cursor moves forward on its own and the two together mean
      * a poll that is interrupted halfway loses nothing and duplicates nothing.
+     *
+     * The returned list is that same guarantee for the notification. A popup fired on
+     * everything the companion sent would fire again for a fetch the store had already
+     * ignored, which is the same open announced twice. One statement per row, rather than
+     * a batch, because the count of rows changed is what distinguishes an insert from an
+     * ignore, and a batch is not required to report that per row.
      */
-    fun recordFetches(fetches: List<Fetch>) {
+    fun recordFetches(fetches: List<Fetch>): List<Fetch> {
+        if (fetches.isEmpty()) return emptyList()
+        val inserted = ArrayList<Fetch>(fetches.size)
         connection.prepareStatement(
             "INSERT OR IGNORE INTO fetched (id, at, userAgent, network) VALUES (?, ?, ?, ?)",
         ).use { s ->
@@ -143,9 +152,45 @@ internal class Store(private val connection: Connection) : AutoCloseable {
                 s.setLong(2, fetch.at.toEpochMilli())
                 s.setString(3, fetch.userAgent)
                 s.setString(4, fetch.network)
-                s.addBatch()
+                if (s.executeUpdate() > 0) inserted.add(fetch)
             }
-            s.executeBatch()
+        }
+        return inserted
+    }
+
+    /**
+     * The tracked rows for these ids, and no others.
+     *
+     * The poll is handed every fetch since the cursor and does not know which account sent
+     * which of them, so it asks each open account. [tracking] would answer by reading
+     * every message this account ever tracked, on every poll, to find out about the few
+     * ids that just arrived.
+     */
+    fun trackedByIds(ids: List<String>): Map<String, Tracked> {
+        if (ids.isEmpty()) return emptyMap()
+        val placeholders = ids.joinToString(",") { "?" }
+        return connection.prepareStatement(
+            "SELECT id, messageId, recipient, subject, sentAt FROM tracked WHERE id IN ($placeholders)",
+        ).use { s ->
+            ids.forEachIndexed { index, id -> s.setString(index + 1, id) }
+            s.executeQuery().use { rows ->
+                buildMap {
+                    while (rows.next()) {
+                        val id = rows.getString(1)
+                        put(
+                            id,
+                            Tracked(
+                                id = id,
+                                messageId = rows.getString(2),
+                                account = "",
+                                recipient = rows.getString(3),
+                                subject = rows.getString(4),
+                                sentAt = java.time.Instant.ofEpochMilli(rows.getLong(5)),
+                            ),
+                        )
+                    }
+                }
+            }
         }
     }
 

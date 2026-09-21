@@ -51,6 +51,15 @@ object Settings {
     fun setNotifyOnArrival(value: Boolean) = write { put("notify", JsonPrimitive(value)) }
 
     /**
+     * On by default. Tracking is already a deliberate per-message choice, so somebody who
+     * turned it on for a message is choosing to know when it is read. A notification that
+     * started off would mean the person who wants this most has to find the switch first.
+     */
+    fun notifyOnOpen(): Boolean = read()["notifyOpen"]?.jsonPrimitive?.booleanOrNull ?: true
+
+    fun setNotifyOnOpen(value: Boolean) = write { put("notifyOpen", JsonPrimitive(value)) }
+
+    /**
      * Whether closing the window leaves Rampart running in the tray.
      *
      * Off by default, and deliberately. An application that ignores the close button is a

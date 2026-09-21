@@ -82,6 +82,9 @@ internal fun SettingsPane(
     update: String?,
     notifyOnArrival: Boolean,
     onNotifyOnArrival: (Boolean) -> Unit,
+    /** Defaults so the screenshot harness, which never opens the real settings file, still compiles. */
+    notifyOnOpen: Boolean = true,
+    onNotifyOnOpen: (Boolean) -> Unit = {},
     onTheme: (Theme) -> Unit,
     iconPack: IconPack = LineIcons,
     onIconPack: (IconPack) -> Unit = {},
@@ -139,7 +142,9 @@ internal fun SettingsPane(
                 Column(Modifier.widthIn(max = 720.dp).fillMaxWidth()) {
                     when (page) {
                         "accounts" -> AccountsPage(accounts, onAddAccount, quotas)
-                        "notifications" -> NotificationsPage(notifyOnArrival, onNotifyOnArrival)
+                        "notifications" -> NotificationsPage(
+                            notifyOnArrival, onNotifyOnArrival, notifyOnOpen, onNotifyOnOpen,
+                        )
                         "reading" -> ReadingPage(onUndoBarSeconds, onMessageMode, onMessageScale)
                         "filters" -> FiltersPage(
                             script = filters,
@@ -572,7 +577,12 @@ private fun ReadingPage(
 }
 
 @Composable
-private fun NotificationsPage(notifyOnArrival: Boolean, onNotifyOnArrival: (Boolean) -> Unit) {
+private fun NotificationsPage(
+    notifyOnArrival: Boolean,
+    onNotifyOnArrival: (Boolean) -> Unit,
+    notifyOnOpen: Boolean,
+    onNotifyOnOpen: (Boolean) -> Unit,
+) {
     Section("Notifications", "Rampart checks for new mail every minute while it is open.")
     Row(
         Modifier.fillMaxWidth().clickable { onNotifyOnArrival(!notifyOnArrival) }.padding(vertical = 4.dp),
@@ -589,6 +599,21 @@ private fun NotificationsPage(notifyOnArrival: Boolean, onNotifyOnArrival: (Bool
             )
         }
         Switch(checked = notifyOnArrival, onCheckedChange = onNotifyOnArrival, enabled = isTraySupported)
+    }
+    Row(
+        Modifier.fillMaxWidth().clickable { onNotifyOnOpen(!notifyOnOpen) }.padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Tell me when a tracked message is opened", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                if (isTraySupported) "One notification per batch, not one per open."
+                else "This desktop has no notification area, so nothing will appear.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+        Switch(checked = notifyOnOpen, onCheckedChange = onNotifyOnOpen, enabled = isTraySupported)
     }
 
     // Kept next to notifications rather than under a Window heading of its own: both are

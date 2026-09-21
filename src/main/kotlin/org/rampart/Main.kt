@@ -1011,6 +1011,7 @@ private fun Reader(
         )
     }
     var notifyOnArrival by remember { mutableStateOf(Settings.notifyOnArrival()) }
+    var notifyOnOpen by remember { mutableStateOf(Settings.notifyOnOpen()) }
     var order by remember { mutableStateOf(Settings.order()) }
     // Not remembered between runs on purpose: opening the app into a folder that is hiding
     // most of itself, with no memory of having asked for that, reads as lost mail.
@@ -2305,6 +2306,12 @@ private fun Reader(
      * matches it to messages here, where the mapping from id to message lives. The server
      * is never told what it is answering about.
      *
+     * A notification fires only for a fetch this poll actually inserted, and only when
+     * [classify] calls it a person. The store ignoring a duplicate is what stops the same
+     * open popping up again on the next poll, and [classify] is what stops a scanner
+     * popping up at all. Each account is asked on its own, because the row that says who
+     * the message went to lives in whichever account sent it.
+     *
      * Silent on every failure. A tracking server that is down is not a reason to interrupt
      * somebody reading their mail, and the cursor does not move, so nothing is lost.
      */
@@ -2319,9 +2326,24 @@ private fun Reader(
                         TrackingClient.since(trackingServer, token, since)
                     }
                     if (found.isNotEmpty()) {
-                        withContext(Dispatchers.IO) {
-                            sessions.forEach { open -> runCatching { open.store?.recordFetches(found) } }
+                        val notices = withContext(Dispatchers.IO) {
+                            buildList {
+                                sessions.forEach { open ->
+                                    runCatching {
+                                        val store = open.store ?: return@runCatching
+                                        val inserted = store.recordFetches(found)
+                                        if (inserted.isEmpty()) return@runCatching
+                                        openText(
+                                            opensToAnnounce(
+                                                inserted,
+                                                store.trackedByIds(inserted.map { it.id }),
+                                            ),
+                                        )?.let { add(it) }
+                                    }
+                                }
+                            }
                         }
+                        if (notifyOnOpen) notices.forEach { (title, body) -> notify(title, body) }
                         // Moved only after the rows are written, so a crash between the two
                         // re-reads rather than skips. The store ignores a duplicate.
                         Settings.setTrackingCursor(found.maxOf { it.at.toEpochMilli() })
@@ -3766,6 +3788,8 @@ private fun Reader(
                     },
                     notifyOnArrival = notifyOnArrival,
                     onNotifyOnArrival = { notifyOnArrival = it; Settings.setNotifyOnArrival(it) },
+                    notifyOnOpen = notifyOnOpen,
+                    onNotifyOnOpen = { notifyOnOpen = it; Settings.setNotifyOnOpen(it) },
                     onMessageMode = { messageMode = it },
                     onMessageScale = { messageScale = it },
                     onTheme = onTheme,
