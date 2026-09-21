@@ -110,6 +110,9 @@ internal interface IconPack {
     val Undo: ImageVector
     val Redo: ImageVector
 
+    /** The compose panel's corner handle: three diagonal strokes, the usual grip for a drag-to-resize corner. */
+    val Resize: ImageVector
+
 }
 
 /**
@@ -234,6 +237,15 @@ internal object LineIcons : IconPack {
     override val ClearFormat = icon("ClearFormat", "M4 13 8 3l4 10M5.6 9h4.8M3 15l12-12")
     override val Undo = icon("Undo", "M6 5 3 8l3 3M3 8h7a4 4 0 0 1 0 8h-2")
     override val Redo = icon("Redo", "M12 5l3 3-3 3M15 8H8a4 4 0 0 0 0 8h2")
+
+    /*
+     * Three diagonal strokes anchored to the same top and left edges, growing outward: the
+     * same construction as Sort's three bars above, turned forty five degrees so they point
+     * at the corner instead of stacking down the page. It reads as a resize grip because
+     * that is the shape one has been on every scrollable textarea for twenty years, not
+     * because this codebase invented it.
+     */
+    override val Resize = icon("Resize", "M3 6L6 3M3 10L10 3M3 14L14 3")
 
 }
 

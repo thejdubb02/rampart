@@ -327,6 +327,19 @@ object Settings {
     }
 
     /**
+     * The compose panel's size when it is not full screen, dragged from its corner handle.
+     * Defaults to today's fixed 620 by 620 so an install that has never touched the handle
+     * looks exactly as it did before there was one to drag.
+     */
+    fun composeWidth(): Float = read()["composeWidth"]?.jsonPrimitive?.floatOrNull ?: 620f
+
+    fun setComposeWidth(value: Float) = write { put("composeWidth", JsonPrimitive(value)) }
+
+    fun composeHeight(): Float = read()["composeHeight"]?.jsonPrimitive?.floatOrNull ?: 620f
+
+    fun setComposeHeight(value: Float) = write { put("composeHeight", JsonPrimitive(value)) }
+
+    /**
      * The version the changelog dialog last showed, or empty before it ever has.
      *
      * Empty is also what an install made before this feature existed carries, and that is

@@ -10,10 +10,12 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.input.pointer.PointerButton
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.isCtrlPressed
 import androidx.compose.ui.input.pointer.isMetaPressed
 import androidx.compose.ui.input.pointer.isShiftPressed
 import androidx.compose.ui.input.pointer.onPointerEvent
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -152,6 +154,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
+import java.awt.Cursor
 import java.awt.Desktop
 import java.net.URI
 import java.nio.file.Files
@@ -501,11 +504,48 @@ private fun ApplicationScope.Rampart() {
                             tray.sendNotification(Notification(title, message, Notification.Type.Info))
                         },
                         onUnread = { unread = it },
+                        windowSize = { windowState.size },
                     )
                 }
             }
         }
     }
+}
+
+/**
+ * Small enough that a subject line and the formatting row still fit, and no smaller: below
+ * this the panel stops being useful before it stops being draggable.
+ */
+internal val ComposeMinSize = DpSize(380.dp, 320.dp)
+
+/** A window size to fall back on before the real one has ever been reported, shared by
+ *  every default for [Reader]'s `windowSize` parameter rather than repeated at each one. */
+private val DefaultWindowSize = DpSize(1440.dp, 900.dp)
+
+/**
+ * Where a drag on the compose panel's corner handle lands, between [ComposeMinSize] and the
+ * live window it is dragged inside.
+ *
+ * Pure, and kept apart from the drag gesture itself, so the boundary cases can be checked
+ * directly rather than by driving a pointer: dragging below the minimum, dragging past the
+ * window, and a window that is itself smaller than the minimum, which is the case a plain
+ * `coerceIn` gets backwards, handing back a maximum below the minimum it is meant to floor.
+ *
+ * The window bound replaces the flat 620dp ceiling the panel used before there was a handle
+ * to drag: `margin` is the same 16dp the panel already keeps clear on each side it isn't
+ * anchored to (`Modifier.padding(16.dp)`, doubled because growing the panel can now use up
+ * the gap on both edges of an axis), and the 0.8 is the same `fillMaxHeight(0.8f)` fraction
+ * the panel always capped its height at. A window smaller than 620 is no longer asked for
+ * room it does not have, and one larger is no longer left with 620 unused.
+ */
+internal fun clampComposeSize(wanted: DpSize, window: DpSize): DpSize {
+    val margin = 32.dp
+    val maxWidth = (window.width - margin).coerceAtLeast(ComposeMinSize.width)
+    val maxHeight = (window.height * 0.8f).coerceAtLeast(ComposeMinSize.height)
+    return DpSize(
+        wanted.width.coerceIn(ComposeMinSize.width, maxWidth),
+        wanted.height.coerceIn(ComposeMinSize.height, maxHeight),
+    )
 }
 
 @Composable
@@ -517,6 +557,8 @@ private fun App(
     onIcons: (IconPack) -> Unit = {},
     /** Unread across every signed-in inbox, for the badge on the tray icon. */
     onUnread: (Int) -> Unit = {},
+    /** See [Reader], which is what actually needs this. */
+    windowSize: () -> DpSize = { DefaultWindowSize },
 ) {
     var sessions by remember { mutableStateOf<List<Session>>(emptyList()) }
     var adding by remember { mutableStateOf(false) }
@@ -569,6 +611,7 @@ private fun App(
             sessions, onTheme, onQuit, notify,
             onAddAccount = { adding = true },
             icons = icons, onIcons = onIcons, onUnread = onUnread,
+            windowSize = windowSize,
         )
     }
 }
@@ -865,6 +908,14 @@ private fun Reader(
     onIcons: (IconPack) -> Unit = {},
     /** Unread across every signed-in inbox, for the badge on the tray icon. */
     onUnread: (Int) -> Unit = {},
+    /**
+     * The window's current content size, read fresh rather than carried as a plain value: a
+     * compose panel drag needs it only at the moment of the drag, and a state read here
+     * would recompose this whole screen on every frame of an unrelated window resize.
+     * [Rampart] already owns a [androidx.compose.ui.window.WindowState] for exactly this;
+     * this is that state's `size`, handed down rather than re-asked for.
+     */
+    windowSize: () -> DpSize = { DefaultWindowSize },
 ) {
     val scope = rememberCoroutineScope()
     var identities by remember { mutableStateOf<Map<String, List<Identity>>>(emptyMap()) }
@@ -968,6 +1019,13 @@ private fun Reader(
     // Not remembered: a panel is the right default every time, and a message that needed
     // the whole window last week is not a reason to open the next one that way.
     var composeFull by remember { mutableStateOf(false) }
+    // Unlike composeFull, this is remembered: a corner someone dragged is a size they chose,
+    // and a fresh compose panel opening back at 620x620 would throw that away every time.
+    // Read once, at the top of the session; written back to Settings only when a drag ends,
+    // not on every pixel of it, the same restraint a text field would use for something
+    // typed continuously.
+    var composeWidth by remember { mutableStateOf(Settings.composeWidth().dp) }
+    var composeHeight by remember { mutableStateOf(Settings.composeHeight().dp) }
     // Set while a send is waiting out its window, so the bar can offer to take it back.
     var undoSend by remember { mutableStateOf<(() -> Unit)?>(null) }
     var sendCancelled by remember { mutableStateOf(false) }
@@ -3993,16 +4051,71 @@ private fun Reader(
          * shape for anything with a table in it.
          */
         composing?.let { draft ->
+            // Clamped against the live window on every draw, not only while a drag is in
+            // progress: a window shrunk since the size was chosen (or since a previous run)
+            // should not reopen a panel that no longer fits, without needing the drag itself
+            // to have run first.
+            val panelSize = clampComposeSize(DpSize(composeWidth, composeHeight), windowSize())
             Box(
                 Modifier
                     .align(if (composeFull) Alignment.Center else Alignment.BottomEnd)
                     .then(
                         if (composeFull) Modifier.fillMaxSize()
-                        else Modifier.padding(16.dp).width(620.dp).heightIn(max = 620.dp).fillMaxHeight(0.8f),
+                        else Modifier.padding(16.dp).width(panelSize.width).height(panelSize.height),
                     ),
             ) {
                 ComposerFrame(full = composeFull) {
                     ComposerPanel(draft)
+                }
+                /*
+                 * The corner that moves. The panel is anchored bottom right, so the top
+                 * left corner is the one that grows or shrinks the same way a resizable
+                 * window's does everywhere else on the desktop: dragging it changes width
+                 * and height together, diagonally, which is the ordinary meaning of a
+                 * corner handle. Absent in full screen, where there is nothing to resize.
+                 */
+                if (!composeFull) {
+                    val density = LocalDensity.current
+                    Box(
+                        Modifier
+                            .align(Alignment.TopStart)
+                            .size(20.dp)
+                            .pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.NW_RESIZE_CURSOR)))
+                            .pointerInput(Unit) {
+                                // A cancelled drag, the pointer leaving the window mid motion,
+                                // still moved the corner; losing that silently on the way out
+                                // would be a worse surprise than saving it a little early, so
+                                // both endings persist the same way.
+                                val persist: () -> Unit = {
+                                    Settings.setComposeWidth(composeWidth.value)
+                                    Settings.setComposeHeight(composeHeight.value)
+                                }
+                                detectDragGestures(
+                                    onDragEnd = persist,
+                                    onDragCancel = persist,
+                                ) { _, dragAmount ->
+                                    // The corner is top left, so moving the pointer up and
+                                    // left, negative on both axes, is what grows the panel.
+                                    val next = clampComposeSize(
+                                        DpSize(
+                                            composeWidth - with(density) { dragAmount.x.toDp() },
+                                            composeHeight - with(density) { dragAmount.y.toDp() },
+                                        ),
+                                        windowSize(),
+                                    )
+                                    composeWidth = next.width
+                                    composeHeight = next.height
+                                }
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            RampartIcons.Resize,
+                            contentDescription = "Resize",
+                            modifier = Modifier.size(12.dp),
+                            tint = MaterialTheme.colorScheme.outline,
+                        )
+                    }
                 }
             }
         }
