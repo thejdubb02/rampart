@@ -1001,7 +1001,7 @@ private fun DiagnosticsPage() {
     Spacer(Modifier.height(20.dp))
     var advanced by remember { mutableStateOf(server.isNotBlank()) }
     Text(
-        "Send to your own server instead" + if (advanced) "" else " ›",
+        if (advanced) "Send to your own server instead" else "Send to your own server instead ›",
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.outline,
         modifier = Modifier.clickable { advanced = !advanced },
