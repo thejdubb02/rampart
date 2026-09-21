@@ -228,20 +228,19 @@ object Updates {
          * afterwards when there is nothing left to deadlock against.
          */
         val log = Files.createTempFile("rampart-update", ".log")
+        try {
         val process = ProcessBuilder(stageCommand())
             .redirectErrorStream(true)
             .redirectOutput(log.toFile())
             .start()
         if (!process.waitFor(30, java.util.concurrent.TimeUnit.MINUTES)) {
             process.destroyForcibly()
-            runCatching { Files.deleteIfExists(log) }
             lastProblem = "The download did not finish."
             return false
         }
         // Read rather than thrown away. What Windows refused for is the only thing that
         // makes a failure here fixable by anybody.
         val said = runCatching { Files.readString(log) }.getOrDefault("").trim()
-        runCatching { Files.deleteIfExists(log) }
         if (process.exitValue() == 0) {
             lastProblem = null
             true
@@ -249,6 +248,11 @@ object Updates {
             lastProblem = said.lines().firstOrNull { it.isNotBlank() }
                 ?: "Windows would not stage the update and did not say why."
             false
+        }
+        } finally {
+            // On every path, including the one where starting the process throws. A file
+            // left behind every failed attempt is a slow leak in the temp directory.
+            runCatching { Files.deleteIfExists(log) }
         }
     }.getOrDefault(false)
 

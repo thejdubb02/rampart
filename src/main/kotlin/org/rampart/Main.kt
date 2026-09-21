@@ -899,6 +899,28 @@ private fun Reader(
      * for what this starts as.
      */
     var expanded by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    /**
+     * Cards the reader opened themselves, which is the only thing that marks one read.
+     *
+     * Separate from [expanded] because a card can be open without anybody having asked for
+     * it: unread messages in a conversation start open so they can be seen. Marking those
+     * read would mark a ten message thread read the moment it was opened, including the
+     * nine nobody scrolled to, which is the exact failure the mark read delay exists to
+     * prevent. Pressing a collapsed message open is a different statement, and the same one
+     * clicking a message in the list makes.
+     */
+    var openedByHand by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    /**
+     * Messages filed out of this conversation while the rest of it was still being fetched.
+     *
+     * The thread request goes out when a conversation opens and lands a moment later. Archive
+     * a card in between and the answer, which was assembled before the move, puts it back on
+     * screen as though the button had not worked. Held here so the thread is filtered by it
+     * whenever it is assigned.
+     */
+    var filed by remember { mutableStateOf<Set<String>>(emptySet()) }
     /** The card [expanded] should be scrolled into view once it has been laid out. */
     var pendingScrollTo by remember { mutableStateOf<String?>(null) }
     /** Whether the open conversation is muted. Read off disk when the message changes. */
@@ -1096,10 +1118,17 @@ private fun Reader(
             )
             if (fresh != null) updateCard(id) { copy(body = fresh) }
             val parts = fetchedParts.await().getOrNull() ?: emptyList()
-            // Marked finished here rather than at the end: what follows is the pictures the
-            // message carries, and a card with its body and its parts list is complete
-            // enough not to be fetched again from the top.
-            updateCard(id) { copy(attachments = parts, loaded = true) }
+            /*
+             * Finished only when there is actually a body, which is not the same as having
+             * tried. A fetch that failed with nothing on disk leaves an error where the
+             * message should be, and calling that loaded would mean the card never asked
+             * again: opening it a second time would return early and show the same error
+             * for as long as the conversation stayed open, with the network long since back.
+             *
+             * Marked here rather than after the pictures below, because a card with its body
+             * and its parts list is complete enough not to be fetched from the top again.
+             */
+            updateCard(id) { copy(attachments = parts, loaded = fresh != null) }
             // Images the message carries with it are drawn. Fetching them asks the server
             // this account is already signed in to, so it tells the sender nothing, which
             // is the whole difference between these and the remote ones that stay blocked.
@@ -1726,6 +1755,8 @@ private fun Reader(
             summarisePacket = null
             summariseFor = null
             cards = emptyMap()
+            openedByHand = emptySet()
+            filed = emptySet()
             // The clicked message opens at once, before the rest of the thread is even
             // known. See initialExpanded below for what joins it once the thread answers.
             expanded = setOf(message.id)
@@ -1765,8 +1796,11 @@ private fun Reader(
                 // Email/get does not know about the merged inbox, and a card whose account
                 // cannot be worked out cannot reply as, file, or archive anything.
                 .map { row -> if (row.account.isBlank()) row.copy(account = key) else row }
-            thread = loaded
-            expanded = initialExpanded(loaded, message)
+            // Filtered by anything filed while this was in flight, or the answer, which was
+            // assembled before the move, would put it back on screen.
+            val standing = loaded.filterNot { it.id in filed }
+            thread = standing
+            expanded = initialExpanded(standing, message)
             // Only now, because scrolling to where this card is about to land means knowing
             // the whole thread first: asked for before the earlier messages that push it
             // down the page were known about, it would scroll to where the card used to be.
@@ -1800,6 +1834,32 @@ private fun Reader(
             if (wait > 0) delay(wait)
             io { session(key).jmap.markSeen(message.id) }
             emails = emails.map { if (it.id == message.id) it.copy(seen = true) else it }
+        }
+    }
+
+    /**
+     * A card the reader opened themselves is marked read, after the usual pause.
+     *
+     * An effect rather than a coroutine launched from the press, so that collapsing the
+     * card, opening a different conversation or closing the pane cancels the wait the way
+     * Compose cancels everything else. Launched from the screen's own scope it would carry
+     * on regardless: a card opened and immediately closed again still got marked, and two
+     * quick presses sent two requests for the same message.
+     */
+    LaunchedEffect(openedByHand, thread) {
+        val wait = Settings.markReadDelay()
+        // Negative means never on its own, the same as everywhere else it is read.
+        if (wait < 0) return@LaunchedEffect
+        val waiting = thread.filter { it.id in openedByHand && it.id in expanded && !it.seen }
+        if (waiting.isEmpty()) return@LaunchedEffect
+        if (wait > 0) delay(wait)
+        waiting.groupBy { accountOf(it) }.forEach { (key, rows) ->
+            if (key == null) return@forEach
+            val ids = rows.map { it.id }
+            io { session(key).jmap.setKeyword(ids, "\$seen", true) }
+            val marked = ids.toSet()
+            thread = thread.map { if (it.id in marked) it.copy(seen = true) else it }
+            emails = emails.map { if (it.id in marked) it.copy(seen = true) else it }
         }
     }
 
@@ -1844,18 +1904,11 @@ private fun Reader(
     fun toggleExpand(id: String) {
         val opening = id !in expanded
         expanded = if (opening) expanded + id else expanded - id
-        if (!opening) return
-        val row = thread.firstOrNull { it.id == id }?.takeIf { !it.seen } ?: return
-        val key = accountOf(row) ?: return
-        val wait = Settings.markReadDelay()
-        // Negative means never on its own, the same as everywhere else it is read.
-        if (wait < 0) return
-        scope.launch {
-            if (wait > 0) delay(wait)
-            io { session(key).jmap.markSeen(id) }
-            thread = thread.map { if (it.id == id) it.copy(seen = true) else it }
-            emails = emails.map { if (it.id == id) it.copy(seen = true) else it }
-        }
+        // Recorded rather than acted on. The waiting is an effect below, so collapsing the
+        // card again, or leaving the conversation, cancels it: launched from the screen's
+        // own scope it would carry on and mark the message read from under a reader who
+        // changed their mind, and pressing twice would send two of them.
+        openedByHand = if (opening) openedByHand + id else openedByHand - id
     }
 
     /** Re-reads one account's folders, so the sidebar shows what the server now has. */
@@ -1917,7 +1970,11 @@ private fun Reader(
         // reader opened something else.
         thread = thread.filterNot { it.id == message.id }
         expanded = expanded - message.id
+        openedByHand = openedByHand - message.id
         cards = cards - message.id
+        // Remembered, because the thread request for this conversation may still be in
+        // flight and its answer was assembled before this move.
+        filed = filed + message.id
         if (selected?.id == message.id) selected = null
         // One message can be taken back the same way a batch can. Filing the
         // wrong thing is a click, and having to go and find it again is the
