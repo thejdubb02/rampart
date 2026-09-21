@@ -199,20 +199,19 @@ object Settings {
     fun setDiagnosticsServer(value: String) = write { put("diagnosticsServer", JsonPrimitive(value.trim())) }
 
     /**
-     * Whether the numbers [Diagnostics] gathers locally get aggregated and sent on to
-     * [diagnosticsServer]. Never the raw events, never a message, never anything that names
-     * a folder, a sender or a subject: see `Diagnostics.kt` for what actually goes and why
-     * nothing else can.
+     * Whether the numbers [Diagnostics] gathers locally get aggregated and sent on, to
+     * [diagnosticsServer] when it is set or to the Rampart project's own server otherwise:
+     * see [Diagnostics.targetFor]. Never the raw events, never a message, never anything
+     * that names a folder, a sender or a subject: see `Diagnostics.kt` for what actually
+     * goes and why nothing else can.
      *
-     * True whenever a server is configured and nobody has said otherwise, on the same logic
-     * open tracking's own setting already settled: the whole reason to build this is to see
-     * the data, so a build that ships with an endpoint reports by default, and a stranger
-     * who never configures one gets nothing sent because there is nowhere for it to go.
-     * Explicitly written once touched, so turning it off stays off even if the endpoint is
-     * later changed or a fresh build ships with a different one baked in.
+     * True unless somebody has said otherwise, the same logic open tracking's own setting
+     * already settled: the whole reason to build this is to see the data, and every build
+     * now has somewhere for it to go. Explicitly written once touched, so turning it off
+     * stays off.
      */
     fun diagnosticsReporting(): Boolean =
-        read()["diagnosticsReporting"]?.jsonPrimitive?.booleanOrNull ?: diagnosticsServer().isNotBlank()
+        read()["diagnosticsReporting"]?.jsonPrimitive?.booleanOrNull ?: true
 
     fun setDiagnosticsReporting(value: Boolean) = write { put("diagnosticsReporting", JsonPrimitive(value)) }
 

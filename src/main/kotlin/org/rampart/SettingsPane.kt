@@ -982,86 +982,102 @@ private fun DiagnosticsPage() {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text("Send this on to the server below", style = MaterialTheme.typography.bodyMedium)
+            Text("Send anonymous diagnostics to the Rampart developers", style = MaterialTheme.typography.bodyMedium)
             Text(
-                if (server.isBlank()) "There is nowhere to send it until a server is saved below."
-                else "On by default once a server is saved. This is what turns it back off.",
+                if (server.isBlank()) {
+                    "This is what tells us what is actually slow and where Rampart is " +
+                        "breaking, across everyone who leaves this on, not just what shows " +
+                        "on this one machine. On by default; this switch is what turns it off."
+                } else {
+                    "Going to your own server below instead of ours."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.outline,
             )
         }
         Switch(checked = reporting, onCheckedChange = { reporting = it; Settings.setDiagnosticsReporting(it) })
     }
-    Spacer(Modifier.height(14.dp))
 
-    OutlinedTextField(
-        value = server,
-        onValueChange = { server = it; result = null },
-        label = { Text("Your diagnostics server") },
-        placeholder = { Text("https://img.example.com") },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
+    Spacer(Modifier.height(20.dp))
+    var advanced by remember { mutableStateOf(server.isNotBlank()) }
+    Text(
+        "Send to your own server instead" + if (advanced) "" else " ›",
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.outline,
+        modifier = Modifier.clickable { advanced = !advanced },
     )
-    Spacer(Modifier.height(10.dp))
-    OutlinedTextField(
-        value = token,
-        onValueChange = { token = it; result = null },
-        label = { Text("The token you started it with") },
-        singleLine = true,
-        visualTransformation = PasswordVisualTransformation(),
-        modifier = Modifier.fillMaxWidth(),
-    )
-    Spacer(Modifier.height(12.dp))
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Button(
-            enabled = !checking,
-            onClick = {
-                checking = true
-                result = null
-                scope.launch {
-                    val problem = withContext(Dispatchers.IO) { Diagnostics.checkServer(server, token) }
-                    if (problem == null) {
-                        Settings.setDiagnosticsServer(server)
-                        result = Secrets.storeNamed(Diagnostics.TOKEN_NAME, token)
-                            ?: "Saved. Rampart can reach it."
-                        // The default depends on a server now being configured, so it is
-                        // re-read rather than assumed, the same as the tracking page's own
-                        // check-and-save does not need to: that one has no separate toggle.
-                        reporting = Settings.diagnosticsReporting()
-                        worked = true
-                    } else {
-                        result = problem
-                        worked = false
-                    }
-                    checking = false
-                }
-            },
-        ) { Text(if (checking) "Checking" else "Check and save") }
-        if (checking) {
-            Spacer(Modifier.width(12.dp))
-            Spinner(size = 20.dp, thickness = 2.dp)
-        }
-        if (server.isNotBlank() || token.isNotBlank()) {
-            Spacer(Modifier.width(8.dp))
-            TextButton(onClick = {
-                server = ""
-                token = ""
-                reporting = false
-                Settings.setDiagnosticsServer("")
-                Settings.setDiagnosticsReporting(false)
-                Secrets.storeNamed(Diagnostics.TOKEN_NAME, "")
-                result = "Removed. Nothing will be sent."
-                worked = false
-            }) { Text("Remove the server") }
-        }
-    }
-    result?.let {
-        Spacer(Modifier.height(10.dp))
+    if (advanced) {
+        Spacer(Modifier.height(6.dp))
         Text(
-            it,
+            "For running your own copy of the companion server rather than sending to " +
+                "ours. See server/README.md in the Rampart repository.",
             style = MaterialTheme.typography.bodySmall,
-            color = if (worked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+            color = MaterialTheme.colorScheme.outline,
         )
+        Spacer(Modifier.height(10.dp))
+        OutlinedTextField(
+            value = server,
+            onValueChange = { server = it; result = null },
+            label = { Text("Your diagnostics server") },
+            placeholder = { Text("https://img.example.com") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(10.dp))
+        OutlinedTextField(
+            value = token,
+            onValueChange = { token = it; result = null },
+            label = { Text("The token you started it with") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Button(
+                enabled = !checking,
+                onClick = {
+                    checking = true
+                    result = null
+                    scope.launch {
+                        val problem = withContext(Dispatchers.IO) { Diagnostics.checkServer(server, token) }
+                        if (problem == null) {
+                            Settings.setDiagnosticsServer(server)
+                            result = Secrets.storeNamed(Diagnostics.TOKEN_NAME, token)
+                                ?: "Saved. Rampart can reach it."
+                            worked = true
+                        } else {
+                            result = problem
+                            worked = false
+                        }
+                        checking = false
+                    }
+                },
+            ) { Text(if (checking) "Checking" else "Check and save") }
+            if (checking) {
+                Spacer(Modifier.width(12.dp))
+                Spinner(size = 20.dp, thickness = 2.dp)
+            }
+            if (server.isNotBlank() || token.isNotBlank()) {
+                Spacer(Modifier.width(8.dp))
+                TextButton(onClick = {
+                    server = ""
+                    token = ""
+                    Settings.setDiagnosticsServer("")
+                    Secrets.storeNamed(Diagnostics.TOKEN_NAME, "")
+                    result = "Removed. Back to sending to the Rampart project's own server."
+                    worked = false
+                }) { Text("Remove the server") }
+            }
+        }
+        result?.let {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (worked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+            )
+        }
     }
 }
 

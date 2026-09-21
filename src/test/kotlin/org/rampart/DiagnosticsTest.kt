@@ -201,21 +201,21 @@ class DiagnosticsTest {
     }
 
     @Test
-    fun `on with nowhere to send it is told apart from off`() {
-        Settings.setDiagnosticsServer("")
-        // Forced true, because the default when no server is configured is false: this
-        // isolates the "no server" branch of flush from the "reporting is off" one above.
-        Settings.setDiagnosticsReporting(true)
-        Diagnostics.count(Metric.LIST_COMMANDS)
-        assertEquals(FlushOutcome.NO_SERVER, Diagnostics.flush())
+    fun `no custom server means the official one, not nowhere`() {
+        val (server, token) = Diagnostics.targetFor("")
+        assertTrue(server.isNotBlank())
+        assertTrue(token.isNotBlank())
+        val (custom, _) = Diagnostics.targetFor("https://diagnostics.example.invalid")
+        assertEquals("https://diagnostics.example.invalid", custom)
+        assertTrue(custom != server, "a custom server must not resolve to the official one")
     }
 
     @Test
-    fun `reporting defaults to on once a server is configured, and off with none`() {
+    fun `reporting defaults to on, every build now has somewhere to send it`() {
         Settings.setDiagnosticsServer("")
-        assertFalse(Settings.diagnosticsReporting())
-        Settings.setDiagnosticsServer("https://diagnostics.example.invalid")
         assertTrue(Settings.diagnosticsReporting())
+        Settings.setDiagnosticsReporting(false)
+        assertFalse(Settings.diagnosticsReporting())
     }
 
     // ---- what actually crosses the wire ----

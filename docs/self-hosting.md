@@ -49,15 +49,17 @@ What needs it today:
   of what was fetched and when, and answers one authenticated question: what has opened
   since I last asked. `open-tracking.md` has the design.
 - **Diagnostics.** Local timing and health statistics work with no server and no setting
-  at all: the Diagnostics settings page shows them from this computer alone. Pointing
-  Rampart at a companion additionally sends the aggregate on, a few minutes at a time, so
-  real performance data can be looked at rather than guessed about. Off by default for a
-  stranger who never configures one; on by default once a build ships with a server
-  already filled in, because the point of building this is to actually see the numbers.
-  Never a subject, a sender, a recipient, a folder's name or a search term, and never the
-  text of an error, only which of a short list of categories it fell into. See
-  `Diagnostics.kt` in `src/main/kotlin/org/rampart/` for the full catalog and the no-PII
-  rules it enforces.
+  at all: the Diagnostics settings page shows them from this computer alone. Sending the
+  aggregate on, a few minutes at a time, is a build-in default now rather than something
+  a stranger has to set up: every official build carries an inbound point for the Rampart
+  project's own server, on by default, one switch to turn off. Pointing Rampart at your
+  own server instead of ours, in the same settings page's "Send to your own server"
+  section, sends there and nowhere else. Never a subject, a sender, a recipient, a
+  folder's name or a search term, and never the text of an error, only which of a short
+  list of categories it fell into. See `Diagnostics.kt` in `src/main/kotlin/org/rampart/`
+  for the full catalog and the no-PII rules it enforces, and `server/README.md`'s "Why
+  there are two tokens" for how the built-in default cannot read anyone's own open-tracking
+  log back, even on the same server.
 
 What the companion is not, and will not become:
 

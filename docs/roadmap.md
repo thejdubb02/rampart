@@ -207,8 +207,11 @@ proven, and it is listed that way on the board.
 **2026-09-21.** Local diagnostics: how long a message takes to open, how many IMAP or JMAP
 commands a folder load actually costs, what kind of trouble a send or a sync ran into. No
 toggle and no server needed for any of that, because it alone answers "why did that feel
-slow just now"; an aggregate reaching a self-hosted companion is a separate switch that
-stays off until one is configured. The sidebar's per-account rows became one overlapped
+slow just now"; whether the aggregate also reaches a server is a separate switch, on by
+default, sending to the Rampart project's own companion unless a self-hosted one is set
+instead. Its token is scoped so a build-in default that ships in public source can only
+ever post diagnostics, never read anyone's own open-tracking log back. The sidebar's
+per-account rows became one overlapped
 stack of avatars, capped at three faces past which a badge takes over, opening straight
 onto account settings on a click. The update flow's changelog is reachable on demand now
 from the version number at the bottom, not only the dialog that shows itself once. The
@@ -788,10 +791,11 @@ is new.
 - **PWA, service workers, web push, permalinks.** Answers to problems a web page has.
 - **Telemetry, anonymous or otherwise.** Reversed 2026-09-21, on a new reason: messages
   were genuinely loading slowly and there was no way to see why. What shipped is local
-  timing and health numbers with no toggle and no server; an aggregate reaching a
-  self-hosted companion is a separate, off-until-configured switch. `Diagnostics.kt`'s
-  closed allowlist is what makes "never a message, a sender, a subject" structural rather
-  than a policy someone has to keep honouring.
+  timing and health numbers with no toggle and no server, plus an aggregate that reaches
+  the Rampart project's own companion by default, one switch to turn off, or a
+  self-hosted one instead. `Diagnostics.kt`'s closed allowlist is what makes "never a
+  message, a sender, a subject" structural rather than a policy someone has to keep
+  honouring.
 - **Internationalization**, until there is a second user who needs it.
 - **"Digital twin" auto-replies**, and anything else that speaks as the user without the
   user reading it first. The estate rule is that nothing client-facing sends itself, and

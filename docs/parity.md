@@ -205,12 +205,14 @@ yet.
   application. These are answers to problems a web page has.
 - **Demo mode on fixture data.** The screenshot tests already render every screen from
   fixtures, which is the part that was actually useful.
-- **Telemetry sent by default, with no way to see or stop it.** No. What shipped instead,
-  2026-09-21: local timing and health numbers work with no toggle and no server, because
-  that alone answers "why did that feel slow just now." Sending an aggregate on to a
-  self-hosted companion is a second, separate switch that stays off until one is configured.
-  Never a message, a subject, a sender, a recipient, a folder's name or a search term.
-  `Diagnostics.kt` is the closed allowlist and `self-hosting.md` has the design.
+- **Telemetry sent with no way to see or stop it.** No. What shipped instead, 2026-09-21:
+  local timing and health numbers work with no toggle and no server, because that alone
+  answers "why did that feel slow just now." Sending an aggregate on, a few minutes at a
+  time, is a visible switch in Settings, on by default so the numbers can actually be
+  seen, one click to turn off, going to the Rampart project's own server or one you
+  self-host instead. Never a message, a subject, a sender, a recipient, a folder's name
+  or a search term. `Diagnostics.kt` is the closed allowlist and `self-hosting.md` has
+  the design.
 - **Anything that needs its own login.** Tinyauth or the mailbox, nothing else.
 
 ---

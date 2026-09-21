@@ -31,12 +31,12 @@ import kotlinx.serialization.json.putJsonArray
  * little while of activity in [recent], with no toggle and no server required, because
  * that is what answers "why did that message feel slow just now" and it can answer it with
  * nothing sent anywhere. The one real toggle, [Settings.diagnosticsReporting], decides only
- * whether the aggregate in [pending] is ever POSTed on; see that property for why it
- * defaults to on once a server is configured rather than off everywhere, the same rule
- * `docs/open-tracking.md` already settled for the tracking pixel: a feature built so the
- * numbers can be seen should default to letting them be seen once there is somewhere for
- * them to go, and a toggle that only ever turns a thing off that nobody turned on is not
- * much of a toggle.
+ * whether the aggregate in [pending] is ever POSTed on. It defaults to on: a build always
+ * has somewhere to send it now, [OFFICIAL_SERVER], the same rule `docs/open-tracking.md`
+ * already settled for the tracking pixel, that a feature built so the numbers can be seen
+ * should default to letting them be seen. Pointing [Settings.diagnosticsServer] at a
+ * self-hosted server instead sends there rather than to us; it never adds a second
+ * destination.
  *
  * **Two kinds of data live here and they do not mix.** [recent] is for the local
  * Diagnostics settings page and can hold a scrubbed error message, because it never leaves
@@ -55,6 +55,22 @@ object Diagnostics {
 
     /** The token this install's diagnostics server was given, kept the same way [Assistant.KEY] is. */
     const val TOKEN_NAME = "diagnostics-token"
+
+    /**
+     * Where a build sends diagnostics when [Settings.diagnosticsServer] has not been set to
+     * something else.
+     *
+     * [OFFICIAL_TOKEN] is a public ingest key, not a secret: it ships in the source of a
+     * public repository, so anyone can read it. It is scoped server-side to exactly this:
+     * the companion's `/diag` route accepts it and only it, never `/opens`, so reading it
+     * out of the source gets nobody anything but the ability to post junk numbers, the same
+     * shape a Sentry DSN or an analytics write key is exposed to. See `server/README.md`'s
+     * "Why there are two tokens." Self-hosting your own copy instead, with your own token
+     * entered on this page, is still the whole point of [Settings.setDiagnosticsServer]
+     * existing; this pair is only the default for everyone who does not.
+     */
+    private const val OFFICIAL_SERVER = "https://rampart-relay.willhitestrategy.org"
+    private const val OFFICIAL_TOKEN = "U1Bspkc1QxJxvDZE3l50V3ul5DvoM2gTs6zen+s2Rxw=" // gitleaks:allow
 
     private const val MAX_RECENT = 500
     private val MAX_AGE: Duration = Duration.ofHours(24)
@@ -203,9 +219,7 @@ object Diagnostics {
         val batch = pending.keys.toList().mapNotNull { key -> pending.remove(key)?.let { key to it } }
         if (batch.isEmpty()) return FlushOutcome.NOTHING_TO_SEND
         if (!Settings.diagnosticsReporting()) return FlushOutcome.REPORTING_OFF
-        val server = Settings.diagnosticsServer()
-        if (server.isBlank()) return FlushOutcome.NO_SERVER
-        val token = Secrets.loadNamed(TOKEN_NAME).orEmpty()
+        val (server, token) = targetFor(Settings.diagnosticsServer())
         val items = batch.take(MAX_BATCH_ITEMS).map { (key, aggregate) -> key to aggregate }
         return try {
             send(server, token, items)
@@ -217,6 +231,16 @@ object Diagnostics {
             }.fold({ FlushOutcome.SENT }, { FlushOutcome.FAILED })
         }
     }
+
+    /**
+     * Where a batch actually goes: [customServer] and its saved token when one has been set,
+     * [OFFICIAL_SERVER] and [OFFICIAL_TOKEN] when it has not. There is no third state to
+     * fail into any more, since [flush] always has somewhere to send a batch once reporting
+     * is on.
+     */
+    internal fun targetFor(customServer: String): Pair<String, String> =
+        if (customServer.isBlank()) OFFICIAL_SERVER to OFFICIAL_TOKEN
+        else customServer to Secrets.loadNamed(TOKEN_NAME).orEmpty()
 
     /**
      * Whether the diagnostics server is there and the token is right, for the settings
@@ -500,4 +524,4 @@ internal fun sendFailureCategoryOf(e: Throwable): SendFailureCategory {
 }
 
 /** Outcomes [Diagnostics.flush] can report, for the tests: production never reads this. */
-internal enum class FlushOutcome { NOTHING_TO_SEND, REPORTING_OFF, NO_SERVER, SENT, FAILED }
+internal enum class FlushOutcome { NOTHING_TO_SEND, REPORTING_OFF, SENT, FAILED }
