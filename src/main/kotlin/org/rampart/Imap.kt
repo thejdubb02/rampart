@@ -29,6 +29,8 @@ import kotlinx.serialization.json.JsonObject
 import java.nio.file.Path
 import java.time.Instant
 import java.util.Properties
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import kotlin.io.path.writeBytes
 
 /**
@@ -51,6 +53,17 @@ internal class Imap private constructor(
     private val sendHost: String,
     private val sendPort: Int,
 ) : MailBackend, AutoCloseable {
+
+    /**
+     * The folder currently selected, kept open between calls. See [useFolder].
+     *
+     * Null before the first call and after one failed, which is the signal to select again
+     * rather than reuse something that may be broken.
+     */
+    private var open: IMAPFolder? = null
+
+    /** Turns, because one open folder cannot be used from two threads. See [useFolder]. */
+    private val gate = ReentrantLock()
 
     companion object {
         /**
@@ -237,6 +250,7 @@ internal class Imap private constructor(
     override fun body(id: String): Body = useFolder(folderOf(id), Folder.READ_ONLY) { folder ->
         val message = folder.getMessageByUID(uidOf(id)) as? MimeMessage
             ?: throw JmapError("That message is not on the server any more.")
+        fill(folder, message)
         val found = FoundBody()
         walk(message, found)
         val headers = bodyFromHeaders(headerPairs(message))
@@ -251,6 +265,10 @@ internal class Imap private constructor(
     }
 
     override fun close() {
+        gate.withLock {
+            runCatching { open?.close(false) }
+            open = null
+        }
         runCatching { store.close() }
     }
 
@@ -482,6 +500,7 @@ internal class Imap private constructor(
     override fun attachments(emailId: String): List<Attachment> =
         useFolder(folderOf(emailId), Folder.READ_ONLY) { folder ->
             val message = folder.getMessageByUID(uidOf(emailId)) as? MimeMessage ?: return@useFolder emptyList()
+            fill(folder, message)
             attachmentsOf(message, emailId)
         }
 
@@ -589,16 +608,53 @@ internal class Imap private constructor(
 
     override fun deleteContact(id: String) = throw Unsupported(Lacks.CONTACTS)
 
-    private inline fun <T> useFolder(mailboxId: String, mode: Int, block: (IMAPFolder) -> T): T {
-        val folder = store.getFolder(mailboxId) as IMAPFolder
-        folder.open(mode)
+    /**
+     * Runs [block] against [mailboxId], keeping the folder open afterwards.
+     *
+     * **A SELECT and a CLOSE per call was most of the cost of opening a message.** The
+     * reading pane asks for the body, the parts and the conversation, which is three calls,
+     * and each one used to open the folder and shut it again. Measured against our own
+     * server that was 45 commands for one message where the same three calls through a
+     * folder that stays open are 15. Each command is a round trip, so on a mailbox across
+     * the Atlantic the difference is seconds, and it was the reason a message took a moment
+     * to appear.
+     *
+     * So the folder is held open and reused until a different one is asked for, and closed
+     * in [close]. Sequence numbers shift under an open folder when anything is expunged,
+     * which is exactly why every id in this file is a UID and never a sequence number.
+     *
+     * **Serialised on purpose.** A Jakarta Mail folder is not safe to use from two threads
+     * at once, and the three calls above are made in parallel. Sharing one open folder
+     * therefore means taking turns. That is still far cheaper than the alternative, because
+     * what is being saved is round trips rather than local work: 15 commands in turn beat 45
+     * in parallel on one connection, which is what the measurement above says.
+     *
+     * A call that throws drops the folder rather than leaving a possibly broken one behind
+     * for the next caller to reuse.
+     */
+    private fun <T> useFolder(mailboxId: String, mode: Int, block: (IMAPFolder) -> T): T = gate.withLock {
+        val held = open
+        // A folder already open for writing serves a reader too, so a read after a move does
+        // not re-select the folder for the sake of the weaker mode.
+        val reusable = held != null && held.fullName == mailboxId && held.isOpen &&
+            (held.mode == mode || mode == Folder.READ_ONLY)
+        val folder = if (reusable) {
+            held!!
+        } else {
+            // Never close(true): that would expunge every deleted message in the folder,
+            // not only the ones a call meant to remove.
+            runCatching { held?.close(false) }
+            (store.getFolder(mailboxId) as IMAPFolder).also {
+                it.open(mode)
+                open = it
+            }
+        }
         try {
-            return block(folder)
-        } finally {
-            // The work has already happened. A close that fails must not hide that, and
-            // must not expunge: close(true) would drop every deleted message in the
-            // folder, not only the ones this call meant to remove.
+            block(folder)
+        } catch (e: Throwable) {
             runCatching { folder.close(false) }
+            open = null
+            throw e
         }
     }
 
@@ -612,6 +668,20 @@ internal class Imap private constructor(
      * each one is a round trip: on a server a millisecond away 120 of them are invisible,
      * and on Gmail they are five seconds every time the list is scrolled.
      */
+    /**
+     * Asks for everything reading one message will touch, in one command.
+     *
+     * Same fault as the list had, one message at a time instead of twenty: Jakarta Mail
+     * fills a message lazily, so the structure, the size, the content type and every header
+     * read below are each a fetch of their own. Measured against our own server, one message
+     * through a folder that stays open is 15 commands read lazily and 11 asked for up front.
+     *
+     * Best effort. A server that refuses the prefetch is slower, not broken.
+     */
+    private fun fill(folder: IMAPFolder, message: MimeMessage) {
+        runCatching { folder.fetch(arrayOf(message), messageFields) }
+    }
+
     private fun summaries(messages: List<Message>, folder: IMAPFolder): List<Summary> {
         val mime = messages.filterIsInstance<MimeMessage>()
         if (mime.isEmpty()) return emptyList()
@@ -676,6 +746,22 @@ internal fun imapId(uid: Long, mailboxId: String): String = "$uid $mailboxId"
  * state, and UID the id the rest of Rampart addresses the message by. Nothing else is
  * asked for: the body is not, which is what keeps a page of a folder small.
  */
+/**
+ * Everything reading one message touches: the structure and size on top of what a row
+ * needs, and the whole header block, because the reading pane asks for a dozen headers by
+ * name and ENVELOPE carries only five of them.
+ *
+ * The body text is deliberately not here. It is fetched when a part is actually read, so a
+ * message with a ten megabyte attachment does not pull it down to show the subject.
+ */
+private val messageFields = FetchProfile().apply {
+    add(FetchProfile.Item.ENVELOPE)
+    add(FetchProfile.Item.FLAGS)
+    add(FetchProfile.Item.CONTENT_INFO)
+    add(UIDFolder.FetchProfileItem.UID)
+    add(IMAPFolder.FetchProfileItem.HEADERS)
+}
+
 private val summaryFields = FetchProfile().apply {
     add(FetchProfile.Item.ENVELOPE)
     add(FetchProfile.Item.FLAGS)
