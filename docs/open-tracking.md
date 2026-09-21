@@ -221,10 +221,11 @@ of it is somebody else's job here already.
 | Tracking on by default | **No. Off, per message, remembered per recipient domain.** Theirs is on by default on desktop. Say the word and it flips |
 | "Sent with Mailtrack" footer on the free plan | No |
 
-The open notification is a desktop notification, which every install gets. Getting it
-somewhere else is one optional setting: a webhook URL that Rampart posts to. Ours points at
-the notification router that already carries our bounce alerts, so that part is
-configuration rather than code, and nobody else needs one to get the feature.
+**Shipped 2026-09-21**, and simpler than the line above once claimed: no webhook, because
+there is nowhere it needs to go. The same poll that already asks the companion what has
+opened raises the notification locally, the moment it finds a genuinely new, genuinely
+human read, using the bot filtering below to decide "human." A toggle in Settings turns it
+off; nothing posts anywhere, and every install gets it with nothing configured.
 
 ### Bot filtering, since it is the whole difference
 

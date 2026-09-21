@@ -211,9 +211,13 @@ slow just now"; an aggregate reaching a self-hosted companion is a separate swit
 stays off until one is configured. The sidebar's per-account rows became one overlapped
 stack of avatars, capped at three faces past which a badge takes over, opening straight
 onto account settings on a click. The update flow's changelog is reachable on demand now
-from the version number at the bottom, not only the dialog that shows itself once. And the
+from the version number at the bottom, not only the dialog that shows itself once. The
 compose panel, fixed at 620 by 620 since it was built, now drags from a corner to whatever
-size the window it lives in actually has room for.
+size the window it lives in actually has room for. And a tracked message being opened,
+which was already counted and shown on screen, now also raises a desktop notification, the
+moment it happens and gated by the same classifier the open count already is, so a scanner
+still cannot make Rampart tell you somebody read something they never saw. Built with
+`grok-4.7-build-fast` from a written spec, reviewed here before it shipped.
 
 ---
 
