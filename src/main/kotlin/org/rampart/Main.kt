@@ -3,6 +3,8 @@ package org.rampart
 import kotlinx.serialization.json.JsonObject
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.TooltipArea
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.clickable
@@ -2087,67 +2089,74 @@ private fun Reader(
          * selection is a request to read that message, so it opens, and the cards already
          * open stay open because this adds rather than replaces.
          */
-        expanded = expanded + message.id
-        if (thread.none { it.id == message.id }) {
-            thread = emptyList()
-            // A summary, a pending packet or an error belongs to the conversation it was
-            // made for. Left in place across a switch, it would be shown as if it were an
-            // answer about whatever is open now.
-            threadSummary = null
-            summariseError = null
-            summarisePacket = null
-            summariseFor = null
-            cards = emptyMap()
-            openedByHand = emptySet()
-            filed = emptySet()
-            // The clicked message opens at once, before the rest of the thread is even
-            // known. See initialExpanded below for what joins it once the thread answers.
-            expanded = setOf(message.id)
-            /*
-             * The thread goes out alongside the click's own card rather than after it: they
-             * do not depend on each other and each is a round trip, so asking in turn made
-             * opening a message cost two of them end to end before the rest of the
-             * conversation was even known to be there.
-             */
-            fetchedThread = async(Dispatchers.IO) { tried { session(key).jmap.thread(message.threadId) } }
-        }
-        // A message read once opens with no round trip at all, which is most of what
-        // "instant" means in a mail client. Still re-fetched underneath, because a body
-        // can gain a decoded part or lose a broken one between reads.
-        loadCard(key, message.id, force = true)
-
-        /*
-         * The meeting, when the message carries one.
-         *
-         * Read here rather than from the body, because an invitation is a part of its own:
-         * Outlook and Google both send it as a third format inside multipart/alternative
-         * beside the text and the HTML, and it is small enough that fetching it to find out
-         * costs nothing worth saving.
-         */
-        cardFor(message).attachments.firstOrNull { it.type.equals("text/calendar", ignoreCase = true) }?.let { part ->
-            invitation = withContext(Dispatchers.IO) {
-                runCatching {
-                    session(key).jmap.blob(part)?.let { invitationIn(String(it, Charsets.UTF_8)) }
-                }.getOrNull()
+        // Click to on-screen, the number that answers "why did opening that one feel
+        // slow": the card's own fetch, the thread it belongs to when that is not already
+        // known, and the meeting invitation when there is one. Not the mark-as-read pause
+        // or the draft hand-off below, neither of which is what "loading" means to whoever
+        // is waiting on it.
+        Diagnostics.time(Metric.MESSAGE_OPEN_TOTAL) {
+            expanded = expanded + message.id
+            if (thread.none { it.id == message.id }) {
+                thread = emptyList()
+                // A summary, a pending packet or an error belongs to the conversation it was
+                // made for. Left in place across a switch, it would be shown as if it were an
+                // answer about whatever is open now.
+                threadSummary = null
+                summariseError = null
+                summarisePacket = null
+                summariseFor = null
+                cards = emptyMap()
+                openedByHand = emptySet()
+                filed = emptySet()
+                // The clicked message opens at once, before the rest of the thread is even
+                // known. See initialExpanded below for what joins it once the thread answers.
+                expanded = setOf(message.id)
+                /*
+                 * The thread goes out alongside the click's own card rather than after it: they
+                 * do not depend on each other and each is a round trip, so asking in turn made
+                 * opening a message cost two of them end to end before the rest of the
+                 * conversation was even known to be there.
+                 */
+                fetchedThread = async(Dispatchers.IO) { tried { session(key).jmap.thread(message.threadId) } }
             }
-        }
+            // A message read once opens with no round trip at all, which is most of what
+            // "instant" means in a mail client. Still re-fetched underneath, because a body
+            // can gain a decoded part or lose a broken one between reads.
+            loadCard(key, message.id, force = true)
 
-        fetchedThread?.let {
-            val loaded = it.await().getOrNull().orEmpty()
-                // A thread comes from one account: JMAP does not thread across servers, so
-                // every message in it shares the click's own key. Stamped here because
-                // Email/get does not know about the merged inbox, and a card whose account
-                // cannot be worked out cannot reply as, file, or archive anything.
-                .map { row -> if (row.account.isBlank()) row.copy(account = key) else row }
-            // Filtered by anything filed while this was in flight, or the answer, which was
-            // assembled before the move, would put it back on screen.
-            val standing = loaded.filterNot { it.id in filed }
-            thread = standing
-            expanded = initialExpanded(message)
-            // Only now, because scrolling to where this card is about to land means knowing
-            // the whole thread first: asked for before the earlier messages that push it
-            // down the page were known about, it would scroll to where the card used to be.
-            pendingScrollTo = message.id
+            /*
+             * The meeting, when the message carries one.
+             *
+             * Read here rather than from the body, because an invitation is a part of its own:
+             * Outlook and Google both send it as a third format inside multipart/alternative
+             * beside the text and the HTML, and it is small enough that fetching it to find out
+             * costs nothing worth saving.
+             */
+            cardFor(message).attachments.firstOrNull { it.type.equals("text/calendar", ignoreCase = true) }?.let { part ->
+                invitation = withContext(Dispatchers.IO) {
+                    runCatching {
+                        session(key).jmap.blob(part)?.let { invitationIn(String(it, Charsets.UTF_8)) }
+                    }.getOrNull()
+                }
+            }
+
+            fetchedThread?.let {
+                val loaded = it.await().getOrNull().orEmpty()
+                    // A thread comes from one account: JMAP does not thread across servers, so
+                    // every message in it shares the click's own key. Stamped here because
+                    // Email/get does not know about the merged inbox, and a card whose account
+                    // cannot be worked out cannot reply as, file, or archive anything.
+                    .map { row -> if (row.account.isBlank()) row.copy(account = key) else row }
+                // Filtered by anything filed while this was in flight, or the answer, which was
+                // assembled before the move, would put it back on screen.
+                val standing = loaded.filterNot { it.id in filed }
+                thread = standing
+                expanded = initialExpanded(message)
+                // Only now, because scrolling to where this card is about to land means knowing
+                // the whole thread first: asked for before the earlier messages that push it
+                // down the page were known about, it would scroll to where the card used to be.
+                pendingScrollTo = message.id
+            }
         }
 
         // A draft is not something to read. Clicking one puts it back in the composer,
@@ -4329,6 +4338,33 @@ internal data class FolderAsk(val account: String, val mailbox: Mailbox?, val jo
 /** What a right-click on a folder asked for. Answered by whoever owns the sidebar. */
 internal enum class FolderJob { CreateInside, Rename, ToTop, Delete }
 
+/**
+ * A hover label for an icon-only button, the row of five at the bottom of the sidebar
+ * being the case that actually needed one: nothing there carries a word, so what each
+ * one does is a guess until it is clicked.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SidebarTooltip(text: String, content: @Composable () -> Unit) {
+    TooltipArea(
+        tooltip = {
+            Surface(
+                shape = MaterialTheme.shapes.small,
+                color = MaterialTheme.colorScheme.inverseSurface,
+                shadowElevation = 4.dp,
+            ) {
+                Text(
+                    text,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.inverseOnSurface,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
+        },
+        content = content,
+    )
+}
+
 @Composable
 internal fun Sidebar(
     accounts: List<AccountMailboxes>,
@@ -4533,49 +4569,59 @@ internal fun Sidebar(
         }
 
         if (collapsed) {
-            IconButton(onClick = onDashboard, modifier = Modifier.size(32.dp)) {
-                Icon(
-                    RampartIcons.Dashboard,
-                    contentDescription = "How your mail is going",
-                    tint = if (inDashboard) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.size(16.dp),
-                )
+            SidebarTooltip("How your mail is going") {
+                IconButton(onClick = onDashboard, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        RampartIcons.Dashboard,
+                        contentDescription = "How your mail is going",
+                        tint = if (inDashboard) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
             }
-            IconButton(onClick = onContacts, modifier = Modifier.size(32.dp)) {
-                Icon(
-                    RampartIcons.Contacts,
-                    contentDescription = "Contacts",
-                    tint = if (inContacts) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.size(16.dp),
-                )
+            SidebarTooltip("Contacts") {
+                IconButton(onClick = onContacts, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        RampartIcons.Contacts,
+                        contentDescription = "Contacts",
+                        tint = if (inContacts) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
             }
-            IconButton(onClick = onAsk, modifier = Modifier.size(32.dp)) {
-                Icon(
-                    RampartIcons.Ask,
-                    contentDescription = "The assistant",
-                    tint = if (asking) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.size(16.dp),
-                )
+            SidebarTooltip("The assistant") {
+                IconButton(onClick = onAsk, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        RampartIcons.Ask,
+                        contentDescription = "The assistant",
+                        tint = if (asking) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
             }
-            IconButton(onClick = onSettings, modifier = Modifier.size(32.dp)) {
-                Icon(
-                    RampartIcons.Settings,
-                    contentDescription = "Settings",
-                    tint = if (inSettings) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.size(16.dp),
-                )
+            SidebarTooltip("Settings") {
+                IconButton(onClick = onSettings, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        RampartIcons.Settings,
+                        contentDescription = "Settings",
+                        tint = if (inSettings) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
             }
-            IconButton(onClick = onToggleCollapsed, modifier = Modifier.size(32.dp)) {
-                Icon(
-                    RampartIcons.Expand,
-                    contentDescription = "Widen the sidebar",
-                    tint = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.size(16.dp),
-                )
+            SidebarTooltip("Widen the sidebar") {
+                IconButton(onClick = onToggleCollapsed, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        RampartIcons.Expand,
+                        contentDescription = "Widen the sidebar",
+                        tint = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
             }
         } else {
             // "Add account" used to live here as its own text row; that job now belongs to
@@ -4585,49 +4631,59 @@ internal fun Sidebar(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = onDashboard, modifier = Modifier.size(28.dp)) {
-                    Icon(
-                        RampartIcons.Dashboard,
-                        contentDescription = "How your mail is going",
-                        tint = if (inDashboard) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.size(16.dp),
-                    )
+                SidebarTooltip("How your mail is going") {
+                    IconButton(onClick = onDashboard, modifier = Modifier.size(28.dp)) {
+                        Icon(
+                            RampartIcons.Dashboard,
+                            contentDescription = "How your mail is going",
+                            tint = if (inDashboard) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
                 }
-                IconButton(onClick = onContacts, modifier = Modifier.size(28.dp)) {
-                    Icon(
-                        RampartIcons.Contacts,
-                        contentDescription = "Contacts",
-                        tint = if (inContacts) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.size(16.dp),
-                    )
+                SidebarTooltip("Contacts") {
+                    IconButton(onClick = onContacts, modifier = Modifier.size(28.dp)) {
+                        Icon(
+                            RampartIcons.Contacts,
+                            contentDescription = "Contacts",
+                            tint = if (inContacts) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
                 }
-                IconButton(onClick = onAsk, modifier = Modifier.size(28.dp)) {
-                    Icon(
-                        RampartIcons.Ask,
-                        contentDescription = "The assistant",
-                        tint = if (asking) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.size(16.dp),
-                    )
+                SidebarTooltip("The assistant") {
+                    IconButton(onClick = onAsk, modifier = Modifier.size(28.dp)) {
+                        Icon(
+                            RampartIcons.Ask,
+                            contentDescription = "The assistant",
+                            tint = if (asking) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
                 }
-                IconButton(onClick = onSettings, modifier = Modifier.size(28.dp)) {
-                    Icon(
-                        RampartIcons.Settings,
-                        contentDescription = "Settings",
-                        tint = if (inSettings) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.size(16.dp),
-                    )
+                SidebarTooltip("Settings") {
+                    IconButton(onClick = onSettings, modifier = Modifier.size(28.dp)) {
+                        Icon(
+                            RampartIcons.Settings,
+                            contentDescription = "Settings",
+                            tint = if (inSettings) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
                 }
-                IconButton(onClick = onToggleCollapsed, modifier = Modifier.size(28.dp)) {
-                    Icon(
-                        RampartIcons.Collapse,
-                        contentDescription = "Narrow the sidebar",
-                        tint = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.size(15.dp),
-                    )
+                SidebarTooltip("Narrow the sidebar") {
+                    IconButton(onClick = onToggleCollapsed, modifier = Modifier.size(28.dp)) {
+                        Icon(
+                            RampartIcons.Collapse,
+                            contentDescription = "Narrow the sidebar",
+                            tint = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.size(15.dp),
+                        )
+                    }
                 }
             }
             /*
