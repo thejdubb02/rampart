@@ -205,7 +205,12 @@ yet.
   application. These are answers to problems a web page has.
 - **Demo mode on fixture data.** The screenshot tests already render every screen from
   fixtures, which is the part that was actually useful.
-- **Anonymous telemetry.** No.
+- **Telemetry sent by default, with no way to see or stop it.** No. What shipped instead,
+  2026-09-21: local timing and health numbers work with no toggle and no server, because
+  that alone answers "why did that feel slow just now." Sending an aggregate on to a
+  self-hosted companion is a second, separate switch that stays off until one is configured.
+  Never a message, a subject, a sender, a recipient, a folder's name or a search term.
+  `Diagnostics.kt` is the closed allowlist and `self-hosting.md` has the design.
 - **Anything that needs its own login.** Tinyauth or the mailbox, nothing else.
 
 ---
@@ -289,4 +294,6 @@ team rather than for themselves.
 - **PWA, service workers, web push, protocol-handler registration, a static Lite build.**
   All of it is a browser working around not being an application. Rampart is the
   application.
-- **Telemetry.** Bulwark's is opt-in and careful. Rampart's answer is not to have any.
+- **Telemetry.** Bulwark's is opt-in and careful. Reversed 2026-09-21: Rampart's is local by
+  default with no toggle needed, and opt-in the same way Bulwark's is for the half that
+  leaves the machine.

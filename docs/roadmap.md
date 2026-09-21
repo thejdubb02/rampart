@@ -204,6 +204,17 @@ arrives looking the same in Bulwark, Gmail and Outlook, and whether a rule built
 live incoming mail with Rampart closed. Until each is checked it is done rather than
 proven, and it is listed that way on the board.
 
+**2026-09-21.** Local diagnostics: how long a message takes to open, how many IMAP or JMAP
+commands a folder load actually costs, what kind of trouble a send or a sync ran into. No
+toggle and no server needed for any of that, because it alone answers "why did that feel
+slow just now"; an aggregate reaching a self-hosted companion is a separate switch that
+stays off until one is configured. The sidebar's per-account rows became one overlapped
+stack of avatars, capped at three faces past which a badge takes over, opening straight
+onto account settings on a click. The update flow's changelog is reachable on demand now
+from the version number at the bottom, not only the dialog that shows itself once. And the
+compose panel, fixed at 620 by 620 since it was built, now drags from a corner to whatever
+size the window it lives in actually has room for.
+
 ---
 
 ## The message header, and showing the working
@@ -771,7 +782,12 @@ is new.
   keep, and a plugin that can read the mail body is a security boundary we would own. The
   MCP server is the extension story instead: one boundary, outside the process.
 - **PWA, service workers, web push, permalinks.** Answers to problems a web page has.
-- **Telemetry, anonymous or otherwise.**
+- **Telemetry, anonymous or otherwise.** Reversed 2026-09-21, on a new reason: messages
+  were genuinely loading slowly and there was no way to see why. What shipped is local
+  timing and health numbers with no toggle and no server; an aggregate reaching a
+  self-hosted companion is a separate, off-until-configured switch. `Diagnostics.kt`'s
+  closed allowlist is what makes "never a message, a sender, a subject" structural rather
+  than a policy someone has to keep honouring.
 - **Internationalization**, until there is a second user who needs it.
 - **"Digital twin" auto-replies**, and anything else that speaks as the user without the
   user reading it first. The estate rule is that nothing client-facing sends itself, and
