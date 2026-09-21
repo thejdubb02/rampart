@@ -5440,8 +5440,7 @@ internal fun MessageList(
                 loading -> Spinner(Modifier.align(Alignment.Center))
                 emails.isEmpty() -> Text(
                     filterNote ?: when {
-                        filters.unread && !filters.starred && !filters.tagged &&
-                            !filters.attachment && !filters.knownSender -> "Nothing unread here."
+                        filters == QuickFilters(unread = true) -> "Nothing unread here."
                         filters.active -> "Nothing matches."
                         else -> "Nothing here."
                     },
