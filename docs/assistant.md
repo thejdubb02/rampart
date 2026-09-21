@@ -115,6 +115,14 @@ feature is used, Rampart says plainly which provider the text is about to go to 
 Per feature, not once globally, because summarising a thread and triaging every message
 are different appetites.
 
+**Folders that never leave.** A per-account list, empty by default, on the Assistant
+settings page. A folder on it is refused before any packet is built for a message sitting
+in it, not after: the button that would summarise it is disabled and `Assistant.whyNot`
+names the folder as the reason, so the reader finds an explanation rather than a dead
+control. Deny only, with no allow list beside it: every folder is already implicitly
+allowed once BYOK is switched on and a feature is agreed to, and a list of what remains
+allowed would only be the complement of the deny list, kept twice.
+
 **The estate rule, and why BYOK bends it.** The standing rule is that anything we give an
 LLM gets an `orkeys` child key capped by `llm_map.py`, an entry in
 a registry entry with a daily budget, and an uptime monitor.

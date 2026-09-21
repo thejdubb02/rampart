@@ -135,6 +135,7 @@ import androidx.compose.ui.window.isTraySupported
 import androidx.compose.ui.window.rememberTrayState
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -859,6 +860,26 @@ private fun Reader(
      * here. Cleared with the transcript, because a new conversation has been shown nothing.
      */
     val chatShown = remember { mutableSetOf<String>() }
+    /*
+     * The paragraph a thread was last summarised into, and everything about getting one.
+     *
+     * Kept beside [thread] rather than derived from it: asking the model is a request that
+     * costs money and takes a moment, so what it answered has to survive recomposition
+     * until something explicitly asks for a fresh one.
+     */
+    var threadSummary by remember { mutableStateOf<String?>(null) }
+    var summarising by remember { mutableStateOf(false) }
+    /** The sentence [LlmError] carried, or one built locally, from the last attempt. */
+    var summariseError by remember { mutableStateOf<String?>(null) }
+    /** The packet waiting on the viewer: the first use asking permission, or a later look
+     * asked for on demand. Null when the dialog is closed. */
+    var summarisePacket by remember { mutableStateOf<String?>(null) }
+    /** Which conversation [summarisePacket] was built for, so an answer that lands after
+     * the reader has moved to a different thread is dropped rather than shown as this
+     * one's. */
+    var summariseFor by remember { mutableStateOf<String?>(null) }
+    // Read once rather than on every recomposition, for the same reason as chatAgreed.
+    var summariseAgreed by remember { mutableStateOf(Assistant.agreed(Assistant.SUMMARISE)) }
     var bodyError by remember { mutableStateOf<String?>(null) }
     var inlineImages by remember { mutableStateOf<Map<String, ImageBitmap>>(emptyMap()) }
     // The same parts undecoded, for the engine, which wants the bytes rather than a bitmap.
@@ -917,6 +938,15 @@ private fun Reader(
     fun sourceFolder(key: String): String? =
         if (!unified()) here?.second?.id
         else folderFor("inbox", mailboxes[key].orEmpty())?.id
+
+    /**
+     * The same folder as [sourceFolder], by name rather than id.
+     *
+     * What [Assistant.deniedFolders] is written in, because that is what somebody typed or
+     * ticked in Settings, and an id would mean nothing to them there.
+     */
+    fun currentFolderName(key: String): String? =
+        sourceFolder(key)?.let { id -> mailboxes[key].orEmpty().firstOrNull { it.id == id }?.name }
 
     /**
      * Whether a message is sitting in Junk right now.
@@ -1512,7 +1542,16 @@ private fun Reader(
         saved = null
         // Cleared only when this is a different conversation, so moving between messages in
         // the same thread does not make the list of them flicker away and come back.
-        if (thread.none { it.id == message.id }) thread = emptyList()
+        if (thread.none { it.id == message.id }) {
+            thread = emptyList()
+            // A summary, a pending packet or an error belongs to the conversation it was
+            // made for. Left in place across a switch, it would be shown as if it were an
+            // answer about whatever is open now.
+            threadSummary = null
+            summariseError = null
+            summarisePacket = null
+            summariseFor = null
+        }
         // Kept apart from the shared error bar. A message that will not open has to say so
         // where the message would have been: a spinner that never stops is indistinguishable
         // from one that is still going, and it was being shown for a failure.
@@ -1968,6 +2007,91 @@ private fun Reader(
         }
     }
 
+    /**
+     * Every message in the open thread, as [Turn]s, oldest first.
+     *
+     * The one already on screen reuses [body] rather than being fetched again: it is
+     * already here, decoded, and asking for it twice would be a second round trip for
+     * something already sitting in the pane. Everything else in the thread has so far
+     * only ever been headers, so each of those costs one more fetch.
+     *
+     * All of them at once, rather than one after another. A twenty message thread fetched
+     * in turn is twenty round trips end to end, which is the wait somebody sits through
+     * before the button has even sent anything. The same rule as opening a message, where
+     * the body, the parts and the conversation are asked for together.
+     */
+    suspend fun summariseTurns(key: String, message: Summary): List<Turn> = coroutineScope {
+        thread.ifEmpty { listOf(message) }.map { m ->
+            async(Dispatchers.IO) {
+                val text = if (m.id == message.id) {
+                    plainTextOf(body)
+                } else {
+                    runCatching { plainTextOf(session(key).jmap.body(m.id)) }.getOrDefault("")
+                }
+                Turn(m.from, m.receivedAt, text)
+            }
+        }.awaitAll()
+    }
+
+    /** The exact bytes [runSummarise] would post, which is what the viewer shows first. */
+    suspend fun summarisePacketFor(key: String, message: Summary, config: AssistantConfig): String =
+        Llm.packet(config.model, Summarise.system(), Summarise.user(message.subject, summariseTurns(key, message)))
+
+    /** Posts a packet already agreed to, or already shown on demand, and records what it cost. */
+    fun runSummarise(packet: String, config: AssistantConfig, forThread: String) {
+        summarising = true
+        summariseError = null
+        scope.launch {
+            val outcome = withContext(Dispatchers.IO) {
+                runCatching {
+                    val reply = Llm.ask(config, Secrets.loadNamed(Assistant.KEY), packet)
+                    Assistant.record(Assistant.SUMMARISE, reply.tokensIn, reply.tokensOut, config)
+                    reply
+                }
+            }
+            summarising = false
+            if (selected?.threadId != forThread) return@launch
+            outcome.fold(
+                onSuccess = { threadSummary = it.text.trim() },
+                onFailure = { summariseError = it.message ?: "The model could not be reached." },
+            )
+        }
+    }
+
+    /**
+     * Builds the packet for the open thread, then either shows it or sends it straight
+     * away.
+     *
+     * [viewFirst] is the "let me look" path a reader can reach whether or not this
+     * feature has already been agreed to. The button itself only takes that path before
+     * the first agreement; after that it goes straight through, and looking is something
+     * offered separately. See [PacketViewer].
+     */
+    fun summarise(message: Summary, key: String, config: AssistantConfig, viewFirst: Boolean = false) {
+        if (summarising) return
+        Assistant.whyNot(Assistant.SUMMARISE, config, key, currentFolderName(key))?.let {
+            summariseError = it
+            return
+        }
+        summariseError = null
+        val forThread = message.threadId
+        summarising = true
+        scope.launch {
+            val packet = withContext(Dispatchers.IO) { summarisePacketFor(key, message, config) }
+            summarising = false
+            // The reader has moved on to a different conversation while this was being
+            // built. An answer or a permission dialog for a thread nobody is looking at
+            // is not shown.
+            if (selected?.threadId != forThread) return@launch
+            if (viewFirst || !Assistant.agreed(Assistant.SUMMARISE)) {
+                summariseFor = forThread
+                summarisePacket = packet
+            } else {
+                runSummarise(packet, config, forThread)
+            }
+        }
+    }
+
     /*
      * The same three acts, done to a whole conversation.
      *
@@ -2244,6 +2368,35 @@ private fun Reader(
                     onTrash = { fileConversation(message, "trash", "Deleted") },
                     onMute = { on -> muteConversation(message, on) },
                 )
+            },
+        )
+    }
+
+    /**
+     * The Summarise button on the open thread, and what pressing it has done.
+     *
+     * Recomputed on every draw, the same as [actions] above it, because whether the button
+     * can be pressed depends on things that can change while the window is open: the
+     * ceiling, a key just typed into Settings, a folder just added to the never list.
+     */
+    val summariseState = run {
+        val message = selected ?: return@run null
+        val key = accountOf(message) ?: return@run null
+        val config = Assistant.config()
+        val why = Assistant.whyNot(Assistant.SUMMARISE, config, key, currentFolderName(key))
+        SummariseActions(
+            disabledBecause = why,
+            running = summarising,
+            paragraph = threadSummary,
+            error = summariseError,
+            onSummarise = { summarise(message, key, config) },
+            // Null rather than a no-op when it is disabled: a denied folder must not be
+            // summarisable at all, and offering "look at what would be sent" would still
+            // build the very packet that is meant never to exist.
+            onViewPacket = if (why == null) {
+                { summarise(message, key, config, viewFirst = true) }
+            } else {
+                null
             },
         )
     }
@@ -3171,6 +3324,7 @@ private fun Reader(
                 thread = thread,
                 onPick = { selected = it },
                 actions = actions,
+                summarise = summariseState,
                 attachments = attachments,
                 savedTo = saved,
                 source = source,
@@ -3324,6 +3478,21 @@ private fun Reader(
                 }) { Text("Open in browser") }
             },
             dismissButton = { TextButton(onClick = { confirm = null }) { Text("Cancel") } },
+        )
+    }
+
+    // The same dialog whether this is the first time Summarise has been pressed or a
+    // later look asked for on demand: see [PacketViewer].
+    summarisePacket?.let { packet ->
+        PacketViewer(
+            packet = packet,
+            agreed = summariseAgreed,
+            onSend = {
+                summarisePacket = null
+                runSummarise(packet, Assistant.config(), summariseFor.orEmpty())
+            },
+            onAgree = { Assistant.agree(Assistant.SUMMARISE); summariseAgreed = true },
+            onDismiss = { summarisePacket = null },
         )
     }
 }
@@ -4744,6 +4913,25 @@ internal data class ConversationActions(
     val onMute: (Boolean) -> Unit,
 )
 
+/**
+ * The Summarise button, and what has come of pressing it.
+ *
+ * Null hides the whole feature, which is what an account not yet known looks like: there
+ * is nowhere yet to send anything, so there is nothing to offer a reason about.
+ */
+internal data class SummariseActions(
+    /** Why the button cannot be pressed, in one sentence. Null when it can be. */
+    val disabledBecause: String?,
+    val running: Boolean,
+    /** The paragraph from the last successful call, for this thread. Null before one. */
+    val paragraph: String?,
+    /** The sentence [LlmError] carried, from the last attempt that failed. */
+    val error: String?,
+    val onSummarise: () -> Unit,
+    /** Looking at the exact packet without it gating the button. Null while disabled. */
+    val onViewPacket: (() -> Unit)?,
+)
+
 @Composable
 internal fun Message(
     summary: Summary?,
@@ -4808,6 +4996,7 @@ internal fun Message(
     onPick: (Summary) -> Unit = {},
     onForward: () -> Unit = {},
     actions: MessageActions = MessageActions(),
+    summarise: SummariseActions? = null,
     attachments: List<Attachment> = emptyList(),
     savedTo: String? = null,
     onDownload: (Attachment) -> Unit = {},
@@ -5200,6 +5389,9 @@ internal fun Message(
                         )
                     }
 
+                    // Above the conversation bar rather than below it: a paragraph nobody
+                    // wrote about a thread outranks a menu for acting on it.
+                    summarise?.let { SummaryCard(it) }
                     actions.conversation?.let { ConversationBar(it) }
 
                     // The rest of the conversation sits around this message in date order,
@@ -5758,6 +5950,75 @@ private fun ConversationBar(actions: ConversationActions) {
             modifier = Modifier.padding(bottom = 10.dp),
         )
     }
+}
+
+/**
+ * What the assistant said about this thread, or the button that would ask it to.
+ *
+ * Its own card rather than a line among the message buttons above, so a paragraph nobody
+ * wrote cannot be mistaken for one somebody did: no name beside it, no date, a heading
+ * that says plainly what it is.
+ */
+@Composable
+private fun SummaryCard(summarise: SummariseActions) {
+    Column(
+        Modifier.fillMaxWidth()
+            .clip(MaterialTheme.shapes.small)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Summary, from the assistant",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.weight(1f),
+            )
+            if (summarise.running) Spinner(size = 15.dp, thickness = 2.dp)
+        }
+        summarise.paragraph?.let {
+            Spacer(Modifier.height(6.dp))
+            Text(it, style = MaterialTheme.typography.bodyMedium)
+        }
+        // Whichever of these is current, shown under whatever paragraph is already there
+        // rather than instead of it: a paragraph from a moment ago is still worth having
+        // even when the next attempt at a fresh one failed or has since become disabled.
+        (summarise.error ?: summarise.disabledBecause)?.let {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (summarise.error != null) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.outline,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(
+                onClick = summarise.onSummarise,
+                enabled = !summarise.running && summarise.disabledBecause == null,
+            ) {
+                Text(
+                    when {
+                        summarise.running -> "Summarising"
+                        summarise.paragraph != null -> "Summarise again"
+                        else -> "Summarise this thread"
+                    },
+                )
+            }
+            summarise.onViewPacket?.let { view ->
+                Spacer(Modifier.width(8.dp))
+                TextButton(onClick = view) {
+                    Text(
+                        if (summarise.paragraph != null) "What was sent" else "What would be sent",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        }
+    }
+    Spacer(Modifier.height(14.dp))
 }
 
 @Composable

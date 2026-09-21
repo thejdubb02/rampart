@@ -140,6 +140,31 @@ class AssistantTest {
     }
 
     @Test
+    fun `a folder on the never list is refused before anything about the assistant itself`() {
+        val config = AssistantConfig(mode = AssistantMode.LOCAL, ceiling = 0.0)
+        Assistant.setConfig(config)
+        assertTrue(Assistant.deniedFolders("me@example.com").isEmpty(), "empty by default")
+
+        Assistant.setDeniedFolders("me@example.com", setOf("HR"))
+        assertEquals(setOf("HR"), Assistant.deniedFolders("me@example.com"))
+
+        // Refused even though the assistant is on and nothing else is wrong: the mode, the
+        // key and the ceiling all come after this check, not before it.
+        val why = Assistant.whyNot(Assistant.SUMMARISE, config, account = "me@example.com", folder = "HR")
+        assertNotNull(why)
+        assertTrue(why.contains("HR"), "the reason names the folder: $why")
+
+        // A different folder on the same account, or the same folder on a different
+        // account, is not touched by it.
+        assertNull(Assistant.whyNot(Assistant.SUMMARISE, config, account = "me@example.com", folder = "Inbox"))
+        assertNull(Assistant.whyNot(Assistant.SUMMARISE, config, account = "someone@else.com", folder = "HR"))
+
+        // Turning the folder back off is turning it back off.
+        Assistant.setDeniedFolders("me@example.com", emptySet())
+        assertNull(Assistant.whyNot(Assistant.SUMMARISE, config, account = "me@example.com", folder = "HR"))
+    }
+
+    @Test
     fun `bringing your own key and not bringing one is said plainly`() {
         val config = AssistantConfig(mode = AssistantMode.BYOK, ceiling = 0.0)
         Assistant.setConfig(config)

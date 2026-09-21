@@ -200,13 +200,48 @@ object Assistant {
      * the reader is asked for at the moment they press the button, and answering "you have
      * not agreed" to somebody who has not been asked yet is a dead end rather than an
      * explanation.
+     *
+     * @param account Whose folder list [folder] is checked against. Null when there is no
+     *   message open yet, in which case there is nothing to check and this branch never
+     *   fires.
+     * @param folder The folder the open message is actually sitting in. Checked first and
+     *   unconditionally, ahead of the mode, the key and the ceiling: a folder somebody put
+     *   on the never list stays refused whether or not the assistant is switched on, so
+     *   turning something else on cannot answer it.
      */
-    fun whyNot(feature: String, config: AssistantConfig = config()): String? = when {
+    fun whyNot(
+        feature: String,
+        config: AssistantConfig = config(),
+        account: String? = null,
+        folder: String? = null,
+    ): String? = when {
+        account != null && folder != null && folder in deniedFolders(account) ->
+            "$folder is set to never leave this machine. Change that in Settings if this message should be readable."
         config.mode == AssistantMode.OFF -> "The assistant is switched off."
         config.mode == AssistantMode.BYOK && Secrets.loadNamed(KEY).isNullOrBlank() ->
             "No key has been added yet."
         blocked(config) -> "This month has reached the ${money(config.ceiling)} limit you set."
         else -> null
+    }
+
+    /**
+     * Folders, by account, that nothing here is ever allowed to read from.
+     *
+     * One list rather than one per feature: the promise in `docs/assistant.md` is about
+     * the folder, not about which button was pressed, so a folder marked never-leaves does
+     * not leave because Summarise asked rather than Chat. Empty by default, on every
+     * account, because a boundary nobody drew is not a boundary yet.
+     */
+    fun deniedFolders(account: String): Set<String> =
+        read()["deniedFolders"]?.asObject()?.get(account)?.let { it as? JsonArray }
+            ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+            ?.toSet()
+            .orEmpty()
+
+    fun setDeniedFolders(account: String, folders: Set<String>) {
+        val byAccount = read()["deniedFolders"]?.asObject().orEmpty().toMutableMap()
+        byAccount[account] = buildJsonArray { folders.forEach { add(JsonPrimitive(it)) } }
+        write { put("deniedFolders", JsonObject(byAccount)) }
     }
 
     /** The name the key is kept under in the operating system's own store. */

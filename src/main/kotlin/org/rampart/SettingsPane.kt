@@ -169,7 +169,7 @@ internal fun SettingsPane(
                         )
                         "away" -> AwayPage(vacation, vacationError, onVacation)
                         "tracking" -> TrackingPage(onTrackingServer)
-                        "assistant" -> AssistantPage()
+                        "assistant" -> AssistantPage(accounts)
                         "about" -> AboutPage(update, onRestart)
                     }
                 }
@@ -867,7 +867,7 @@ private fun TrackingPage(onTrackingServer: (String) -> Unit = {}) {
  * is worth it. See `docs/assistant.md` for why each of those is its own question.
  */
 @Composable
-private fun AssistantPage() {
+private fun AssistantPage(accounts: List<AccountMailboxes>) {
     var config by remember { mutableStateOf(Assistant.config()) }
     var key by remember { mutableStateOf(Secrets.loadNamed(Assistant.KEY).orEmpty()) }
     var saved by remember { mutableStateOf<String?>(null) }
@@ -891,6 +891,53 @@ private fun AssistantPage() {
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.outline,
     )
+
+    Spacer(Modifier.height(20.dp))
+    Section(
+        "Folders it may never read",
+        "Checked here, on any account, a folder's mail is refused before a packet for it " +
+            "is ever built, whether or not the assistant is switched on. Nothing is picked " +
+            "by default.",
+    )
+    if (accounts.isEmpty()) {
+        Text(
+            "No account is signed in yet, so there is nothing to list folders for.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline,
+        )
+    }
+    accounts.forEach { account ->
+        if (accounts.size > 1) {
+            Text(
+                account.email,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.padding(top = 10.dp, bottom = 4.dp),
+            )
+        }
+        var denied by remember(account.key) { mutableStateOf(Assistant.deniedFolders(account.key)) }
+        account.mailboxes.forEach { folder ->
+            Row(
+                Modifier.fillMaxWidth()
+                    .clickable {
+                        denied = if (folder.name in denied) denied - folder.name else denied + folder.name
+                        Assistant.setDeniedFolders(account.key, denied)
+                    }
+                    .padding(vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Switch(
+                    checked = folder.name in denied,
+                    onCheckedChange = {
+                        denied = if (it) denied + folder.name else denied - folder.name
+                        Assistant.setDeniedFolders(account.key, denied)
+                    },
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(folder.name, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+    }
     Spacer(Modifier.height(16.dp))
 
     AssistantMode.entries.forEach { mode ->
