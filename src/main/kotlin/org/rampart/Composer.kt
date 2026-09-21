@@ -10,9 +10,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
@@ -24,12 +27,15 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -43,6 +49,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.Key
@@ -50,6 +57,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
@@ -318,6 +326,15 @@ internal fun Composer(
     // Only when the change came from somewhere else, such as the sign-off being appended.
     // Typing sets both, so they already agree and the caret is left alone.
     if (body.text != draft.body) body = body.copy(text = draft.body)
+    /*
+     * A bounded undo/redo stack for the body, kept outside Compose state because it is a
+     * history of edits, not a value to redraw from. historyTick exists only so the Undo and
+     * Redo buttons have something to key a recomposition off: Compose cannot see a plain
+     * object mutate on its own, and without this their enabled state would go stale the
+     * moment something was pushed onto or popped off the stack.
+     */
+    val history = remember(initial) { UndoHistory() }
+    var historyTick by remember(initial) { mutableStateOf(0) }
     var showCc by remember(initial) { mutableStateOf(initial.cc.isNotEmpty()) }
     var pickingIdentity by remember { mutableStateOf(false) }
     var saveState by remember(initial) { mutableStateOf("") }
@@ -370,11 +387,40 @@ internal fun Composer(
         if (question == null) onSend(draft) else warning = question
     }
 
-    fun format(before: String, after: String): Boolean {
-        if (sending) return false
-        val next = wrapSelection(body, before, after)
+    /*
+     * Every change to the body goes through one of these three, which is what lets undo and
+     * redo behave the same way whether the edit came from typing, a toolbar button, or a
+     * keyboard shortcut, instead of three separate call sites that could each forget to
+     * record one.
+     */
+    fun apply(next: TextFieldValue) {
+        if (sending) return
+        history.push(body)
         body = next
         draft = draft.copy(body = next.text)
+        historyTick++
+    }
+
+    fun edited(next: TextFieldValue) {
+        // A pure selection change, such as clicking to move the caret, is not an edit and
+        // must not push a step Undo would then have to silently skip over.
+        if (next.text != body.text) {
+            history.type(body, next)
+            historyTick++
+        }
+        body = next
+        draft = draft.copy(body = next.text)
+    }
+
+    fun restore(next: TextFieldValue) {
+        body = next
+        draft = draft.copy(body = next.text)
+        historyTick++
+    }
+
+    fun format(before: String, after: String): Boolean {
+        if (sending) return false
+        apply(wrapSelection(body, before, after))
         return true
     }
 
@@ -392,6 +438,14 @@ internal fun Composer(
             event.isCtrlPressed && event.key == Key.B -> format("**", "**")
             event.isCtrlPressed && event.key == Key.I -> format("*", "*")
             event.isCtrlPressed && event.key == Key.K -> format("[", "](https://)")
+            event.isCtrlPressed && event.key == Key.Z && !event.isShiftPressed -> {
+                history.undo(body)?.let(::restore)
+                true
+            }
+            event.isCtrlPressed && event.key == Key.Z && event.isShiftPressed -> {
+                history.redo(body)?.let(::restore)
+                true
+            }
             else -> false
         }
     }
@@ -610,19 +664,84 @@ internal fun Composer(
 
             if (!sending) {
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 2.dp),
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 14.dp, vertical = 2.dp),
                     horizontalArrangement = Arrangement.spacedBy(2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    fun apply(next: TextFieldValue) {
-                        body = next
-                        draft = draft.copy(body = next.text)
+                    // Recomputed on every recomposition body triggers, which is every
+                    // keystroke and every click that moves the caret: cheap, since it only
+                    // looks at the one line the caret is on, and it is what lets a button
+                    // read as pressed the moment the caret lands inside its marker.
+                    val active = activeMarks(body)
+                    val canUndo = remember(historyTick) { history.canUndo }
+                    val canRedo = remember(historyTick) { history.canRedo }
+
+                    ToolbarButton(RampartIcons.Bold, "Bold", active = "bold" in active) {
+                        apply(wrapSelection(body, "**", "**"))
                     }
-                    TextButton(onClick = { apply(wrapSelection(body, "**", "**")) }) { Text("Bold") }
-                    TextButton(onClick = { apply(wrapSelection(body, "*", "*")) }) { Text("Italic") }
-                    TextButton(onClick = { apply(wrapSelection(body, "[", "](https://)")) }) { Text("Link") }
-                    TextButton(onClick = { apply(prefixLines(body, "- ")) }) { Text("Bullets") }
-                    TextButton(onClick = { apply(prefixLines(body, "1. ")) }) { Text("Numbers") }
+                    ToolbarButton(RampartIcons.Italic, "Italic", active = "italic" in active) {
+                        apply(wrapSelection(body, "*", "*"))
+                    }
+                    ToolbarButton(RampartIcons.Underline, "Underline", active = "underline" in active) {
+                        apply(wrapSelection(body, "__", "__"))
+                    }
+                    ToolbarButton(RampartIcons.Strikethrough, "Strikethrough", active = "strike" in active) {
+                        apply(wrapSelection(body, "~~", "~~"))
+                    }
+                    ToolbarDivider()
+                    ToolbarButton(RampartIcons.Heading1, "Heading 1", active = "h1" in active) {
+                        apply(prefixLines(body, "# "))
+                    }
+                    ToolbarButton(RampartIcons.Heading2, "Heading 2", active = "h2" in active) {
+                        apply(prefixLines(body, "## "))
+                    }
+                    ToolbarDivider()
+                    ToolbarButton(RampartIcons.Bullets, "Bulleted list", active = "bullets" in active) {
+                        apply(prefixLines(body, "- "))
+                    }
+                    ToolbarButton(RampartIcons.Numbers, "Numbered list", active = "numbers" in active) {
+                        apply(prefixLines(body, "1. "))
+                    }
+                    ToolbarButton(RampartIcons.Quote, "Quote", active = "quote" in active) {
+                        apply(prefixLines(body, "> "))
+                    }
+                    ToolbarButton(RampartIcons.Code, "Code", active = "code" in active) {
+                        // A selection with a line break in it cannot become a single backtick
+                        // pair, because markers never span a line break (spans(), in
+                        // RichText.kt): it becomes a fenced block instead, the same three
+                        // backticks somebody fluent in Markdown would have typed by hand.
+                        val start = minOf(body.selection.start, body.selection.end).coerceIn(0, body.text.length)
+                        val end = maxOf(body.selection.start, body.selection.end).coerceIn(start, body.text.length)
+                        apply(
+                            if (body.text.substring(start, end).contains("\n")) {
+                                wrapSelection(body, "```\n", "\n```")
+                            } else {
+                                wrapSelection(body, "`", "`")
+                            },
+                        )
+                    }
+                    ToolbarDivider()
+                    ToolbarButton(RampartIcons.AlignLeft, "Align left", active = "align-left" in active) {
+                        apply(alignLines(body, null))
+                    }
+                    ToolbarButton(RampartIcons.AlignCenter, "Align centre", active = "align-center" in active) {
+                        apply(alignLines(body, "center"))
+                    }
+                    ToolbarButton(RampartIcons.AlignRight, "Align right", active = "align-right" in active) {
+                        apply(alignLines(body, "right"))
+                    }
+                    ToolbarDivider()
+                    ToolbarButton(RampartIcons.Link, "Link") { apply(wrapSelection(body, "[", "](https://)")) }
+                    ToolbarButton(RampartIcons.ClearFormat, "Clear formatting") { apply(clearFormatting(body)) }
+                    ToolbarDivider()
+                    ToolbarButton(RampartIcons.Undo, "Undo", enabled = canUndo) {
+                        history.undo(body)?.let(::restore)
+                    }
+                    ToolbarButton(RampartIcons.Redo, "Redo", enabled = canRedo) {
+                        history.redo(body)?.let(::restore)
+                    }
+                    ToolbarDivider()
                     var emoji by remember { mutableStateOf(false) }
                     Box {
                         TextButton(onClick = { emoji = true }) { Text("Emoji") }
@@ -731,10 +850,7 @@ internal fun Composer(
                 } else {
                     BasicTextField(
                         value = body,
-                        onValueChange = {
-                            body = it
-                            draft = draft.copy(body = it.text)
-                        },
+                        onValueChange = ::edited,
                         visualTransformation = MarkupStyling,
                         textStyle = LocalTextStyle.current.copy(color = MaterialTheme.colorScheme.onSurface),
                         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
@@ -764,6 +880,41 @@ internal fun Composer(
     }
 
     LaunchedEffect(Unit) { firstField.requestFocus() }
+}
+
+/**
+ * One button in the formatting row: an icon, an accessible label standing in for the word a
+ * button used to carry, and a filled background when the marker it stands for is the one the
+ * caret is sitting inside. A filled background rather than a filled icon, because the set in
+ * `Icons.kt` is stroked throughout and a second, solid version of every glyph is a pack of
+ * icons this file does not have.
+ */
+@Composable
+private fun ToolbarButton(
+    icon: ImageVector,
+    label: String,
+    active: Boolean = false,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    IconButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.size(30.dp)
+            .clip(MaterialTheme.shapes.small)
+            .background(if (active) MaterialTheme.colorScheme.primaryContainer else Color.Transparent),
+    ) {
+        Icon(icon, contentDescription = label, modifier = Modifier.size(16.dp))
+    }
+}
+
+/** Separates one group of toolbar buttons from the next, only as tall as the buttons either side of it. */
+@Composable
+private fun ToolbarDivider() {
+    VerticalDivider(
+        modifier = Modifier.height(20.dp).padding(horizontal = 2.dp),
+        color = MaterialTheme.colorScheme.outlineVariant,
+    )
 }
 
 /** A labelled row, hairline separated, which is what a composer looks like when it is not a form. */

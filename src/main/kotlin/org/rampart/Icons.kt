@@ -84,6 +84,29 @@ internal interface IconPack {
     val Ask: ImageVector
     val BulbOn: ImageVector
 
+    /*
+     * The composer's formatting row. Seventeen glyphs rather than the six word buttons it
+     * used to be, because "Bold Italic Underline Strikethrough Heading" does not fit and an
+     * icon does.
+     */
+    val Bold: ImageVector
+    val Italic: ImageVector
+    val Underline: ImageVector
+    val Strikethrough: ImageVector
+    val Heading1: ImageVector
+    val Heading2: ImageVector
+    val Bullets: ImageVector
+    val Numbers: ImageVector
+    val Quote: ImageVector
+    val Code: ImageVector
+    val AlignLeft: ImageVector
+    val AlignCenter: ImageVector
+    val AlignRight: ImageVector
+    val Link: ImageVector
+    val ClearFormat: ImageVector
+    val Undo: ImageVector
+    val Redo: ImageVector
+
 }
 
 /**
@@ -174,6 +197,38 @@ internal object LineIcons : IconPack {
     /** A sealed envelope, for marking something read. */
     override val Read = icon("Read", "M2.6 4.8h12.8v8.4H2.6zM2.6 4.8 9 9.6l6.4-4.8")
 
+    override val Bold = icon("Bold", "M5.4 3v10.4M5.4 3h3.6a2.4 2.4 0 0 1 0 4.8H5.4M5.4 7.8h4a2.6 2.6 0 0 1 0 5.2H5.4")
+    override val Italic = icon("Italic", "M7.4 3h4M6.6 15h4M10 3 8 15")
+    override val Underline = icon("Underline", "M5.5 3v6a3 3 0 0 0 6 0V3M4 15h10")
+
+    /* A blocky zigzag rather than a cursive S, so it reads at 18 units without curves that
+     * need more room than that to stay legible. */
+    override val Strikethrough = icon("Strikethrough", "M10.8 4.4h-3.2l3.6 4.6h-4.4l3.6 4.8h-3.6M3 9h12")
+
+    override val Heading1 = icon("Heading1", "M4 3v12M4 9h5M9 3v12M12 6 13.5 5v7")
+    override val Heading2 = icon("Heading2", "M4 3v12M4 9h5M9 3v12M11.8 6a1.6 1.6 0 1 1 3 .9l-3.4 4.9h3.4")
+
+    /* A dot rather than a filled circle, so it stays a stroke icon like the rest of the set
+     * rather than needing a fill just for this one glyph. StrokeCap.Round turns the near-zero
+     * length segment into a small round mark. */
+    override val Bullets = icon("Bullets", "M4 5h0.2M4 9h0.2M4 13h0.2M7 5h8M7 9h8M7 13h8")
+    override val Numbers = icon("Numbers", "M3.4 4.2v1.8M3 9h1.2M3 13.4h1.2M7 5h8M7 9h8M7 13h8")
+    override val Quote = icon("Quote", "M4 3v12M7 5h7M7 9h7M7 13h4")
+    override val Code = icon("Code", "M7 4 3 9l4 5M11 4l4 5-4 5")
+    override val AlignLeft = icon("AlignLeft", "M3 5h12M3 9h8M3 13h11")
+    override val AlignCenter = icon("AlignCenter", "M3 5h12M5 9h8M4 13h10")
+    override val AlignRight = icon("AlignRight", "M3 5h12M7 9h8M4 13h11")
+    override val Link = icon(
+        "Link",
+        "M7 11 11 7M6.5 9.5a2.5 2.5 0 0 1 0-3.5l1.5-1.5a2.5 2.5 0 0 1 3.5 3.5" +
+            "M11.5 8.5a2.5 2.5 0 0 1 0 3.5l-1.5 1.5a2.5 2.5 0 0 1-3.5-3.5",
+    )
+
+    /** An "A" struck through, the same convention Word and Gmail use for Clear formatting. */
+    override val ClearFormat = icon("ClearFormat", "M4 13 8 3l4 10M5.6 9h4.8M3 15l12-12")
+    override val Undo = icon("Undo", "M6 5 3 8l3 3M3 8h7a4 4 0 0 1 0 8h-2")
+    override val Redo = icon("Redo", "M12 5l3 3-3 3M15 8H8a4 4 0 0 0 0 8h2")
+
 }
 
 /** Rebuilds a glyph at a heavier stroke, from the paths the line set already holds. */
@@ -243,6 +298,23 @@ internal object HeavyIcons : IconPack by LineIcons {
     override val Sort by lazy { heavy(LineIcons.Sort) }
     override val Unread by lazy { heavy(LineIcons.Unread) }
     override val Read by lazy { heavy(LineIcons.Read) }
+    override val Bold by lazy { heavy(LineIcons.Bold) }
+    override val Italic by lazy { heavy(LineIcons.Italic) }
+    override val Underline by lazy { heavy(LineIcons.Underline) }
+    override val Strikethrough by lazy { heavy(LineIcons.Strikethrough) }
+    override val Heading1 by lazy { heavy(LineIcons.Heading1) }
+    override val Heading2 by lazy { heavy(LineIcons.Heading2) }
+    override val Bullets by lazy { heavy(LineIcons.Bullets) }
+    override val Numbers by lazy { heavy(LineIcons.Numbers) }
+    override val Quote by lazy { heavy(LineIcons.Quote) }
+    override val Code by lazy { heavy(LineIcons.Code) }
+    override val AlignLeft by lazy { heavy(LineIcons.AlignLeft) }
+    override val AlignCenter by lazy { heavy(LineIcons.AlignCenter) }
+    override val AlignRight by lazy { heavy(LineIcons.AlignRight) }
+    override val Link by lazy { heavy(LineIcons.Link) }
+    override val ClearFormat by lazy { heavy(LineIcons.ClearFormat) }
+    override val Undo by lazy { heavy(LineIcons.Undo) }
+    override val Redo by lazy { heavy(LineIcons.Redo) }
 }
 
 /** Every pack on offer. A new one is added here and nowhere else. */

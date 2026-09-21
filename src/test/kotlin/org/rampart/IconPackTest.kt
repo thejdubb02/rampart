@@ -52,4 +52,22 @@ class IconPackTest {
         assertEquals(LineIcons.Inbox.name, HeavyIcons.Inbox.name)
         assertEquals(LineIcons.Inbox.viewportWidth, HeavyIcons.Inbox.viewportWidth)
     }
+
+    /*
+     * A hand written SVG path string that does not parse throws when the icon is first built,
+     * which for a `val` is class init time and for a `by lazy` one is first use. Touching
+     * every one of the composer's new glyphs, in both packs, is what would have caught a
+     * typo in any of the seventeen paths added for it.
+     */
+    @Test
+    fun `every composer toolbar glyph builds without throwing, in both packs`() {
+        ICON_PACKS.forEach { pack ->
+            listOf(
+                pack.Bold, pack.Italic, pack.Underline, pack.Strikethrough,
+                pack.Heading1, pack.Heading2, pack.Bullets, pack.Numbers,
+                pack.Quote, pack.Code, pack.AlignLeft, pack.AlignCenter, pack.AlignRight,
+                pack.Link, pack.ClearFormat, pack.Undo, pack.Redo,
+            ).forEach { assertTrue(it.name.isNotBlank()) }
+        }
+    }
 }

@@ -166,4 +166,289 @@ class RichTextTest {
         val value = TextFieldValue("1. one\n2. two", TextRange(0, 13))
         assertEquals("one\ntwo", prefixLines(value, "1. ").text)
     }
+
+    // --- Underline and strikethrough --------------------------------------------------
+
+    @Test
+    fun `underline and strikethrough`() {
+        assertEquals("<div>a <u>b</u> c</div>", markupToHtml("a __b__ c"))
+        assertEquals("<div>a <s>b</s> c</div>", markupToHtml("a ~~b~~ c"))
+    }
+
+    @Test
+    fun `underline does not steal a single underscore in a name`() {
+        // max_retries must stay ordinary text, not become styled at the first underscore
+        // and then close on some later, unrelated one.
+        assertEquals("<div>max_retries is set</div>", markupToHtml("max_retries is set"))
+    }
+
+    @Test
+    fun `underline and strikethrough lose their markers in plain text`() {
+        assertEquals("a b c", markupToPlain("a __b__ c"))
+        assertEquals("a b c", markupToPlain("a ~~b~~ c"))
+    }
+
+    @Test
+    fun `all four inline markers coexist on one line`() {
+        assertEquals(
+            "<div><b>a</b> <i>b</i> <u>c</u> <s>d</s></div>",
+            markupToHtml("**a** *b* __c__ ~~d~~"),
+        )
+    }
+
+    // --- Headings -----------------------------------------------------------------------
+
+    @Test
+    fun `headings become h1 and h2`() {
+        assertEquals("<h1>Title</h1>", markupToHtml("# Title"))
+        assertEquals("<h2>Subtitle</h2>", markupToHtml("## Subtitle"))
+    }
+
+    @Test
+    fun `a heading needs the space, and a hash without one is just a hash`() {
+        // "## " does not start with "# ", so the two never collide in either direction, and
+        // "#plain" with no space after it is not a heading at all.
+        assertEquals("<h2>Sub</h2>", markupToHtml("## Sub"))
+        assertEquals("<div>#plain</div>", markupToHtml("#plain"))
+    }
+
+    @Test
+    fun `a heading keeps its text and loses the hashes in plain text`() {
+        assertEquals("Title", markupToPlain("# Title"))
+        assertEquals("Subtitle", markupToPlain("## Subtitle"))
+    }
+
+    // --- Quote and code -------------------------------------------------------------------
+
+    @Test
+    fun `a quoted line becomes a blockquote`() {
+        assertEquals("<blockquote><div>hi</div></blockquote>", markupToHtml("> hi"))
+    }
+
+    @Test
+    fun `consecutive quoted lines are one blockquote`() {
+        assertEquals(
+            "<blockquote><div>a</div><div>b</div></blockquote><div>after</div>",
+            markupToHtml("> a\n> b\nafter"),
+        )
+    }
+
+    @Test
+    fun `a quote keeps its marker in plain text, and bold inside it still strips`() {
+        assertEquals("> hi", markupToPlain("> hi"))
+        assertEquals("> a b", markupToPlain("> a **b**"))
+    }
+
+    @Test
+    fun `inline code becomes a code tag`() {
+        assertEquals("<div>a <code>b()</code> c</div>", markupToHtml("a `b()` c"))
+    }
+
+    @Test
+    fun `inline code keeps its backticks in plain text`() {
+        assertEquals("a `b()` c", markupToPlain("a `b()` c"))
+    }
+
+    @Test
+    fun `a fenced block becomes pre code`() {
+        assertEquals("<pre><code>foo()\nbar()</code></pre>", markupToHtml("```\nfoo()\nbar()\n```"))
+    }
+
+    @Test
+    fun `a fence is never read as markdown inside it`() {
+        assertEquals("<pre><code>**not bold**</code></pre>", markupToHtml("```\n**not bold**\n```"))
+    }
+
+    @Test
+    fun `a fenced block is untouched in plain text, backticks and all`() {
+        assertEquals("```\nfoo()\n```", markupToPlain("```\nfoo()\n```"))
+    }
+
+    // --- Alignment ----------------------------------------------------------------------
+
+    @Test
+    fun `alignment renders as a styled div`() {
+        assertEquals("""<div style="text-align:center">hi</div>""", markupToHtml("::center:: hi"))
+        assertEquals("""<div style="text-align:right">hi</div>""", markupToHtml("::right:: hi"))
+    }
+
+    @Test
+    fun `alignment has no plain text spelling, so only the marker goes`() {
+        assertEquals("hi", markupToPlain("::center:: hi"))
+        assertEquals("hi", markupToPlain("::right:: hi"))
+    }
+
+    @Test
+    fun `align sets the marker on the touched lines`() {
+        val value = TextFieldValue("one\ntwo", TextRange(1))
+        assertEquals("::center:: one\ntwo", alignLines(value, "center").text)
+    }
+
+    @Test
+    fun `pressing the same alignment again clears it`() {
+        val value = TextFieldValue("::center:: one", TextRange(0, 14))
+        assertEquals("one", alignLines(value, "center").text)
+    }
+
+    @Test
+    fun `switching alignment replaces the marker rather than stacking it`() {
+        val value = TextFieldValue("::right:: one", TextRange(0, 13))
+        assertEquals("::center:: one", alignLines(value, "center").text)
+    }
+
+    @Test
+    fun `align left clears whichever alignment was set`() {
+        val value = TextFieldValue("::right:: one", TextRange(0, 13))
+        assertEquals("one", alignLines(value, null).text)
+    }
+
+    // --- Clear formatting -----------------------------------------------------------------
+
+    @Test
+    fun `clear formatting strips every inline marker from the selection`() {
+        val value = TextFieldValue("**a** and __b__", TextRange(0, 15))
+        assertEquals("a and b", clearFormatting(value).text)
+    }
+
+    @Test
+    fun `clear formatting strips a line marker and its inline markers together`() {
+        val value = TextFieldValue("- **hi**", TextRange(4))
+        assertEquals("hi", clearFormatting(value).text)
+    }
+
+    @Test
+    fun `clear formatting with nothing selected acts on the current line only`() {
+        val value = TextFieldValue("# Title\nordinary *text*", TextRange(20))
+        assertEquals("# Title\nordinary text", clearFormatting(value).text)
+    }
+
+    @Test
+    fun `clear formatting drops a link's address, keeping only the label`() {
+        val text = "[site](https://example.org)"
+        val value = TextFieldValue(text, TextRange(0, text.length))
+        assertEquals("site", clearFormatting(value).text)
+    }
+
+    // --- Active marks, for the toolbar -----------------------------------------------------
+
+    @Test
+    fun `the caret inside a bold word reads as bold`() {
+        val value = TextFieldValue("a **loud** b", TextRange(5))
+        assertTrue("bold" in activeMarks(value))
+    }
+
+    @Test
+    fun `the caret outside any marker is not bold`() {
+        val value = TextFieldValue("a **loud** b", TextRange(0))
+        assertFalse("bold" in activeMarks(value))
+    }
+
+    @Test
+    fun `a heading line reads as h1, and an ordinary line reads as align-left`() {
+        val heading = TextFieldValue("# Title", TextRange(2))
+        assertTrue("h1" in activeMarks(heading))
+        val ordinary = TextFieldValue("just text", TextRange(2))
+        assertTrue("align-left" in activeMarks(ordinary))
+        assertFalse("align-center" in activeMarks(ordinary))
+    }
+
+    // --- Styling never changes the text, even with every new marker in play ---------------
+
+    @Test
+    fun `styling leaves every character where it was, with the new markers too`() {
+        val source = "# Title\n> quoted __underline__ ~~strike~~ `code`\n::center:: hi\n```\nfence\n```"
+        assertEquals(source, styleMarkup(source).text)
+    }
+
+    // --- Undo and redo --------------------------------------------------------------------
+
+    @Test
+    fun `undo returns the value pushed before the edit, redo returns after it`() {
+        val history = UndoHistory()
+        val before = TextFieldValue("a")
+        val after = TextFieldValue("ab")
+        history.push(before)
+        assertEquals(before, history.undo(after))
+        assertEquals(after, history.redo(before))
+    }
+
+    @Test
+    fun `undo with nothing pushed is null`() {
+        assertEquals(null, UndoHistory().undo(TextFieldValue("x")))
+    }
+
+    @Test
+    fun `a run of typing within the coalesce window is one step to undo`() {
+        val history = UndoHistory(coalesceMs = 1000)
+        val v0 = TextFieldValue("a")
+        val v1 = TextFieldValue("ab")
+        val v2 = TextFieldValue("abc")
+        history.type(v0, v1, now = 0)
+        history.type(v1, v2, now = 200)
+        // One undo from v2 goes all the way back to v0: the run was never split.
+        assertEquals(v0, history.undo(v2))
+    }
+
+    @Test
+    fun `a pause past the coalesce window starts a new undo step`() {
+        val history = UndoHistory(coalesceMs = 500)
+        val v0 = TextFieldValue("a")
+        val v1 = TextFieldValue("ab")
+        val v2 = TextFieldValue("abc")
+        history.type(v0, v1, now = 0)
+        history.type(v1, v2, now = 900) // past the window: a new step
+        assertEquals(v1, history.undo(v2))
+        assertEquals(v0, history.undo(v1))
+    }
+
+    @Test
+    fun `history is capped, oldest dropped first`() {
+        val history = UndoHistory(limit = 3)
+        var current = TextFieldValue("0")
+        for (n in 1..5) {
+            history.push(current)
+            current = TextFieldValue(n.toString())
+        }
+        // Five pushes, capped at three: undo three times gets back to the value pushed on
+        // the third-from-last edit, and a fourth undo has nothing left.
+        var v: TextFieldValue? = current
+        repeat(3) { v = history.undo(v!!) }
+        assertEquals(null, history.undo(v!!))
+    }
+
+    @Test
+    fun `a toolbar edit is always its own step, however close to the last one`() {
+        val history = UndoHistory(coalesceMs = 1000)
+        val v0 = TextFieldValue("a")
+        val v1 = TextFieldValue("ab")
+        val v2 = TextFieldValue("**ab**")
+        history.type(v0, v1, now = 0)
+        history.push(v1) // a toolbar button, right after typing: still its own step
+        assertEquals(v1, history.undo(v2))
+        assertEquals(v0, history.undo(v1))
+    }
+
+    @Test
+    fun `text typed and then deleted is still one undo away`() {
+        // The fault this guards: coalescing on time alone folded the deletion into the run
+        // of typing before it, so one Undo went straight past the words that were typed to
+        // the empty field they started from. That text is exactly what Undo is reached for.
+        val history = UndoHistory(coalesceMs = 1000)
+        val empty = TextFieldValue("")
+        val typed = TextFieldValue("hello")
+        val cleared = TextFieldValue("")
+        history.type(empty, typed, now = 0)
+        history.type(typed, cleared, now = 100)
+        assertEquals(typed, history.undo(cleared))
+    }
+
+    @Test
+    fun `replacing a selection is its own step even inside the window`() {
+        val history = UndoHistory(coalesceMs = 1000)
+        val before = TextFieldValue("hello", TextRange(0, 5))
+        val after = TextFieldValue("hey")
+        history.type(TextFieldValue(""), before, now = 0)
+        history.type(before, after, now = 100)
+        assertEquals(before, history.undo(after))
+    }
 }
