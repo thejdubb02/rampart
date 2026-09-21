@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
@@ -57,6 +58,14 @@ internal fun WebBody(
      * it the other way.
      */
     onBlank: () -> Unit = {},
+    /**
+     * Which of the two pages the message is drawn on.
+     *
+     * Not part of the document's identity, deliberately. Changing it flips one attribute on
+     * the page that is already loaded rather than building and loading a second document,
+     * which is what made the toolbar's switch cost a whole reload.
+     */
+    dark: Boolean = false,
 ) {
     /*
      * Grows to whatever the message turns out to be, so the pane scrolls rather than the
@@ -91,21 +100,28 @@ internal fun WebBody(
     val bridge = remember { WebBridge() }
     bridge.onLink = onLink
     /*
-     * The tallest answer wins, not the latest.
+     * The latest answer wins, and a collapsed one is never an answer at all.
      *
-     * The page is asked its height several times, because the one that counts is whichever
-     * ask lands after the panel has its real width, and there is no way to know which that
-     * will be. Every measurement before that one is of a collapsed layout and is therefore
-     * too short, never too tall, so keeping the largest is the whole of the arbitration.
+     * **This is what made a long message a white box and then twenty seconds of nothing.**
+     * The rule used to be that the tallest answer won, on the reasoning that a measurement
+     * taken before the panel had its width was of a collapsed layout and so too short.
+     * It is the exact opposite. A page laid out at no width wraps every word onto its own
+     * line: the real message here, 22,000 characters of an Outlook thread, came out
+     * **442,727 pixels tall** at a viewport 44 pixels wide. Measured once in that state,
+     * the tallest-wins rule pinned the panel at its ceiling and no later, correct
+     * measurement could ever bring it down, and the engine spent the next twenty seconds
+     * reflowing a document a thousand screens long.
      *
-     * Safe to keep across a document because [height] is reset with it: showing the
-     * pictures builds a new document, which starts the measuring again from nothing.
+     * So a measurement taken at a collapsed width is discarded rather than arbitrated with
+     * (see [measure]), and of the ones that are left the most recent is the truth: a
+     * picture that finishes decoding makes a page taller, and a window that gets wider
+     * makes it shorter.
      */
     var measured by remember(document) { mutableStateOf(false) }
     bridge.onHeight = {
         if (it > 0) {
             measured = true
-            height = maxOf(height, minOf(it, TALLEST))
+            height = minOf(it, TALLEST)
         }
     }
     /*
@@ -128,7 +144,7 @@ internal fun WebBody(
      * slow machine rather than a race with it.
      */
     LaunchedEffect(document) {
-        delay(6_000)
+        delay(15_000)
         if (!measured) onBlank()
     }
     bridge.onScroll = onScroll
@@ -144,7 +160,19 @@ internal fun WebBody(
      */
     val ticker = remember { java.util.concurrent.atomic.AtomicReference<javafx.animation.Timeline?>(null) }
 
-    remember(document, density, scale) {
+    /*
+     * How wide the panel actually is, which is the one thing the engine must have before it
+     * is given anything to lay out.
+     *
+     * Loading during composition means loading into a panel that has not been sized yet, and
+     * a page laid out at no width is the fault above: every word on its own line, a document
+     * hundreds of thousands of pixels tall, and a reflow that takes the better part of half a
+     * minute once the real width finally arrives. So the document waits for a width.
+     */
+    var wide by remember { mutableStateOf(0) }
+
+    remember(document, density, scale, wide > 0) {
+        if (wide <= 0) return@remember Unit
         Platform.runLater {
             /*
              * Writing the document out is the one step here that touches a disk, and a disk
@@ -177,10 +205,28 @@ internal fun WebBody(
         }
     }
 
+    /*
+     * The switch, on a page that is already there.
+     *
+     * Keyed on the document as well, so a message that arrives while the window is dark
+     * gets the attribute set even though the value did not change.
+     */
+    LaunchedEffect(document, dark, wide > 0) {
+        Platform.runLater {
+            runCatching {
+                val view = panel.scene?.root as? WebView ?: return@runCatching
+                view.engine.executeScript(
+                    "document.documentElement.toggleAttribute('data-dark', $dark)",
+                )
+            }
+        }
+    }
+
     SwingPanel(
         background = Color.Transparent,
         factory = { panel },
-        modifier = modifier.fillMaxWidth().height(height.dp),
+        modifier = modifier.fillMaxWidth().height(height.dp)
+            .onSizeChanged { wide = it.width },
     )
 }
 
@@ -213,8 +259,20 @@ private fun measure(view: WebView, zoom: Double, report: (Int) -> Unit, blank: (
     var ticks = 0
     val tick = javafx.event.EventHandler<javafx.event.ActionEvent> {
         ticks++
+        /*
+         * Nothing is reported until the page has a width to lay out in.
+         *
+         * A document in a panel that has not been sized yet is laid out at almost no width,
+         * which makes it enormously tall rather than short, and one answer from that state
+         * is enough to ruin every answer after it. Fifty pixels is well under any pane
+         * anybody reads mail in and well over the handful a collapsed one reports.
+         */
         val tall = runCatching {
-            (view.engine.executeScript("document.documentElement.scrollHeight") as? Number)?.toDouble()
+            (
+                view.engine.executeScript(
+                    "document.documentElement.clientWidth > 50 ? document.documentElement.scrollHeight : 0",
+                ) as? Number
+                )?.toDouble()
         }.getOrNull()
         if (tall != null && tall > 0) report((tall * zoom).toInt())
         // Three seconds in, and the engine either will not answer or is answering that it

@@ -93,6 +93,8 @@ internal fun SettingsPane(
     onUndoBarSeconds: (Int) -> Unit = {},
     /** Told when the loader changes, so every spinner in the app switches at once. */
     onLoader: (Loader) -> Unit = {},
+    /** Told when the page messages are drawn on changes, so the open one changes with it. */
+    onMessageMode: (String) -> Unit = {},
     /** Told when the tracking server changes, so the composer's toggle appears or goes. */
     onTrackingServer: (String) -> Unit = {},
     onRestart: () -> Unit,
@@ -135,7 +137,7 @@ internal fun SettingsPane(
                     when (page) {
                         "accounts" -> AccountsPage(accounts, onAddAccount, quotas)
                         "notifications" -> NotificationsPage(notifyOnArrival, onNotifyOnArrival)
-                        "reading" -> ReadingPage(onUndoBarSeconds)
+                        "reading" -> ReadingPage(onUndoBarSeconds, onMessageMode)
                         "filters" -> FiltersPage(
                             script = filters,
                             accounts = accounts,
@@ -363,7 +365,10 @@ private fun ThemesPage(
  * guess at something they can only judge by feel.
  */
 @Composable
-private fun ReadingPage(onUndoBarSeconds: (Int) -> Unit = {}) {
+private fun ReadingPage(
+    onUndoBarSeconds: (Int) -> Unit = {},
+    onMessageMode: (String) -> Unit = {},
+) {
     var delay by remember { mutableStateOf(Settings.markReadDelay()) }
     Section(
         "Marking as read",
@@ -390,6 +395,42 @@ private fun ReadingPage(onUndoBarSeconds: (Int) -> Unit = {}) {
             Text(label, style = MaterialTheme.typography.bodyMedium)
         }
     }
+
+    Spacer(Modifier.height(18.dp))
+    var mode by remember { mutableStateOf(Settings.messageMode()) }
+    Section(
+        "The page a message is drawn on",
+        "A message that brought a design of its own is always drawn the way it was built. " +
+            "This is for the rest: a reply with no colours in it.",
+    )
+    listOf(
+        "" to "The same as the window",
+        "light" to "Always on paper",
+        "dark" to "Always dark",
+    ).forEach { (value, label) ->
+        Row(
+            Modifier.fillMaxWidth().clickable {
+                mode = value
+                Settings.setMessageMode(value)
+                onMessageMode(value)
+            }.padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(selected = mode == value, onClick = {
+                mode = value
+                Settings.setMessageMode(value)
+                onMessageMode(value)
+            })
+            Spacer(Modifier.width(8.dp))
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+    Text(
+        "The switch on the message toolbar still puts one message the other way, whichever " +
+            "of these is chosen.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.outline,
+    )
 
     Spacer(Modifier.height(18.dp))
     Section(

@@ -842,6 +842,9 @@ private fun Reader(
     var thread by remember { mutableStateOf<List<Summary>>(emptyList()) }
     /** Whether the open conversation is muted. Read off disk when the message changes. */
     var conversationMuted by remember { mutableStateOf(false) }
+    // Held rather than read where it is used, so changing it in Settings changes the
+    // message already on screen instead of the one after next.
+    var messageMode by remember { mutableStateOf(Settings.messageMode()) }
     var chatOpen by remember { mutableStateOf(false) }
     var said by remember { mutableStateOf<List<Said>>(emptyList()) }
     var chatThinking by remember { mutableStateOf(false) }
@@ -2889,6 +2892,7 @@ private fun Reader(
                     update = update,
                     notifyOnArrival = notifyOnArrival,
                     onNotifyOnArrival = { notifyOnArrival = it; Settings.setNotifyOnArrival(it) },
+                    onMessageMode = { messageMode = it },
                     onTheme = onTheme,
                     iconPack = icons,
                     onIconPack = onIcons,
@@ -3166,6 +3170,7 @@ private fun Reader(
                 source = source,
                 onSource = ::toggleSource,
                 paper = paper,
+                messageMode = messageMode,
                 // Per message rather than a setting: it is a look at this one, and having
                 // to turn it back off in settings would make it a mode instead.
                 onPaper = { paper = it },
@@ -4783,6 +4788,8 @@ internal fun Message(
     onSaveSource: () -> Unit = {},
     /** Drawing this message on paper rather than in the theme. */
     paper: Boolean = false,
+    /** "dark", "light", or empty to follow the window. See [Settings.messageMode]. */
+    messageMode: String = "",
     onPaper: (Boolean) -> Unit = {},
     onTag: (keyword: String, on: Boolean) -> Unit = { _, _ -> },
     /** True while a field in here has focus, so a bare letter is not read as a shortcut. */
@@ -4841,9 +4848,27 @@ internal fun Message(
      * built, in either window. The switch on the toolbar puts this one message back on
      * paper when the guess is wrong, which is what it is for.
      */
-    val darkWindow = MaterialTheme.colorScheme.surface.luminance() < 0.5f
-    val page = remember(body, carriedData, showRemote, darkWindow, paper) {
-        body?.html?.let { emailDocument(it, carriedData, showRemote, dark = darkWindow && !paper) }
+    /*
+     * Which page a message is drawn on: the window's, or the one that was asked for.
+     *
+     * Following the window is the default and is right for most people. It is not right for
+     * everybody: a dark application with mail on paper, and a light application with mail
+     * that does not flash white at night, are both things somebody wants, and they were one
+     * setting only because the window was the only thing that knew.
+     */
+    val darkWindow = when (messageMode) {
+        "dark" -> true
+        "light" -> false
+        else -> MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    }
+    /*
+     * Built once per message, not once per colour.
+     *
+     * Light and dark are the same document now, so neither the toolbar's switch nor the
+     * window changing theme rebuilds it or makes the engine load anything again.
+     */
+    val page = remember(body, carriedData, showRemote) {
+        body?.html?.let { emailDocument(it, carriedData, showRemote) }
     }
     /*
      * The engine had this message and drew nothing, so the block renderer gets it.
@@ -5513,6 +5538,7 @@ internal fun Message(
                         onLink = onLink,
                         onScroll = { dy -> bodyScope.launch { bodyScroll.scrollBy(dy) } },
                         onBlank = { engineBlank = true },
+                        dark = darkWindow && !paper,
                     )
                     else {
                         /*

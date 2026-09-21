@@ -227,6 +227,22 @@ object Settings {
      * On top of that correction, this is a preference. Reading comfort is personal and
      * every mail client has this control; ours starts at matching and goes either way.
      */
+    /**
+     * Whether a message is drawn dark, light, or the way the window is.
+     *
+     * Separate from the theme on purpose. Somebody can want a dark application and mail on
+     * paper, or a light application and mail that does not flash white at night, and those
+     * are two different preferences that were one setting because the window happened to
+     * be the only thing that knew.
+     *
+     * It decides the page a message with no colours of its own is drawn on. A message that
+     * brought a design is still drawn as it was built, in every mode: that is what the
+     * switch on the toolbar is for, one message at a time.
+     */
+    fun messageMode(): String = read()["messageMode"]?.jsonPrimitive?.contentOrNull.orEmpty()
+
+    fun setMessageMode(value: String) = write { put("messageMode", JsonPrimitive(value)) }
+
     fun messageScale(): Float = read()["messageScale"]?.jsonPrimitive?.floatOrNull ?: 1.0f
 
     fun setMessageScale(value: Float) = write { put("messageScale", JsonPrimitive(value)) }

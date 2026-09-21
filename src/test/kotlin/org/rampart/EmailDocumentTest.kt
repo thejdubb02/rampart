@@ -188,15 +188,19 @@ class EmailDocumentTest {
 
     @Test
     fun `a message with no colours follows the window, and one with a design never does`() {
-        fun drawnDark(html: String) = emailDocument(html, dark = true).document.contains("background: #191417")
+        // Both pages are written into every undesigned message and an attribute picks one,
+        // so that the toolbar's switch is an attribute rather than a second whole load.
+        fun canGoDark(html: String) =
+            emailDocument(html).document.contains("html[data-dark] { background: #191417")
         // A reply with nothing in it: the ordinary case, and the one this is for.
-        assertTrue(drawnDark("""<div dir="ltr">Mark,</div>"""))
-        assertTrue(drawnDark("<p>Tuesday works.</p>"))
+        assertTrue(canGoDark("""<div dir="ltr">Mark,</div>"""))
+        assertTrue(canGoDark("<p>Tuesday works.</p>"))
         // A design is never touched, in either window. Inverting one was the pink header.
-        assertFalse(drawnDark("""<table width="100%" bgcolor="#F4F1EC"><tr><td>Hello</td></tr></table>"""))
-        assertFalse(drawnDark("""<body bgcolor="#102030"><p>Hello</p></body>"""))
-        // And a light window draws nothing dark, whatever the message is.
-        assertFalse(emailDocument("<p>Tuesday works.</p>").document.contains("background: #191417"))
+        assertFalse(canGoDark("""<table width="100%" bgcolor="#F4F1EC"><tr><td>Hello</td></tr></table>"""))
+        assertFalse(canGoDark("""<body bgcolor="#102030"><p>Hello</p></body>"""))
+        // Which of the two is showing is the attribute, and nothing else.
+        assertTrue(emailDocument("<p>Tuesday works.</p>", dark = true).document.contains("<html data-dark>"))
+        assertFalse(emailDocument("<p>Tuesday works.</p>").document.contains("<html data-dark>"))
     }
 
     @Test
@@ -204,11 +208,15 @@ class EmailDocumentTest {
         // Outlook writes color:black on nearly every span it produces, and on a dark page
         // that is an empty message. The handful of ways of writing it are covered; anything
         // missed is what the switch on the toolbar is for.
-        val dark = emailDocument("""<span style="color:black">Hi</span>""", dark = true).document
-        listOf("""[style*="color:black"]""", """[style*="color:#000"]""", """font[color="black"]""")
-            .forEach { assertTrue(dark.contains(it), "no rule for $it") }
-        // Not imposed on a light page, where black on white is exactly right.
-        assertFalse(emailDocument("""<span style="color:black">Hi</span>""").document.contains("""[style*="color:black"]"""))
+        val document = emailDocument("""<span style="color:black">Hi</span>""", dark = true).document
+        listOf(
+            """html[data-dark] [style*="color:black"]""",
+            """html[data-dark] [style*="color:#000"]""",
+            """html[data-dark] font[color="black"]""",
+        ).forEach { assertTrue(document.contains(it), "no rule for $it") }
+        // Every one of them is behind the attribute, so on a light page, where black on
+        // white is exactly right, not one of them applies.
+        assertFalse(document.contains("""\n[style*="color:black"]"""))
     }
 
     @Test

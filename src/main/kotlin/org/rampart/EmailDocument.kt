@@ -62,14 +62,22 @@ internal fun emailDocument(
      * changes is the page a message with no opinion is drawn on.
      */
     val designed = paintsItself(clean, css)
-    val plain = when {
-        designed -> DESIGNED_CSS
-        dark -> PLAIN_DARK
-        else -> PLAIN_LIGHT
-    }
+    /*
+     * Both pages are written, and an attribute picks one.
+     *
+     * The light and dark versions used to be two different documents, so putting a message
+     * back on paper meant building it again and handing the engine a new page to load. That
+     * is a second load of the whole message, pictures and all, for a change of two colours,
+     * and it is what "clicking the lightbulb makes it load again" was.
+     *
+     * Now the dark rules ride along scoped to `html[data-dark]`, and the switch is one
+     * attribute on an already-loaded page. Nothing is fetched, nothing is laid out from
+     * scratch, and the message does not flicker back to the top.
+     */
+    val plain = if (designed) DESIGNED_CSS else PLAIN_LIGHT + PLAIN_DARK
     return EmailPage(
         """<!DOCTYPE html>
-<html><head>
+<html${if (dark) " data-dark" else ""}><head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="$policy">
 <meta name="color-scheme" content="light">
@@ -365,16 +373,19 @@ html { background: #ffffff; color: #1a1a1a; }
  * style and it will miss something eventually, which is what the reader's own switch is
  * for: one click puts the message back the way the sender built it.
  */
-private const val PLAIN_DARK = PLAIN_CSS + """
-html { background: #191417; color: #e8e2e5; }
-a, a * { color: #ff8fa8; }
-[style*="color:black"], [style*="color: black"],
-[style*="color:#000"], [style*="color: #000"],
-[style*="color:#111"], [style*="color:#222"], [style*="color:#333"],
-[style*="color:rgb(0,0,0)"], [style*="color:rgb(0, 0, 0)"],
-font[color="black"], font[color="#000000"] { color: #e8e2e5 !important; }
+private const val PLAIN_DARK = """
+html[data-dark] { background: #191417; color: #e8e2e5; }
+html[data-dark] a, html[data-dark] a * { color: #ff8fa8; }
+html[data-dark] [style*="color:black"], html[data-dark] [style*="color: black"],
+html[data-dark] [style*="color:#000"], html[data-dark] [style*="color: #000"],
+html[data-dark] [style*="color:#111"], html[data-dark] [style*="color:#222"],
+html[data-dark] [style*="color:#333"],
+html[data-dark] [style*="color:rgb(0,0,0)"], html[data-dark] [style*="color:rgb(0, 0, 0)"],
+html[data-dark] font[color="black"], html[data-dark] font[color="#000000"] {
+  color: #e8e2e5 !important;
+}
 /* A quoted reply's rule is drawn for a white page and disappears on a dark one. */
-blockquote { border-color: #4a3f44 !important; }
+html[data-dark] blockquote { border-color: #4a3f44 !important; }
 """
 
 /**
