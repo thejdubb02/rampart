@@ -68,7 +68,17 @@ object Updates {
      * between "not ready yet" and "did not install" is one Rampart can tell, and so the
      * answer to the first is to wait rather than to report a failure.
      */
-    internal fun manifestReady(url: String = APPINSTALLER): Boolean = runCatching {
+    internal fun manifestReady(url: String = APPINSTALLER): Boolean = reachable(url) == true
+
+    /**
+     * True when the manifest is served, false when the server says it is not there yet, and
+     * null when the question could not be asked at all.
+     *
+     * Three answers rather than two, because no network is not a release that has not landed
+     * and telling somebody with the wifi off that their update "is not ready to download
+     * yet" is a sentence about the wrong thing.
+     */
+    internal fun reachable(url: String = APPINSTALLER): Boolean? = runCatching {
         val response = http.send(
             HttpRequest.newBuilder(URI.create(url))
                 .timeout(Duration.ofSeconds(15))
@@ -79,7 +89,7 @@ object Updates {
         // The body is checked as well as the code, because a redirect to an error page is a
         // 200 carrying something that is not a manifest.
         response.statusCode() == 200 && response.body().contains("<AppInstaller")
-    }.getOrDefault(false)
+    }.getOrNull()
 
     /**
      * The published version, when it is newer than this one. Null for every other outcome,
@@ -194,19 +204,44 @@ object Updates {
         // Asked before PowerShell is started at all. A manifest that is not being served yet
         // is a reason to come back in a minute, not a failed install, and running the command
         // anyway turns the first into the second.
-        if (!manifestReady()) {
-            lastProblem = NOT_READY
-            return false
+        when (reachable()) {
+            true -> Unit
+            false -> {
+                lastProblem = NOT_READY
+                return false
+            }
+            null -> {
+                lastProblem = "Rampart could not reach the download."
+                return false
+            }
         }
-        val process = ProcessBuilder(stageCommand()).redirectErrorStream(true).start()
+        /*
+         * **Into a file, not down a pipe.** Both ways of reading a pipe hang here.
+         *
+         * A pipe holds a few tens of kilobytes. Wait for the process first and a refusal
+         * long enough to fill it leaves PowerShell blocked on a write nobody is reading
+         * while this side waits for an exit that cannot come. Read the pipe first instead
+         * and a process that hangs without closing its output blocks the read for ever,
+         * which quietly skips past the timeout below. A file has neither end of that: the
+         * process writes as much as it likes to somewhere with no reader, the timeout is
+         * the only thing that decides how long this waits, and the output is read
+         * afterwards when there is nothing left to deadlock against.
+         */
+        val log = Files.createTempFile("rampart-update", ".log")
+        val process = ProcessBuilder(stageCommand())
+            .redirectErrorStream(true)
+            .redirectOutput(log.toFile())
+            .start()
         if (!process.waitFor(30, java.util.concurrent.TimeUnit.MINUTES)) {
-            process.destroy()
+            process.destroyForcibly()
+            runCatching { Files.deleteIfExists(log) }
             lastProblem = "The download did not finish."
             return false
         }
         // Read rather than thrown away. What Windows refused for is the only thing that
         // makes a failure here fixable by anybody.
-        val said = process.inputStream.bufferedReader().use { it.readText() }.trim()
+        val said = runCatching { Files.readString(log) }.getOrDefault("").trim()
+        runCatching { Files.deleteIfExists(log) }
         if (process.exitValue() == 0) {
             lastProblem = null
             true

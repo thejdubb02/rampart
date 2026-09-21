@@ -42,6 +42,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -136,6 +139,7 @@ import androidx.compose.ui.window.rememberTrayState
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -710,6 +714,44 @@ internal fun whyFailed(e: Throwable): String {
     return e.message ?: e.toString()
 }
 
+/**
+ * Everything about one message that has to be fetched, or decided, before its card in the
+ * thread stack can be drawn.
+ *
+ * One map, [Reader]'s `cards`, keyed by message id, rather than a body map and a bodyError
+ * map and an attachments map and so on side by side: those were nine declarations that
+ * moved together, were cleared together and were never once independent of each other, so
+ * the next field a card needs would otherwise be three edits in three places rather than
+ * one field here.
+ */
+internal data class Card(
+    val body: Body? = null,
+    /** Why [body] would not open, when it would not. Set only when there was nothing kept. */
+    val bodyError: String? = null,
+    val attachments: List<Attachment> = emptyList(),
+    /** Pictures this message carries, decoded, by blob id. */
+    val images: Map<String, ImageBitmap> = emptyMap(),
+    /** The same parts undecoded, for the engine, which wants bytes rather than a bitmap. */
+    val imageBytes: Map<String, ByteArray> = emptyMap(),
+    /** What happened after pressing Unsubscribe on this message, when it was pressed. */
+    val unsubscribed: String? = null,
+    /** This message's own raw source, once "View source" has asked for it. */
+    val source: String? = null,
+    /** Where an attachment, or this message's source, was last saved to. */
+    val saved: String? = null,
+    /**
+     * Whether the fetch for this card ran all the way through.
+     *
+     * Not the same question as whether [body] is set. The body is filled from disk first
+     * and then again from the server, and the parts and pictures follow it, so a load
+     * interrupted part way leaves a card with a body and no attachments. Asking "has a
+     * body" before deciding to skip meant that card was never completed: it stayed
+     * half loaded for as long as the conversation was open, with its attachments missing
+     * and no way to ask for them again.
+     */
+    val loaded: Boolean = false,
+)
+
 @Composable
 private fun Reader(
     sessions: List<Session>,
@@ -839,9 +881,26 @@ private fun Reader(
     var here by remember { mutableStateOf<Pair<String, Mailbox>?>(null) }
     var emails by remember { mutableStateOf<List<Summary>>(emptyList()) }
     var selected by remember { mutableStateOf<Summary?>(null) }
-    var body by remember { mutableStateOf<Body?>(null) }
-    var attachments by remember { mutableStateOf<List<Attachment>>(emptyList()) }
+    /**
+     * Everything fetched for the open conversation's messages, by id. See [Card].
+     *
+     * A card that is expanded needs its own body, and a reader who opens four messages in
+     * a thread must not pay for the first one again when they come back to it. See
+     * [loadCard], which is the only place anything is written in here.
+     */
+    var cards by remember { mutableStateOf<Map<String, Card>>(emptyMap()) }
+    /** The whole conversation, oldest first, including whichever message was opened. */
     var thread by remember { mutableStateOf<List<Summary>>(emptyList()) }
+    /**
+     * Which messages of [thread] are drawn as a full card rather than a one-line row.
+     *
+     * Expanding never swaps what is already on screen: a click adds or removes exactly one
+     * id here, and every card already open stays exactly where it was. See [initialExpanded]
+     * for what this starts as.
+     */
+    var expanded by remember { mutableStateOf<Set<String>>(emptySet()) }
+    /** The card [expanded] should be scrolled into view once it has been laid out. */
+    var pendingScrollTo by remember { mutableStateOf<String?>(null) }
     /** Whether the open conversation is muted. Read off disk when the message changes. */
     var conversationMuted by remember { mutableStateOf(false) }
     // Held rather than read where it is used, so changing it in Settings changes the
@@ -881,18 +940,22 @@ private fun Reader(
     var summariseFor by remember { mutableStateOf<String?>(null) }
     // Read once rather than on every recomposition, for the same reason as chatAgreed.
     var summariseAgreed by remember { mutableStateOf(Assistant.agreed(Assistant.SUMMARISE)) }
-    var bodyError by remember { mutableStateOf<String?>(null) }
-    var inlineImages by remember { mutableStateOf<Map<String, ImageBitmap>>(emptyMap()) }
-    // The same parts undecoded, for the engine, which wants the bytes rather than a bitmap.
-    var inlineBytes by remember { mutableStateOf<Map<String, ByteArray>>(emptyMap()) }
-    var showRemote by remember { mutableStateOf(false) }
-    var unsubscribed by remember { mutableStateOf<String?>(null) }
-    var source by remember { mutableStateOf<String?>(null) }
+    /**
+     * Messages shown their remote pictures for this session alone, on top of whatever
+     * [allowedSenders] remembers permanently.
+     *
+     * Deliberately not part of [Card]: it is not scoped to the open conversation the way
+     * everything in there is, on purpose. Once a reader has said "show this one", asking
+     * again because they came back to it a minute later would be the button lying about
+     * what it just agreed to. It is a session-long promise, so it is a session-long set,
+     * kept apart from [allowedSenders] because "show this once" and "always show this
+     * sender" are different promises and only one of them survives a restart.
+     */
+    var shownOnce by remember { mutableStateOf<Set<String>>(emptySet()) }
     var picked by remember { mutableStateOf<Set<String>>(emptySet()) }
     var anchor by remember { mutableStateOf<String?>(null) }
     var undo by remember { mutableStateOf<Undoable?>(null) }
     var allowedSenders by remember { mutableStateOf(Settings.imageSenders()) }
-    var saved by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf<String?>(null) }
@@ -913,6 +976,21 @@ private fun Reader(
      */
     fun accountOf(message: Summary?): String? =
         message?.account?.ifBlank { null } ?: here?.first?.takeIf { it != ALL_ACCOUNTS }
+
+    /** [Card] for [message], or an empty one for a message nothing has been fetched for yet. */
+    fun cardFor(message: Summary?): Card = message?.let { cards[it.id] } ?: Card()
+
+    /** [cardFor], with [edit] applied and written back. The only way anything joins [cards]. */
+    fun updateCard(id: String, edit: Card.() -> Card) {
+        cards = cards + (id to (cards[id] ?: Card()).edit())
+    }
+
+    /**
+     * Whether [message]'s pictures are drawn: a sender allowed for good, from [allowedSenders],
+     * or one the reader said yes to just for this message, from [shownOnce].
+     */
+    fun showRemoteFor(message: Summary?): Boolean =
+        message != null && (imageSenderKey(message.fromEmail) in allowedSenders || message.id in shownOnce)
 
     /**
      * The account a new message is written from. The one being replied to, when there is
@@ -987,6 +1065,56 @@ private fun Reader(
     } catch (e: Exception) {
         error = whyFailed(e)
         null
+    }
+
+    /**
+     * Fills in one message's body and attachments, the same round trip whether it is the
+     * one clicked from the list or one expanded afterwards inside its thread.
+     *
+     * [force] re-fetches even when [cards] already has a body, which is right exactly once:
+     * the message a click just opened, because a body read before can gain a decoded part
+     * or lose a broken one between reads. Every other card is left alone when it is already
+     * here, which is the whole reason collapsing one and opening it again is free.
+     */
+    suspend fun loadCard(key: String, id: String, force: Boolean = false) {
+        if (!force && cards[id]?.loaded == true) return
+        val kept = io { session(key).store?.body(id) }
+        if (kept != null) updateCard(id) { copy(body = kept) }
+        coroutineScope {
+            // The body and the parts list do not depend on each other and each is a round
+            // trip, so they go out together rather than one after the other.
+            val fetchedBody = async(Dispatchers.IO) { tried { session(key).jmap.body(id) } }
+            val fetchedParts = async(Dispatchers.IO) { tried { session(key).jmap.attachments(id) } }
+            val fresh = fetchedBody.await().fold(
+                onSuccess = { it.also { b -> io { session(key).store?.putBody(id, b) } } },
+                onFailure = { e ->
+                    // Only a failure when there was nothing kept. Offline, with a copy on
+                    // disk, is a card that opens rather than an error where it should be.
+                    if (kept == null) updateCard(id) { copy(bodyError = whyFailed(e)) }
+                    kept
+                },
+            )
+            if (fresh != null) updateCard(id) { copy(body = fresh) }
+            val parts = fetchedParts.await().getOrNull() ?: emptyList()
+            // Marked finished here rather than at the end: what follows is the pictures the
+            // message carries, and a card with its body and its parts list is complete
+            // enough not to be fetched again from the top.
+            updateCard(id) { copy(attachments = parts, loaded = true) }
+            // Images the message carries with it are drawn. Fetching them asks the server
+            // this account is already signed in to, so it tells the sender nothing, which
+            // is the whole difference between these and the remote ones that stay blocked.
+            val embedded = parts.filter { it.inline && it.type.startsWith("image/") }
+            if (embedded.isEmpty()) return@coroutineScope
+            val blobs = embedded.map { part ->
+                async(Dispatchers.IO) { tried { session(key).jmap.blob(part) }.getOrNull()?.let { part.blobId to it } }
+            }.awaitAll().filterNotNull().toMap()
+            val images = blobs.mapNotNull { (blobId, raw) ->
+                // A part that claims to be an image and is not must not take the card down
+                // with it.
+                runCatching { Image.makeFromEncoded(raw).toComposeImageBitmap() }.getOrNull()?.let { blobId to it }
+            }.toMap()
+            updateCard(id) { copy(imageBytes = blobs, images = images) }
+        }
     }
 
     /*
@@ -1258,14 +1386,27 @@ private fun Reader(
      * on IMAP every fetch takes the folder lock, so a burst of them would be in front of the
      * message somebody actually clicked.
      */
-    LaunchedEffect(emails.firstOrNull()?.id, emails.size, selected?.id, here) {
-        val key = here?.first?.takeIf { it != ALL_ACCOUNTS } ?: return@LaunchedEffect
-        val store = session(key).store ?: return@LaunchedEffect
+    /*
+     * Deliberately not keyed on the selection.
+     *
+     * It was, and that made pressing j or k cancel the whole run, wait another six hundred
+     * milliseconds and start again from the top of the list, so somebody moving through
+     * their mail at any speed got no read ahead at all. The message being looked at is
+     * skipped by reading [selected] inside the loop instead, which is the current value
+     * either way and costs nothing.
+     */
+    LaunchedEffect(emails.firstOrNull()?.id, emails.size, here) {
+        val account = here?.first ?: return@LaunchedEffect
         // A moment's grace, so the list paints and a reader who is already clicking gets the
         // connection to themselves rather than queueing behind a fetch nobody asked for.
         delay(600)
         for (row in emails.take(READ_AHEAD)) {
             if (row.id == selected?.id) continue
+            // The unified inbox is rows from several accounts, so the account comes from the
+            // row rather than from the folder. It used to return early here, which switched
+            // the read ahead off entirely in the view most likely to be left open.
+            val key = if (account == ALL_ACCOUNTS) accountOf(row) ?: continue else account
+            val store = session(key).store ?: continue
             withContext(Dispatchers.IO) {
                 if (store.body(row.id) == null) {
                     runCatching { store.putBody(row.id, session(key).jmap.body(row.id)) }
@@ -1492,7 +1633,7 @@ private fun Reader(
         val message = selected ?: return
         val key = accountOf(message) ?: return
         val identity = identities[key].orEmpty().let { mine ->
-            mine.firstOrNull { it.email.equals(writingIdentity(body), ignoreCase = true) } ?: mine.firstOrNull()
+            mine.firstOrNull { it.email.equals(writingIdentity(cardFor(message).body), ignoreCase = true) } ?: mine.firstOrNull()
         } ?: return
         val boxes = mailboxes[key].orEmpty()
         val drafts = folderFor("drafts", boxes) ?: return
@@ -1505,7 +1646,7 @@ private fun Reader(
                     try {
                         Files.writeString(file, ics)
                         val part = session(key).jmap.upload(file)
-                        val draft = rsvpDraft(meeting, answer, message, body, identity.email)
+                        val draft = rsvpDraft(meeting, answer, message, cardFor(message).body, identity.email)
                             .copy(attachments = listOf(part.copy(name = rsvpFileName(answer))))
                         session(key).jmap.send(draft, identity, drafts.id, folderFor("sent", boxes)?.id)
                     } finally {
@@ -1536,7 +1677,6 @@ private fun Reader(
      */
     fun openTag(keyword: String) {
         selected = null
-        body = null
         query = ""
         showingResults = false
         viewingTag = keyword
@@ -1547,7 +1687,6 @@ private fun Reader(
     LaunchedEffect(here) {
         here ?: return@LaunchedEffect
         selected = null
-        body = null
         query = ""
         showingResults = false
         viewingTag = null
@@ -1557,34 +1696,26 @@ private fun Reader(
         val message = selected ?: return@LaunchedEffect
         val key = accountOf(message) ?: return@LaunchedEffect
         paper = false
-        body = null
-        bodyError = null
-        inlineImages = emptyMap()
-        inlineBytes = emptyMap()
         invitation = null
         answering = null
-        /*
-         * Decided here, before anything is fetched, and not two dozen lines further down.
-         *
-         * It used to be answered after the body, the attachments, the pictures, the
-         * invitation and the whole thread had come back, which is a second or more on a
-         * cold mailbox. Everything in that window was drawn with the pictures blocked,
-         * including for a sender whose pictures were agreed to months ago, and the message
-         * was then rebuilt from scratch and handed to the engine a second time. So a
-         * sender who had been allowed still opened with holes where the pictures are, and
-         * the load that would have corrected it was one more chance for a message to come
-         * out blank. The answer needs nothing but the address, which is already here.
-         */
-        showRemote = imageSenderKey(message.fromEmail) in allowedSenders
         // Read here rather than during composition: it comes off disk, and a file read on
         // every recomposition of the reading pane is a file read on every keystroke.
         conversationMuted = Muted.muted(key, message.threadId)
-        unsubscribed = null
-        source = null
-        attachments = emptyList()
-        saved = null
-        // Cleared only when this is a different conversation, so moving between messages in
-        // the same thread does not make the list of them flicker away and come back.
+        // Cleared only when this is a different conversation, so expanding or collapsing a
+        // card in the same thread never throws away what another card already fetched, and
+        // never re-decides which cards were open to begin with.
+        var fetchedThread: Deferred<Result<List<Summary>>>? = null
+        /*
+         * Whatever was selected is open, always, even when the conversation is already the
+         * one on screen.
+         *
+         * Moving with j and k to another message in the same thread takes the branch below
+         * and therefore never touched [expanded], so the message just selected rendered as
+         * a collapsed one line row: selected, scrolled to, and with no way to read it. A
+         * selection is a request to read that message, so it opens, and the cards already
+         * open stay open because this adds rather than replaces.
+         */
+        expanded = expanded + message.id
         if (thread.none { it.id == message.id }) {
             thread = emptyList()
             // A summary, a pending packet or an error belongs to the conversation it was
@@ -1594,60 +1725,23 @@ private fun Reader(
             summariseError = null
             summarisePacket = null
             summariseFor = null
+            cards = emptyMap()
+            // The clicked message opens at once, before the rest of the thread is even
+            // known. See initialExpanded below for what joins it once the thread answers.
+            expanded = setOf(message.id)
+            /*
+             * The thread goes out alongside the click's own card rather than after it: they
+             * do not depend on each other and each is a round trip, so asking in turn made
+             * opening a message cost two of them end to end before the rest of the
+             * conversation was even known to be there.
+             */
+            fetchedThread = async(Dispatchers.IO) { tried { session(key).jmap.thread(message.threadId) } }
         }
-        // Kept apart from the shared error bar. A message that will not open has to say so
-        // where the message would have been: a spinner that never stops is indistinguishable
-        // from one that is still going, and it was being shown for a failure.
         // A message read once opens with no round trip at all, which is most of what
         // "instant" means in a mail client. Still re-fetched underneath, because a body
         // can gain a decoded part or lose a broken one between reads.
-        val kept = io { session(key).store?.body(message.id) }
-        if (kept != null) body = kept
-        /*
-         * The body, the parts list and the conversation are asked for at once.
-         *
-         * They do not depend on each other and each is a round trip, so asking for them in
-         * turn made opening a message cost three of them end to end, and a message with
-         * pictures in it several more on top. On anything but a local server that is the
-         * difference between a message appearing and a message arriving.
-         */
-        val fetchedBody = async(Dispatchers.IO) { tried { session(key).jmap.body(message.id) } }
-        val fetchedParts = async(Dispatchers.IO) { tried { session(key).jmap.attachments(message.id) } }
-        val fetchedThread =
-            if (thread.isEmpty()) async(Dispatchers.IO) { tried { session(key).jmap.thread(message.threadId) } }
-            else null
+        loadCard(key, message.id, force = true)
 
-        body = fetchedBody.await().fold(
-            onSuccess = { fresh -> fresh.also { io { session(key).store?.putBody(message.id, it) } } },
-            onFailure = { e ->
-                // Only a failure when there was nothing kept. Offline, with a copy on disk,
-                // is a message that opens rather than an error where the message should be.
-                if (kept == null) bodyError = whyFailed(e)
-                kept
-            },
-        )
-        attachments = fetchedParts.await().getOrNull() ?: emptyList()
-
-        // Images the message carries with it are drawn. Fetching them asks the server this
-        // account is already signed in to, so it tells the sender nothing, which is the
-        // whole difference between these and the remote ones that stay blocked.
-        val embedded = attachments.filter { it.inline && it.type.startsWith("image/") }
-        if (embedded.isNotEmpty()) {
-            // All of them at once, for the same reason as above: a message with six inline
-            // pictures was six round trips, one after the other, before it finished drawing.
-            val fetched = withContext(Dispatchers.IO) {
-                embedded.map { part ->
-                    async { tried { session(key).jmap.blob(part) }.getOrNull()?.let { part.blobId to it } }
-                }.awaitAll().filterNotNull().toMap()
-            }
-            inlineBytes = fetched
-            inlineImages = fetched.mapNotNull { (blobId, bytes) ->
-                // A part that claims to be an image and is not must not take the pane
-                // down with it.
-                runCatching { Image.makeFromEncoded(bytes).toComposeImageBitmap() }
-                    .getOrNull()?.let { blobId to it }
-            }.toMap()
-        }
         /*
          * The meeting, when the message carries one.
          *
@@ -1656,7 +1750,7 @@ private fun Reader(
          * beside the text and the HTML, and it is small enough that fetching it to find out
          * costs nothing worth saving.
          */
-        attachments.firstOrNull { it.type.equals("text/calendar", ignoreCase = true) }?.let { part ->
+        cardFor(message).attachments.firstOrNull { it.type.equals("text/calendar", ignoreCase = true) }?.let { part ->
             invitation = withContext(Dispatchers.IO) {
                 runCatching {
                     session(key).jmap.blob(part)?.let { invitationIn(String(it, Charsets.UTF_8)) }
@@ -1664,7 +1758,20 @@ private fun Reader(
             }
         }
 
-        fetchedThread?.let { thread = it.await().getOrNull() ?: emptyList() }
+        fetchedThread?.let {
+            val loaded = it.await().getOrNull().orEmpty()
+                // A thread comes from one account: JMAP does not thread across servers, so
+                // every message in it shares the click's own key. Stamped here because
+                // Email/get does not know about the merged inbox, and a card whose account
+                // cannot be worked out cannot reply as, file, or archive anything.
+                .map { row -> if (row.account.isBlank()) row.copy(account = key) else row }
+            thread = loaded
+            expanded = initialExpanded(loaded, message)
+            // Only now, because scrolling to where this card is about to land means knowing
+            // the whole thread first: asked for before the earlier messages that push it
+            // down the page were known about, it would scroll to where the card used to be.
+            pendingScrollTo = message.id
+        }
 
         // A draft is not something to read. Clicking one puts it back in the composer,
         // under the id it is already saved at, so carrying on writing replaces that copy
@@ -1672,7 +1779,7 @@ private fun Reader(
         if (here?.second?.role == "drafts" && !showingResults) {
             draftId = message.id
             sendError = null
-            composing = draftOf(message, body, identities[key].orEmpty().firstOrNull()?.email.orEmpty())
+            composing = draftOf(message, cardFor(message).body, identities[key].orEmpty().firstOrNull()?.email.orEmpty())
             return@LaunchedEffect
         }
 
@@ -1693,6 +1800,61 @@ private fun Reader(
             if (wait > 0) delay(wait)
             io { session(key).jmap.markSeen(message.id) }
             emails = emails.map { if (it.id == message.id) it.copy(seen = true) else it }
+        }
+    }
+
+    /**
+     * The body of any card [expanded] is showing open that the effect above does not
+     * already cover: an unread message that started open beside the one that was clicked,
+     * or one the reader expanded by hand. A body already in [cards] is skipped, which is
+     * what makes opening a card a second time free rather than a second fetch.
+     *
+     * One at a time rather than all at once, the same restraint as the read ahead below: a
+     * burst of fetches would be in front of whichever card somebody is actually waiting on.
+     */
+    LaunchedEffect(expanded, selected) {
+        val key = accountOf(selected) ?: return@LaunchedEffect
+        for (id in expanded) {
+            if (id == selected?.id || cards[id]?.body != null) continue
+            loadCard(key, id)
+            yield()
+        }
+    }
+
+    /**
+     * Opens or closes one card of the thread stack, in place.
+     *
+     * Never a swap: this only ever adds or removes [id] from [expanded], so everything else
+     * already on screen, expanded or not, stays exactly where it was. See [initialExpanded]
+     * for what a conversation starts with, before anything here has been clicked.
+     */
+    /**
+     * Opens or closes one card, and marks it read when opening it was a deliberate act.
+     *
+     * **Only on a press, never because a card started open.** Unread messages in a
+     * conversation are expanded when it opens, so marking everything expanded read would
+     * mark a ten message thread read the moment it was opened, including the nine nobody
+     * scrolled to. That is the exact failure the mark read delay setting exists to prevent,
+     * and doing it in the name of a tidy unread count would be destroying real information.
+     *
+     * Pressing a collapsed message open is different. It is somebody saying they want to
+     * read this one, which is the same statement clicking it in the list makes, so it is
+     * treated the same way and honours the same setting, including "never".
+     */
+    fun toggleExpand(id: String) {
+        val opening = id !in expanded
+        expanded = if (opening) expanded + id else expanded - id
+        if (!opening) return
+        val row = thread.firstOrNull { it.id == id }?.takeIf { !it.seen } ?: return
+        val key = accountOf(row) ?: return
+        val wait = Settings.markReadDelay()
+        // Negative means never on its own, the same as everywhere else it is read.
+        if (wait < 0) return
+        scope.launch {
+            if (wait > 0) delay(wait)
+            io { session(key).jmap.markSeen(id) }
+            thread = thread.map { if (it.id == id) it.copy(seen = true) else it }
+            emails = emails.map { if (it.id == id) it.copy(seen = true) else it }
         }
     }
 
@@ -1750,10 +1912,13 @@ private fun Reader(
         // again the next time that folder is opened from disk.
         io { session(key).store?.forget(listOf(message.id)) }
         emails = emails.filterNot { it.id == message.id }
-        if (selected?.id == message.id) {
-            selected = null
-            body = null
-        }
+        // And out of the conversation on screen. A card archived from inside the stack used
+        // to stay there, fully interactive, as though the button had not worked, until the
+        // reader opened something else.
+        thread = thread.filterNot { it.id == message.id }
+        expanded = expanded - message.id
+        cards = cards - message.id
+        if (selected?.id == message.id) selected = null
         // One message can be taken back the same way a batch can. Filing the
         // wrong thing is a click, and having to go and find it again is the
         // part that makes people slow and careful about a button.
@@ -1810,10 +1975,7 @@ private fun Reader(
             if (io { session(key).jmap.move(listOf(message.id), folder) } == null) return@launch
             io { session(key).store?.forget(listOf(message.id)) }
             emails = emails.filterNot { it.id == message.id }
-            if (selected?.id == message.id) {
-                selected = null
-                body = null
-            }
+            if (selected?.id == message.id) selected = null
             undo = from?.let { Undoable(listOf(Move(key, listOf(message.id), it)), "Snoozed") }
         }
     }
@@ -1971,10 +2133,7 @@ private fun Reader(
             scope.launch {
                 val gone = ids.toSet()
                 emails = emails.filterNot { it.id in gone }
-                if (selected?.id in gone) {
-                    selected = null
-                    body = null
-                }
+                if (selected?.id in gone) selected = null
                 undo = from?.let { Undoable(listOf(Move(key, ids, it)), pastTense(role)) }
             }
             return ids.size
@@ -2053,24 +2212,21 @@ private fun Reader(
     /**
      * Every message in the open thread, as [Turn]s, oldest first.
      *
-     * The one already on screen reuses [body] rather than being fetched again: it is
+     * Any card already expanded reuses `cards` rather than being fetched again: it is
      * already here, decoded, and asking for it twice would be a second round trip for
-     * something already sitting in the pane. Everything else in the thread has so far
-     * only ever been headers, so each of those costs one more fetch.
+     * something already sitting on screen. Everything still collapsed has so far only ever
+     * been headers, so each of those costs one more fetch.
      *
      * All of them at once, rather than one after another. A twenty message thread fetched
      * in turn is twenty round trips end to end, which is the wait somebody sits through
      * before the button has even sent anything. The same rule as opening a message, where
-     * the body, the parts and the conversation are asked for together.
+     * the body and the parts are asked for together.
      */
     suspend fun summariseTurns(key: String, message: Summary): List<Turn> = coroutineScope {
         thread.ifEmpty { listOf(message) }.map { m ->
             async(Dispatchers.IO) {
-                val text = if (m.id == message.id) {
-                    plainTextOf(body)
-                } else {
-                    runCatching { plainTextOf(session(key).jmap.body(m.id)) }.getOrDefault("")
-                }
+                val text = cards[m.id]?.body?.let(::plainTextOf)
+                    ?: runCatching { plainTextOf(session(key).jmap.body(m.id)) }.getOrDefault("")
                 Turn(m.from, m.receivedAt, text)
             }
         }.awaitAll()
@@ -2163,7 +2319,6 @@ private fun Reader(
             val gone = ids.toSet()
             emails = emails.filterNot { it.id in gone }
             selected = null
-            body = null
             thread = emptyList()
             // Twelve messages filed by one click is exactly the act that has to be
             // reversible, and a move is only ever undone by a move the other way.
@@ -2357,9 +2512,15 @@ private fun Reader(
         markRead = ::markRead,
     )
 
-    val actions = run {
-        val message = selected ?: return@run MessageActions()
-        if (accountOf(message) == null) return@run MessageActions()
+    /**
+     * What can be done to [message], the buttons on its own card in the reading pane.
+     *
+     * A function rather than a single value computed for whichever message is [selected],
+     * because expanding never swaps: several cards can be open at once, each archiving,
+     * starring or replying as itself rather than as whichever one was clicked from the list.
+     */
+    fun actionsFor(message: Summary): MessageActions {
+        if (accountOf(message) == null) return MessageActions()
         fun moveTo(role: String): (() -> Unit)? = fileAway(message, role)
         /*
          * Spam and Not spam are the same move in opposite directions, and only one of them
@@ -2373,7 +2534,7 @@ private fun Reader(
          */
         val junked = inJunk(message)
         val boxes = mailboxes[accountOf(message)!!].orEmpty()
-        MessageActions(
+        return MessageActions(
             archive = moveTo("archive"),
             snooze = { until -> snooze(message, until) },
             trash = moveTo("trash"),
@@ -2415,6 +2576,11 @@ private fun Reader(
         )
     }
 
+    // Keyboard shortcuts and the command palette act on whichever message is primary, the
+    // one clicked from the list, the same as before there was more than one card to choose
+    // between.
+    val actions = selected?.let(::actionsFor) ?: MessageActions()
+
     /**
      * The Summarise button on the open thread, and what pressing it has done.
      *
@@ -2444,20 +2610,218 @@ private fun Reader(
         )
     }
 
-    /** Shows the message as it arrived, or puts it away again. */
-    fun toggleSource() {
-        val message = selected
-        val key = accountOf(message)
-        when {
-            source != null -> source = null
-            message != null && key != null -> {
-                source = "Fetching the original..."
-                scope.launch {
-                    source = io { session(key).jmap.raw(message.id) }
-                        ?: "The server would not hand over the original of this message."
-                }
-            }
+    /** Shows [message] as it arrived, or puts it away again. Its own card, not a shared one. */
+    fun toggleSource(message: Summary) {
+        val key = accountOf(message) ?: return
+        if (cardFor(message).source != null) {
+            updateCard(message.id) { copy(source = null) }
+            return
         }
+        updateCard(message.id) { copy(source = "Fetching the original...") }
+        scope.launch {
+            val raw = io { session(key).jmap.raw(message.id) }
+                ?: "The server would not hand over the original of this message."
+            updateCard(message.id) { copy(source = raw) }
+        }
+    }
+
+    /**
+     * One message's card: its own header, avatar, body and action row, exactly what the
+     * reading pane has always drawn for whichever message was open, called once per
+     * expanded card rather than once for the whole pane.
+     *
+     * [cardSummary] is which message, never [selected]: several cards can be expanded at
+     * once, and each answers Reply, Archive, Tag and the rest as itself. [invitation],
+     * [answering] and [summariseState] stay tied to whichever message the conversation was
+     * opened on, because a meeting invitation and a thread summary are read once per
+     * conversation, not once per message in it.
+     */
+    @Composable
+    fun renderCard(
+        cardSummary: Summary,
+        showSubject: Boolean,
+        onHeaderClick: (() -> Unit)?,
+        externalScroll: ScrollState?,
+    ) {
+        val card = cardFor(cardSummary)
+        val key = accountOf(cardSummary)
+        val ours = identities[key].orEmpty().map { it.email }.toSet()
+        val isPrimary = cardSummary.id == selected?.id
+        Message(
+            summary = cardSummary,
+            body = card.body,
+            onReply = { all ->
+                sendError = null
+                composing = replyTo(cardSummary, card.body, writingIdentity(card.body), all, ours)
+            },
+            replyAll = hasOtherRecipients(cardSummary, card.body, ours),
+            onForward = {
+                sendError = null
+                composing = forwardOf(cardSummary, card.body, writingIdentity(card.body))
+            },
+            onLink = { confirm = it },
+            invitation = if (isPrimary) invitation else null,
+            /*
+             * Built from the address book, which already holds everyone corresponded with.
+             * A lookalike of a household name is caught by the built-in list; a lookalike
+             * of the client you invoice every month is only catchable from what this
+             * particular person's mail actually looks like.
+             */
+            knownDomains = remember(books, sessions) {
+                books.values.flatten().map { domainOf(it.email) }.filter { it.isNotBlank() }.toSet()
+            },
+            answering = if (isPrimary) answering else null,
+            onAnswer = ::answerInvitation,
+            me = writingIdentity(card.body),
+            showRemote = showRemoteFor(cardSummary),
+            unsubscribed = card.unsubscribed,
+            inContacts = contacts.any { it.first.emails.any { e -> e.equals(cardSummary.fromEmail, ignoreCase = true) } },
+            onAddContact = if (sessions.any { it.jmap.hasContacts() }) {
+                { message ->
+                    val bookKey = accountOf(message)
+                    if (bookKey != null) {
+                        scope.launch {
+                            contactsError = null
+                            try {
+                                withContext(Dispatchers.IO) {
+                                    val jmap = session(bookKey).jmap
+                                    val known = contactBooks.ifEmpty { jmap.addressBooks() }
+                                    val book = known.firstOrNull { it.isDefault } ?: known.firstOrNull()
+                                    jmap.saveContact(
+                                        Contact(
+                                            name = message.from.trim(),
+                                            emails = listOf(message.fromEmail),
+                                            bookIds = listOfNotNull(book?.id),
+                                        ),
+                                    )
+                                    contacts = jmap.contacts()
+                                }
+                            } catch (e: Exception) {
+                                contactsError = whyFailed(e)
+                            }
+                        }
+                    }
+                }
+            } else {
+                null
+            },
+            onReceipt = { to ->
+                sendError = null
+                composing = Draft(
+                    from = identities[key].orEmpty().firstOrNull()?.email.orEmpty(),
+                    to = to,
+                    subject = receiptSubject(cardSummary.subject),
+                    body = receiptBody(
+                        cardSummary.subject,
+                        java.time.ZonedDateTime.now().format(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME),
+                        identities[key].orEmpty().firstOrNull()?.email.orEmpty(),
+                    ),
+                    inReplyTo = card.body?.messageId?.firstOrNull(),
+                    references = card.body?.references.orEmpty() + card.body?.messageId.orEmpty(),
+                    replying = true,
+                )
+            },
+            onUnsubscribe = { off ->
+                when {
+                    // One-click is the only route that finishes without leaving Rampart,
+                    // and it is the only one the sender promised would work that way.
+                    off.oneClick && off.url != null -> {
+                        updateCard(cardSummary.id) { copy(unsubscribed = "Asking to be taken off the list.") }
+                        scope.launch {
+                            val done = withContext(Dispatchers.IO) { oneClickPost(off.url) }
+                            updateCard(cardSummary.id) {
+                                copy(
+                                    unsubscribed = if (done) {
+                                        "Asked to be taken off the list. It can take a few days."
+                                    } else {
+                                        // Not an error worth a dialog: the link is still there.
+                                        "That did not go through. Try the link instead."
+                                    },
+                                )
+                            }
+                        }
+                    }
+                    // A page to open is a page somebody should see before it acts, so it
+                    // goes through the same confirmation as any other link in a message.
+                    off.url != null -> confirm = off.url
+                    off.mailto != null -> {
+                        sendError = null
+                        composing = Draft(
+                            from = identities[key].orEmpty().firstOrNull()?.email.orEmpty(),
+                            to = off.mailto,
+                            subject = off.mailtoSubject ?: "unsubscribe",
+                        )
+                    }
+                }
+            },
+            onShowImages = { always ->
+                if (always) {
+                    val senderKey = imageSenderKey(cardSummary.fromEmail)
+                    Settings.allowImagesFrom(senderKey)
+                    allowedSenders = allowedSenders + senderKey
+                }
+                shownOnce = shownOnce + cardSummary.id
+            },
+            bodyError = card.bodyError,
+            images = card.images,
+            imageBytes = card.imageBytes,
+            actions = actionsFor(cardSummary),
+            summarise = if (isPrimary) summariseState else null,
+            attachments = card.attachments,
+            savedTo = card.saved,
+            source = card.source,
+            onSource = { toggleSource(cardSummary) },
+            paper = paper,
+            messageMode = messageMode,
+            messageScale = messageScale,
+            // Per message rather than a setting: it is a look at this one, and having
+            // to turn it back off in settings would make it a mode instead.
+            onPaper = { paper = it },
+            onSaveSource = {
+                val text = card.source
+                if (text != null) {
+                    scope.launch {
+                        val path = io {
+                            val at = downloadsFolder().resolve(emlName(cardSummary.subject, cardSummary.receivedAt))
+                            java.nio.file.Files.writeString(at, text)
+                            at
+                        }
+                        if (path != null) updateCard(cardSummary.id) { copy(saved = path.toString()) }
+                    }
+                }
+            },
+            onTag = { keyword, on ->
+                if (key != null) {
+                    // Same bargain as the star: it moves now, and moves back if the
+                    // server says no. Nobody waits on a round trip to see a label.
+                    fun put(value: Boolean) {
+                        val keywords = if (value) cardSummary.keywords + keyword else cardSummary.keywords - keyword
+                        emails = emails.map { if (it.id == cardSummary.id) it.copy(keywords = keywords) else it }
+                        thread = thread.map { if (it.id == cardSummary.id) it.copy(keywords = keywords) else it }
+                        if (selected?.id == cardSummary.id) selected = selected?.copy(keywords = keywords)
+                    }
+                    put(on)
+                    scope.launch {
+                        if (io { session(key).jmap.setKeyword(listOf(cardSummary.id), keyword, on) } == null) put(!on)
+                    }
+                }
+            },
+            onTyping = { typing = it },
+            onDownload = { attachment ->
+                if (key != null) {
+                    scope.launch {
+                        val landed = io {
+                            val folder = downloadsFolder()
+                            session(key).jmap.download(attachment, folder)
+                        }
+                        if (landed != null) updateCard(cardSummary.id) { copy(saved = landed.toString()) }
+                    }
+                }
+            },
+            showSubject = showSubject,
+            onHeaderClick = onHeaderClick,
+            externalScroll = externalScroll,
+        )
     }
 
     /** Opens [role] on the account whose folder is showing, or the first that has one. */
@@ -2475,9 +2839,11 @@ private fun Reader(
         val from = ours.firstOrNull().orEmpty()
         when (id) {
             "compose" -> { sendError = null; composing = Draft(from = from) }
-            "reply" -> selected?.let { composing = replyTo(it, body, writingIdentity(body)) }
-            "reply-all" -> selected?.let { composing = replyTo(it, body, writingIdentity(body), true, ours) }
-            "forward" -> selected?.let { composing = forwardOf(it, body, writingIdentity(body)) }
+            "reply" -> selected?.let { composing = replyTo(it, cardFor(it).body, writingIdentity(cardFor(it).body)) }
+            "reply-all" -> selected?.let {
+                composing = replyTo(it, cardFor(it).body, writingIdentity(cardFor(it).body), true, ours)
+            }
+            "forward" -> selected?.let { composing = forwardOf(it, cardFor(it).body, writingIdentity(cardFor(it).body)) }
             "archive" -> actions.archive?.invoke()
             "trash" -> actions.trash?.invoke()
             // One command, and it does whichever of the two is the one on offer, so the
@@ -2492,7 +2858,7 @@ private fun Reader(
                     scope.launch { io { session(key).jmap.setKeyword(listOf(message.id), "\$seen", true) } }
                 }
             }
-            "source" -> toggleSource()
+            "source" -> selected?.let { toggleSource(it) }
             "search" -> searchField.requestFocus()
             "refresh" -> scope.launch { refreshNow() }
             "next" -> emails.indexOfFirst { it.id == selected?.id }
@@ -2509,7 +2875,6 @@ private fun Reader(
             "unread-only" -> {
                 unreadOnly = !unreadOnly
                 selected = null
-                body = null
                 scope.launch { reload() }
             }
             "new-folder" -> {
@@ -2576,16 +2941,17 @@ private fun Reader(
             Key.C -> { sendError = null; composing = Draft(from = identities[writingAccount()].orEmpty().firstOrNull()?.email.orEmpty()); true }
             Key.U -> { run("unread-only"); true }
             Key.R -> {
-                selected?.let { m -> composing = replyTo(m, body, writingIdentity(body)) }
+                selected?.let { m -> composing = replyTo(m, cardFor(m).body, writingIdentity(cardFor(m).body)) }
                 true
             }
             Key.F -> {
-                selected?.let { m -> composing = forwardOf(m, body, writingIdentity(body)) }
+                selected?.let { m -> composing = forwardOf(m, cardFor(m).body, writingIdentity(cardFor(m).body)) }
                 true
             }
             Key.A -> {
                 selected?.let { m ->
                     val ours = identities[writingAccount()].orEmpty().map { it.email }.toSet()
+                    val body = cardFor(m).body
                     if (hasOtherRecipients(m, body, ours)) {
                         composing = replyTo(m, body, writingIdentity(body), true, ours)
                     }
@@ -2889,7 +3255,6 @@ private fun Reader(
                             contactsOpen = false
                             showingResults = query.isNotBlank()
                             selected = null
-                            body = null
                             scope.launch { reload() }
                         },
                     )
@@ -3158,7 +3523,6 @@ private fun Reader(
                 onUnreadOnly = {
                     unreadOnly = it
                     selected = null
-                    body = null
                     scope.launch { reload() }
                 },
                 loadingMore = loadingMore,
@@ -3211,7 +3575,6 @@ private fun Reader(
                                     emails = emails.filterNot { it.id in moved }
                                     picked = emptySet()
                                     selected = null
-                                    body = null
                                     undo = Undoable(done.map { it.second }, what)
                                 }
                             }
@@ -3237,191 +3600,85 @@ private fun Reader(
                 )
                 return@Row
             }
-            Message(
-                summary = selected,
-                body = body,
-                onReply = { all ->
-                    val message = selected ?: return@Message
-                    val ours = identities[writingAccount()].orEmpty().map { it.email }.toSet()
-                    sendError = null
-                    composing = replyTo(message, body, writingIdentity(body), all, ours)
-                },
-                replyAll = selected?.let {
-                    hasOtherRecipients(it, body, identities[writingAccount()].orEmpty().map { id -> id.email }.toSet())
-                } ?: false,
-                onForward = {
-                    val message = selected ?: return@Message
-                    val from = identities[writingAccount()].orEmpty().firstOrNull()?.email.orEmpty()
-                    sendError = null
-                    composing = forwardOf(message, body, writingIdentity(body))
-                },
-                onLink = { confirm = it },
-                invitation = invitation,
-                /*
-                 * Built from the address book, which already holds everyone corresponded
-                 * with. A lookalike of a household name is caught by the built-in list; a
-                 * lookalike of the client you invoice every month is only catchable from
-                 * what this particular person's mail actually looks like.
-                 */
-                knownDomains = remember(books, sessions) {
-                    books.values.flatten().map { domainOf(it.email) }.filter { it.isNotBlank() }.toSet()
-                },
-                answering = answering,
-                onAnswer = ::answerInvitation,
-                me = writingIdentity(body),
-                showRemote = showRemote,
-                unsubscribed = unsubscribed,
-                inContacts = selected?.fromEmail?.let { from ->
-                    contacts.any { it.first.emails.any { e -> e.equals(from, ignoreCase = true) } }
-                } ?: false,
-                onAddContact = if (sessions.any { it.jmap.hasContacts() }) {
-                    { message ->
-                        val key = writingAccount()
-                        if (key != null) {
-                            scope.launch {
-                                contactsError = null
-                                try {
-                                    withContext(Dispatchers.IO) {
-                                        val jmap = session(key).jmap
-                                        val known = contactBooks.ifEmpty { jmap.addressBooks() }
-                                        val book = known.firstOrNull { it.isDefault } ?: known.firstOrNull()
-                                        jmap.saveContact(
-                                            Contact(
-                                                name = message.from.trim(),
-                                                emails = listOf(message.fromEmail),
-                                                bookIds = listOfNotNull(book?.id),
-                                            ),
-                                        )
-                                        contacts = jmap.contacts()
+            val message = selected
+            when {
+                message == null -> Message(summary = null, body = null, onLink = { confirm = it })
+                // Rule 9: one message must look like a message, not a stack of one. No
+                // count line, no collapsed rows, no header of its own above it.
+                thread.size <= 1 -> renderCard(
+                    message,
+                    showSubject = true,
+                    onHeaderClick = null,
+                    externalScroll = null,
+                )
+                else -> {
+                    val stackScroll = rememberScrollState()
+                    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
+                        ThemeArt(Modifier.align(Alignment.BottomEnd))
+                        Column(
+                            Modifier.fillMaxSize().verticalScroll(stackScroll)
+                                .padding(horizontal = 20.dp, vertical = 20.dp),
+                        ) {
+                            // The plain header: the subject once, the count, and the muted
+                            // marker, none of which belong to any one card below it.
+                            Text(message.subject, style = MaterialTheme.typography.titleLarge)
+                            Spacer(Modifier.height(6.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "${thread.size} messages",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.outline,
+                                )
+                                if (conversationMuted) {
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        "Muted",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.outline,
+                                        modifier = Modifier.clip(MaterialTheme.shapes.small)
+                                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                                            .padding(horizontal = 7.dp, vertical = 2.dp),
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.height(14.dp))
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            Spacer(Modifier.height(6.dp))
+
+                            thread.forEachIndexed { index, m ->
+                                if (m.id in expanded) {
+                                    // Brought into view once, the moment this is the card
+                                    // the conversation was opened on. Every later expand or
+                                    // collapse leaves the scroll exactly where it was: see
+                                    // rule 1, this is never a swap.
+                                    val requester = remember(m.id) { BringIntoViewRequester() }
+                                    LaunchedEffect(pendingScrollTo) {
+                                        if (pendingScrollTo == m.id) {
+                                            requester.bringIntoView()
+                                            pendingScrollTo = null
+                                        }
                                     }
-                                } catch (e: Exception) {
-                                    contactsError = whyFailed(e)
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    null
-                },
-                onReceipt = { to ->
-                    val message = selected ?: return@Message
-                    sendError = null
-                    composing = Draft(
-                        from = identities[writingAccount()].orEmpty().firstOrNull()?.email.orEmpty(),
-                        to = to,
-                        subject = receiptSubject(message.subject),
-                        body = receiptBody(
-                            message.subject,
-                            java.time.ZonedDateTime.now()
-                                .format(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME),
-                            identities[writingAccount()].orEmpty().firstOrNull()?.email.orEmpty(),
-                        ),
-                        inReplyTo = body?.messageId?.firstOrNull(),
-                        references = body?.references.orEmpty() + body?.messageId.orEmpty(),
-                        replying = true,
-                    )
-                },
-                onUnsubscribe = { off ->
-                    when {
-                        // One-click is the only route that finishes without leaving Rampart,
-                        // and it is the only one the sender promised would work that way.
-                        off.oneClick && off.url != null -> {
-                            unsubscribed = "Asking to be taken off the list."
-                            scope.launch {
-                                val done = withContext(Dispatchers.IO) { oneClickPost(off.url) }
-                                unsubscribed = if (done) {
-                                    "Asked to be taken off the list. It can take a few days."
+                                    Box(Modifier.bringIntoViewRequester(requester)) {
+                                        renderCard(
+                                            m,
+                                            showSubject = false,
+                                            onHeaderClick = { toggleExpand(m.id) },
+                                            externalScroll = stackScroll,
+                                        )
+                                    }
                                 } else {
-                                    // Not an error worth a dialog: the link is still there.
-                                    "That did not go through. Try the link instead."
+                                    ThreadRow(m) { toggleExpand(m.id) }
+                                }
+                                if (index < thread.lastIndex) {
+                                    Spacer(Modifier.height(6.dp))
+                                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                    Spacer(Modifier.height(6.dp))
                                 }
                             }
                         }
-                        // A page to open is a page somebody should see before it acts, so it
-                        // goes through the same confirmation as any other link in a message.
-                        off.url != null -> confirm = off.url
-                        off.mailto != null -> {
-                            sendError = null
-                            composing = Draft(
-                                from = identities[writingAccount()].orEmpty().firstOrNull()?.email.orEmpty(),
-                                to = off.mailto,
-                                subject = off.mailtoSubject ?: "unsubscribe",
-                            )
-                        }
                     }
-                },
-                onShowImages = { always ->
-                    val message = selected
-                    if (message != null) {
-                        if (always) {
-                            val key = imageSenderKey(message.fromEmail)
-                            Settings.allowImagesFrom(key)
-                            allowedSenders = allowedSenders + key
-                        }
-                        showRemote = true
-                    }
-                },
-                bodyError = bodyError,
-                images = inlineImages,
-                imageBytes = inlineBytes,
-                thread = thread,
-                onPick = { selected = it },
-                actions = actions,
-                summarise = summariseState,
-                attachments = attachments,
-                savedTo = saved,
-                source = source,
-                onSource = ::toggleSource,
-                paper = paper,
-                messageMode = messageMode,
-                messageScale = messageScale,
-                // Per message rather than a setting: it is a look at this one, and having
-                // to turn it back off in settings would make it a mode instead.
-                onPaper = { paper = it },
-                onSaveSource = {
-                    val message = selected
-                    val text = source
-                    if (message != null && text != null) {
-                        scope.launch {
-                            saved = io {
-                                val path = downloadsFolder().resolve(emlName(message.subject, message.receivedAt))
-                                java.nio.file.Files.writeString(path, text)
-                                path
-                            }?.toString()
-                        }
-                    }
-                },
-                onTag = { keyword, on ->
-                    val message = selected
-                    val key = accountOf(message)
-                    if (message != null && key != null) {
-                        // Same bargain as the star: it moves now, and moves back if the
-                        // server says no. Nobody waits on a round trip to see a label.
-                        fun put(value: Boolean) {
-                            val keywords = if (value) message.keywords + keyword else message.keywords - keyword
-                            emails = emails.map { if (it.id == message.id) it.copy(keywords = keywords) else it }
-                            selected = selected?.copy(keywords = keywords)
-                        }
-                        put(on)
-                        scope.launch {
-                            if (io { session(key).jmap.setKeyword(listOf(message.id), keyword, on) } == null) put(!on)
-                        }
-                    }
-                },
-                onTyping = { typing = it },
-                onDownload = { attachment ->
-                    val key = accountOf(selected)
-                    if (key != null) {
-                        scope.launch {
-                            val landed = io {
-                                val folder = downloadsFolder()
-                                session(key).jmap.download(attachment, folder)
-                            }
-                            saved = landed?.toString()
-                        }
-                    }
-                },
-            )
+                }
+            }
             /*
              * Beside the mail rather than instead of it.
              *
@@ -5034,15 +5291,33 @@ internal fun Message(
     onTag: (keyword: String, on: Boolean) -> Unit = { _, _ -> },
     /** True while a field in here has focus, so a bare letter is not read as a shortcut. */
     onTyping: (Boolean) -> Unit = {},
-    /** The whole conversation, oldest first, including [summary]. Empty when there is none. */
-    thread: List<Summary> = emptyList(),
-    onPick: (Summary) -> Unit = {},
     onForward: () -> Unit = {},
     actions: MessageActions = MessageActions(),
     summarise: SummariseActions? = null,
     attachments: List<Attachment> = emptyList(),
     savedTo: String? = null,
     onDownload: (Attachment) -> Unit = {},
+    /**
+     * Drawn above the avatar row. Off inside a thread stack, where the subject already
+     * heads the whole conversation once and would otherwise repeat on every card.
+     */
+    showSubject: Boolean = true,
+    /**
+     * Collapses this card, when it is one of several. Null for a message on its own, which
+     * has nothing to collapse to: see rule 9, a lone message must not grow a click that does
+     * nothing useful.
+     */
+    onHeaderClick: (() -> Unit)? = null,
+    /**
+     * The scroll this card shares with the rest of its stack, when it has one.
+     *
+     * Null draws this card on its own scroll, filling the pane, exactly as a single message
+     * always has. Given one, this card contributes its height to that scroll instead of
+     * starting a scroll of its own: several cards each scrolling independently would mean a
+     * reader hunting for which card's scrollbar is under the pointer, and the whole point of
+     * the stack is that it reads as one page.
+     */
+    externalScroll: ScrollState? = null,
     onLink: (String) -> Unit,
 ) {
     val linkColor = MaterialTheme.colorScheme.primary
@@ -5153,9 +5428,16 @@ internal fun Message(
         }.toMap()
     }
 
-    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
-        ThemeArt(Modifier.align(Alignment.BottomEnd))
-        Column(Modifier.fillMaxSize()) {
+    // The background, the watermark and filling the whole pane are the reading pane's own,
+    // drawn once around the pane. A card sharing [externalScroll] is one of several inside
+    // that pane rather than the pane itself, so it draws only its own content and lets its
+    // width, not the window's height, decide how tall it is.
+    val ownsPane = externalScroll == null
+    Box(
+        if (ownsPane) Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface) else Modifier.fillMaxWidth(),
+    ) {
+        if (ownsPane) ThemeArt(Modifier.align(Alignment.BottomEnd))
+        Column(if (ownsPane) Modifier.fillMaxSize() else Modifier.fillMaxWidth()) {
             if (summary == null) {
                 Box(Modifier.fillMaxSize()) {
                     Text(
@@ -5302,10 +5584,65 @@ internal fun Message(
                                 onClick = { more = false; onUnsubscribe(off) },
                             )
                         }
+                        /*
+                         * The whole conversation, as one act, worded so it cannot be mistaken
+                         * for the row above it acting on one message. This used to be its own
+                         * "Whole conversation" menu, which named a view of the thread and was
+                         * actually four bulk actions; folded in here rather than kept apart,
+                         * because it is a menu of actions either way.
+                         */
+                        actions.conversation?.let { conv ->
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (conv.unread > 0) "Mark whole conversation read"
+                                        else "Mark whole conversation unread",
+                                    )
+                                },
+                                onClick = { more = false; conv.onRead(conv.unread > 0) },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Archive whole conversation") },
+                                onClick = { more = false; conv.onArchive() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Delete whole conversation") },
+                                onClick = { more = false; conv.onTrash() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (conv.muted) "Stop muting it" else "Mute this conversation") },
+                                onClick = { more = false; conv.onMute(!conv.muted) },
+                            )
+                            if (conv.muted) {
+                                // Said plainly, because it is the one promise here the server
+                                // cannot keep on its own and somebody would otherwise read a
+                                // silent hour as the mute not working.
+                                Text(
+                                    "New messages in this conversation are marked read and " +
+                                        "archived while Rampart is running.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.outline,
+                                    modifier = Modifier.widthIn(max = 260.dp)
+                                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                                )
+                            }
+                        }
                     }
                 }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+            // Hoisted above the source branch as well as the body below it, because both
+            // want the one scroll: a card on its own scrolls itself, and a card in a stack
+            // shares [externalScroll] with the header and every other card, so switching a
+            // card to its source and back does not also reset how far down it was.
+            val bodyScroll = externalScroll ?: rememberScrollState()
+            val bodyScope = rememberCoroutineScope()
+            // Filling the pane and scrolling itself is only right for a card on its own.
+            // One inside a stack sizes to its own content and lets the stack's shared
+            // Column, already scrolling, carry it.
+            val pageModifier = if (ownsPane) Modifier.fillMaxSize().verticalScroll(bodyScroll) else Modifier.fillMaxWidth()
 
             if (source != null) {
                 Row(
@@ -5322,10 +5659,7 @@ internal fun Message(
                 }
                 val mono = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
                 SelectionContainer {
-                    Column(
-                        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-                            .padding(horizontal = 20.dp, vertical = 8.dp),
-                    ) {
+                    Column(pageModifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
                         headersOf(source).forEach { (name, value) ->
                             Row(Modifier.padding(bottom = 2.dp)) {
                                 Text(
@@ -5347,14 +5681,7 @@ internal fun Message(
                 return@Column
             }
 
-            // Hoisted, because the engine below swallows its own wheel events and has to
-            // hand them back to this: see WebBody's onScroll.
-            val bodyScroll = rememberScrollState()
-            val bodyScope = rememberCoroutineScope()
-            Column(
-                Modifier.fillMaxSize().verticalScroll(bodyScroll)
-                    .padding(horizontal = 20.dp, vertical = 26.dp),
-            ) {
+            Column(pageModifier.padding(horizontal = 20.dp, vertical = 26.dp)) {
                 // The whole window, not a column down the middle of it. A capped measure is
                 // easier to read a paragraph in, and it was capped at 660 for that reason,
                 // but it wastes most of a wide window and a designed message brings its own
@@ -5363,8 +5690,12 @@ internal fun Message(
                 Column(Modifier.fillMaxWidth()) {
                     // The subject heads the conversation rather than the message: in a
                     // thread every message carries the same one with more Re: in front.
-                    Text(summary.subject, style = MaterialTheme.typography.titleLarge)
-                    Spacer(Modifier.height(14.dp))
+                    // Off when a stack-level header is already showing it once, above every
+                    // card, rather than here on each of them in turn.
+                    if (showSubject) {
+                        Text(summary.subject, style = MaterialTheme.typography.titleLarge)
+                        Spacer(Modifier.height(14.dp))
+                    }
 
                     val proof = remember(body) {
                         authenticityOf(body?.authenticationResults?.joinToString("\n"), body?.spamStatus)
@@ -5432,19 +5763,17 @@ internal fun Message(
                         )
                     }
 
-                    // Above the conversation bar rather than below it: a paragraph nobody
-                    // wrote about a thread outranks a menu for acting on it.
+                    // Only on the card the conversation opened on: this is a paragraph
+                    // about the whole thread, not about any one message in it, and belongs
+                    // above whichever card is telling that story rather than on every card.
                     summarise?.let { SummaryCard(it) }
-                    actions.conversation?.let { ConversationBar(it) }
 
-                    // The rest of the conversation sits around this message in date order,
-                    // one line each. Reading the thread is then scrolling, not going back
-                    // to the list and finding the next one by hand.
-                    val (earlier, later) = conversationAround(thread, summary)
-                    earlier.forEach { ThreadRow(it) { onPick(it) } }
-                    if (earlier.isNotEmpty()) Spacer(Modifier.height(12.dp))
-
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .let { row -> onHeaderClick?.let { row.clickable(onClick = it) } ?: row }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Avatar(
                             summary.from,
                             summary.fromEmail.ifBlank { summary.from },
@@ -5870,10 +6199,6 @@ internal fun Message(
                             )
                         }
                     }
-                    if (later.isNotEmpty()) {
-                        Spacer(Modifier.height(20.dp))
-                        later.forEach { ThreadRow(it) { onPick(it) } }
-                    }
                     Spacer(Modifier.height(40.dp))
                 }
                 }
@@ -5922,78 +6247,6 @@ internal fun String.asFullLocalTime(): String = runCatching {
         .withZone(java.time.ZoneId.systemDefault())
         .format(Instant.parse(this))
 }.getOrDefault(this)
-
-/**
- * One message in a conversation that is not the one being read: who, when, and the first
- * line of it. Clicking it opens that message where this one is.
- */
-/**
- * One line above a conversation: how big it is, and one menu for acting on all of it.
- *
- * A menu rather than four more buttons. The row of message buttons already runs to nine
- * and off the edge of a narrow pane, and these are not the same kind of act: pressing
- * Archive up there means this message, and pressing it in here means the twelve.
- */
-@Composable
-private fun ConversationBar(actions: ConversationActions) {
-    var open by remember { mutableStateOf(false) }
-    Row(
-        Modifier.fillMaxWidth().padding(bottom = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            "${actions.count} messages" +
-                if (actions.unread > 0) ", ${actions.unread} unread" else "",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.outline,
-        )
-        if (actions.muted) {
-            Spacer(Modifier.width(8.dp))
-            Text(
-                "Muted",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
-                modifier = Modifier.clip(MaterialTheme.shapes.small)
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .padding(horizontal = 7.dp, vertical = 2.dp),
-            )
-        }
-        Spacer(Modifier.weight(1f))
-        Box {
-            TextButton(onClick = { open = true }) { Text("Whole conversation") }
-            DropdownMenu(open, onDismissRequest = { open = false }) {
-                DropdownMenuItem(
-                    text = { Text(if (actions.unread > 0) "Mark all read" else "Mark all unread") },
-                    onClick = { open = false; actions.onRead(actions.unread > 0) },
-                )
-                DropdownMenuItem(
-                    text = { Text("Archive all") },
-                    onClick = { open = false; actions.onArchive() },
-                )
-                DropdownMenuItem(
-                    text = { Text("Delete all") },
-                    onClick = { open = false; actions.onTrash() },
-                )
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                DropdownMenuItem(
-                    text = { Text(if (actions.muted) "Stop muting it" else "Mute it") },
-                    onClick = { open = false; actions.onMute(!actions.muted) },
-                )
-            }
-        }
-    }
-    if (actions.muted) {
-        // Said plainly, because it is the one promise here the server cannot keep on its
-        // own and somebody would otherwise read a silent hour as the mute not working.
-        Text(
-            "New messages in this conversation are marked read and archived while Rampart " +
-                "is running.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.outline,
-            modifier = Modifier.padding(bottom = 10.dp),
-        )
-    }
-}
 
 /**
  * What the assistant said about this thread, or the button that would ask it to.
@@ -6064,6 +6317,15 @@ private fun SummaryCard(summarise: SummariseActions) {
     Spacer(Modifier.height(14.dp))
 }
 
+/**
+ * One collapsed message in the thread stack: who, when, and a preview where there is one.
+ * Clicking it opens the card in place, exactly where this row was.
+ *
+ * [Summary.preview] is empty on IMAP, which has no equivalent and no cheap way to build
+ * one: getting it would mean fetching a body for every row, which is the download the list
+ * exists to avoid. So the preview is left out rather than drawn as a gap, and the row is
+ * just the name and the date, which is still a row worth reading.
+ */
 @Composable
 private fun ThreadRow(message: Summary, onClick: () -> Unit) {
     Row(
@@ -6087,15 +6349,19 @@ private fun ThreadRow(message: Summary, onClick: () -> Unit) {
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        Spacer(Modifier.width(10.dp))
-        Text(
-            message.preview,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.outline,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
+        if (message.preview.isNotBlank()) {
+            Spacer(Modifier.width(10.dp))
+            Text(
+                message.preview,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        } else {
+            Spacer(Modifier.weight(1f))
+        }
         Spacer(Modifier.width(10.dp))
         Text(
             message.receivedAt.asLocalTime(),
@@ -6103,19 +6369,6 @@ private fun ThreadRow(message: Summary, onClick: () -> Unit) {
             color = MaterialTheme.colorScheme.outline,
         )
     }
-}
-
-/**
- * A conversation split into what came before the message being read and what came after.
- *
- * A thread that does not contain that message is stale, from the one that was open a
- * moment ago, and is dropped: putting somebody else's conversation around this message
- * would be worse than showing no conversation at all.
- */
-internal fun conversationAround(thread: List<Summary>, open: Summary): Pair<List<Summary>, List<Summary>> {
-    val at = thread.indexOfFirst { it.id == open.id }
-    if (at < 0) return emptyList<Summary>() to emptyList()
-    return thread.take(at) to thread.drop(at + 1)
 }
 
 /**

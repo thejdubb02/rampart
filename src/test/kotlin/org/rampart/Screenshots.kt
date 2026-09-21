@@ -418,13 +418,12 @@ class Screenshots {
         shoot("settings-reading", 1200, 900) { SettingsScreen("reading") }
         shoot("settings-filters", 1200, 900) { SettingsScreen("filters") }
         shoot("settings-assistant", 1200, 900) { SettingsScreen("assistant") }
-        // A message that is part of a conversation, so the line above it and the menu that
-        // acts on all of it are both on screen.
+        // A message that is part of a conversation, so its overflow menu carries the extra
+        // items that act on all of it rather than just this one.
         shoot("conversation", 900, 700, dark) {
             Message(
                 summary = MESSAGES[1],
                 body = Body(null, "That works for us. Tuesday morning is fine."),
-                thread = listOf(MESSAGES[0], MESSAGES[1], MESSAGES[2]),
                 actions = MessageActions(
                     conversation = ConversationActions(
                         count = 3,
@@ -551,11 +550,6 @@ class Screenshots {
                     authenticationResults = listOf("mx.example.org; spf=fail; dkim=none; dmarc=fail"),
                 ),
                 replyAll = true,
-                thread = listOf(
-                    MESSAGES[4].copy(threadId = "t1"),
-                    MESSAGES[1],
-                    MESSAGES[3].copy(threadId = "t1"),
-                ),
                 actions = MessageActions(archive = {}, junk = {}, trash = {}, star = {}),
                 attachments = listOf(
                     Attachment("b1", "Revised quote September.pdf", "application/pdf", 214_512),

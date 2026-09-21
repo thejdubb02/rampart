@@ -89,6 +89,18 @@ internal class Imap private constructor(
                 put("mail.imap.port", port.toString())
                 // A certificate that does not match is the one thing this must not shrug at.
                 put("mail.imap.ssl.checkserveridentity", "true")
+                /*
+                 * **Never let reading a message mark it read. Rampart says when, not IMAP.**
+                 *
+                 * Without this, Jakarta Mail fetches a body with BODY[] rather than
+                 * BODY.PEEK[], and a server sets \Seen on that the moment the folder is
+                 * open for writing. A folder is now held open and reused between calls, and
+                 * one opened for writing to star or move something serves the next read too,
+                 * so the read ahead would have quietly marked unread mail read in the
+                 * background. The seen flag is set deliberately, by setKeyword, and nowhere
+                 * else.
+                 */
+                put("mail.imap.peek", "true")
                 put("mail.imap.connectiontimeout", "15000")
                 put("mail.imap.timeout", "30000")
                 // Asked for on connect rather than per folder. Without it every folder
@@ -638,6 +650,23 @@ internal class Imap private constructor(
         // not re-select the folder for the sake of the weaker mode.
         val reusable = held != null && held.fullName == mailboxId && held.isOpen &&
             (held.mode == mode || mode == Folder.READ_ONLY)
+        /*
+         * A call from inside another call, for a different folder, gets its own.
+         *
+         * The lock is reentrant, so this would otherwise walk straight through and close the
+         * folder the outer call is still holding a message from, which fails later and
+         * somewhere else. Nothing does this today. It is guarded rather than documented
+         * because the failure is silent and the guard is four lines.
+         */
+        if (!reusable && gate.holdCount > 1) {
+            val borrowed = store.getFolder(mailboxId) as IMAPFolder
+            borrowed.open(mode)
+            try {
+                return@withLock block(borrowed)
+            } finally {
+                runCatching { borrowed.close(false) }
+            }
+        }
         val folder = if (reusable) {
             held!!
         } else {

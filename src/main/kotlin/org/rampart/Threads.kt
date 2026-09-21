@@ -38,6 +38,26 @@ internal fun conversationIds(thread: List<Summary>, mine: Set<String>): List<Str
 }
 
 /**
+ * Which messages in a conversation start with their body already open, the moment it is.
+ *
+ * The one that was clicked, because that is what opening a message has to mean, and
+ * anything still unread beside it, because that is the mail worth an immediate look.
+ * Everything else stays a one-line row until it is asked for.
+ *
+ * Falls back to the newest message when neither applies, which only happens when [opened]
+ * belongs to a conversation [thread] does not actually contain: the reading pane clears its
+ * held thread the moment a click lands on a different conversation, for exactly this
+ * reason, so a thread that disagrees about the message it was opened on is a stale one
+ * rather than a real gap, and showing nothing at all would be the wrong answer to it.
+ */
+internal fun initialExpanded(thread: List<Summary>, opened: Summary): Set<String> {
+    val inThread = thread.any { it.id == opened.id }
+    val unread = thread.filterNot { it.seen }.map { it.id }.toSet()
+    val expanded = if (inThread || thread.isEmpty()) unread + opened.id else unread
+    return expanded.ifEmpty { setOfNotNull(thread.lastOrNull()?.id) }
+}
+
+/**
  * Conversations told to stop asking for attention.
  *
  * A mailing list thread, or the one where fourteen people reply-all to say thanks. Mute
