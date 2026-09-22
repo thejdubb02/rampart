@@ -46,6 +46,12 @@ dependencies {
      * rather than an error anybody sees.
      */
     implementation("org.eclipse.angus:angus-mail:2.0.3")
+    // Reads TNEF (winmail.dat), Outlook's own attachment wrapper, so what a sender's
+    // Outlook zipped up comes out as the files it actually is rather than one file
+    // nothing can open. Apache POI's own module for exactly this, not hand rolled: TNEF
+    // is a binary format with its own attribute IDs and nobody benefits from a second,
+    // worse parser of it.
+    implementation("org.apache.poi:poi-scratchpad:5.4.1")
     // SQLite with FTS5 for the local store, and with encryption, which the stock xerial
     // driver does not have. This is that driver plus SQLCipher, so encrypting the file is
     // a pragma on the connection rather than a project of its own.
