@@ -1282,6 +1282,10 @@ private fun Reader(
     /** A message/rfc822 attachment opened for reading. Not a message in the mailbox. */
     var attached by remember { mutableStateOf<AttachedMessage?>(null) }
     var attachedSaved by remember { mutableStateOf<String?>(null) }
+    /** A winmail.dat opened into the files it actually contained. */
+    var tnef by remember { mutableStateOf<TnefContents?>(null) }
+    var tnefName by remember { mutableStateOf("") }
+    var tnefSaved by remember { mutableStateOf<String?>(null) }
     var showShortcuts by remember { mutableStateOf(false) }
     var showPalette by remember { mutableStateOf(false) }
 
@@ -3373,6 +3377,37 @@ private fun Reader(
     }
 
     /**
+     * A winmail.dat, fetched the same way Save fetches a file, then read as the files
+     * Outlook packed into it. When it cannot be read, the wrapper is saved, which is
+     * what Save already did, and a sentence says so.
+     */
+    fun openTnef(key: String, messageId: String, attachment: Attachment) {
+        scope.launch {
+            val fetched = io {
+                val dir = Files.createTempDirectory("rampart-tnef")
+                try {
+                    val path = session(key).jmap.download(attachment, dir)
+                    val bytes = Files.readAllBytes(path)
+                    val contents = readTnef(bytes)
+                    if (contents != null) contents to null
+                    else null to Files.write(uniqueIn(downloadsFolder(), attachment.name), bytes)
+                } finally {
+                    runCatching { dir.toFile().deleteRecursively() }
+                }
+            } ?: return@launch
+            val (contents, saved) = fetched
+            if (contents != null) {
+                tnef = contents
+                tnefName = attachment.name
+                tnefSaved = null
+            } else if (saved != null) {
+                updateCard(messageId) { copy(saved = saved.toString()) }
+                error = TNEF_UNREADABLE
+            }
+        }
+    }
+
+    /**
      * One message's card: its own header, avatar, body and action row, exactly what the
      * reading pane has always drawn for whichever message was open, called once per
      * expanded card rather than once for the whole pane.
@@ -3568,6 +3603,9 @@ private fun Reader(
             },
             onOpenMessage = { attachment ->
                 if (key != null) openAttached(key, attachment)
+            },
+            onOpenTnef = { attachment ->
+                if (key != null) openTnef(key, cardSummary.id, attachment)
             },
             onLoadImage = { attachment ->
                 if (key == null) null
@@ -4753,8 +4791,138 @@ private fun Reader(
                             }
                         }
                     },
+                    onOpenTnef = { part ->
+                        val bytes = mail.partBytes[part.blobId]
+                        if (bytes == null) {
+                            error = "That file is not in the attached message."
+                        } else {
+                            scope.launch {
+                                val fetched = io {
+                                    val contents = readTnef(bytes)
+                                    if (contents != null) contents to null
+                                    else null to Files.write(uniqueIn(downloadsFolder(), part.name), bytes)
+                                } ?: return@launch
+                                if (attached !== mail) return@launch
+                                val (contents, saved) = fetched
+                                if (contents != null) {
+                                    tnef = contents
+                                    tnefName = part.name
+                                    tnefSaved = null
+                                } else if (saved != null) {
+                                    attachedSaved = saved.toString()
+                                    error = TNEF_UNREADABLE
+                                }
+                            }
+                        }
+                    },
                     onLink = { confirm = it },
                 )
+            }
+        }
+    }
+
+    tnef?.let { contents ->
+        TnefOverlay(
+            name = tnefName,
+            contents = contents,
+            savedTo = tnefSaved,
+            onSave = { fileName, bytes ->
+                val open = tnef
+                scope.launch {
+                    val path = io { Files.write(uniqueIn(downloadsFolder(), fileName), bytes) }
+                    if (path != null && tnef === open) tnefSaved = path.toString()
+                }
+            },
+            onClose = {
+                tnef = null
+                tnefSaved = null
+            },
+        )
+    }
+}
+
+private const val TNEF_UNREADABLE = "This file could not be read, so it was saved as it is."
+
+/**
+ * The files Outlook packed into a winmail.dat.
+ *
+ * The same dimmed overlay as the image preview and the nested message: a click on
+ * the mail behind it must not archive or open something else.
+ */
+@Composable
+private fun TnefOverlay(
+    name: String,
+    contents: TnefContents,
+    savedTo: String?,
+    onSave: (String, ByteArray) -> Unit,
+    onClose: () -> Unit,
+) {
+    Box(
+        Modifier.fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.35f))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {},
+            ),
+    ) {
+        Surface(
+            Modifier.align(Alignment.Center).padding(32.dp).widthIn(min = 340.dp, max = 520.dp),
+            shape = MaterialTheme.shapes.medium,
+            color = MaterialTheme.colorScheme.surface,
+            shadowElevation = 12.dp,
+        ) {
+            Column(Modifier.padding(16.dp).fillMaxWidth()) {
+                Text(
+                    "Inside ${safeFileName(name)}",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(12.dp))
+                if (contents.files.isEmpty()) {
+                    Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                        Text(
+                            contents.body ?: "There was nothing else inside this file.",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                } else {
+                    Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                        contents.files.forEach { (fileName, bytes) ->
+                            Row(
+                                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        safeFileName(fileName),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        humanSize(bytes.size.toLong()),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.outline,
+                                    )
+                                }
+                                TextButton(onClick = { onSave(fileName, bytes) }) { Text("Save") }
+                            }
+                        }
+                    }
+                }
+                if (savedTo != null) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Saved to $savedTo",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onClose) { Text("Close") }
+                }
             }
         }
     }
@@ -6594,6 +6762,11 @@ internal fun Message(
      */
     onOpenMessage: ((Attachment) -> Unit)? = null,
     /**
+     * Opening a winmail.dat into the files it contains. Absent where there is nowhere
+     * to fetch the bytes, and the button then saves like any other file.
+     */
+    onOpenTnef: ((Attachment) -> Unit)? = null,
+    /**
      * Drawn above the avatar row. Off inside a thread stack, where the subject already
      * heads the whole conversation once and would otherwise repeat on every card.
      */
@@ -6733,6 +6906,11 @@ internal fun Message(
         val nested = onOpenMessage?.takeIf { isAttachedMessage(attachment.type) }
         if (nested != null) {
             nested(attachment)
+            return
+        }
+        val packed = onOpenTnef?.takeIf { isTnef(attachment.type, attachment.name) }
+        if (packed != null) {
+            packed(attachment)
             return
         }
         val wantsPreview = Settings.attachmentClickBehavior() == "preview" &&
@@ -7183,7 +7361,7 @@ internal fun Message(
 
                     if (attachmentsBeside && fileList.isNotEmpty()) {
                         Spacer(Modifier.height(10.dp))
-                        FileRows(fileList, ::openFile, images, savedTo, onOpenMessage)
+                        FileRows(fileList, ::openFile, images, savedTo, onOpenMessage, onOpenTnef)
                     }
 
                     /*
@@ -7498,7 +7676,7 @@ internal fun Message(
                         Spacer(Modifier.height(24.dp))
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         Spacer(Modifier.height(14.dp))
-                        FileRows(fileList, ::openFile, images, savedTo, onOpenMessage)
+                        FileRows(fileList, ::openFile, images, savedTo, onOpenMessage, onOpenTnef)
                     }
                     Spacer(Modifier.height(40.dp))
                 }
@@ -7546,8 +7724,9 @@ internal fun Message(
 /**
  * One file on a message: what it is, what it is called, and Save, Open, or Preview.
  *
- * The same rows wherever the list is drawn. Open is a forwarded message. Preview is an
- * image when that is what a click is set to do. Everything else saves.
+ * The same rows wherever the list is drawn. Open is a forwarded message, or a
+ * winmail.dat. Preview is an image when that is what a click is set to do.
+ * Everything else saves.
  */
 @Composable
 private fun FileRows(
@@ -7556,6 +7735,7 @@ private fun FileRows(
     images: Map<String, ImageBitmap>,
     savedTo: String?,
     onOpenMessage: ((Attachment) -> Unit)?,
+    onOpenTnef: ((Attachment) -> Unit)?,
 ) {
     files.forEach { attachment ->
         Row(
@@ -7589,12 +7769,13 @@ private fun FileRows(
                 )
             }
             val openNested = onOpenMessage?.takeIf { isAttachedMessage(attachment.type) }
+            val openPacked = onOpenTnef?.takeIf { isTnef(attachment.type, attachment.name) }
             val previewLabel = Settings.attachmentClickBehavior() == "preview" &&
                 fileGlyph(attachment.type) == FileGlyph.IMAGE
             TextButton(onClick = { onOpen(attachment) }) {
                 Text(
                     when {
-                        openNested != null -> "Open"
+                        openNested != null || openPacked != null -> "Open"
                         previewLabel -> "Preview"
                         else -> "Save"
                     },

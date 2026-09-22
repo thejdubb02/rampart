@@ -176,6 +176,20 @@ class AttachmentsTest {
     }
 
     @Test
+    fun `winmail dat is a tnef wrapper even when the type is wrong`() {
+        assertTrue(isTnef("application/ms-tnef"))
+        assertTrue(isTnef("Application/MS-TNEF; name=\"winmail.dat\""))
+        assertTrue(isTnef("application/octet-stream", "winmail.dat"))
+        assertTrue(isTnef("application/octet-stream", "Mail/WINMAIL.DAT"))
+        assertTrue(isTnef("application/octet-stream; name=\"winmail.dat\""))
+        assertFalse(isTnef("application/octet-stream"))
+        assertFalse(isTnef("application/octet-stream", "notes.txt"))
+        assertFalse(isTnef("application/octet-stream", "notwinmail.dat"))
+        assertFalse(isTnef("text/plain", "winmail.dat.txt"))
+        assertFalse(isTnef("message/rfc822"))
+    }
+
+    @Test
     fun `sizes read in the units a person expects`() {
         assertEquals("412 bytes", humanSize(412))
         assertEquals("0 bytes", humanSize(0))

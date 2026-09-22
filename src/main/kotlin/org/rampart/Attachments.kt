@@ -114,6 +114,40 @@ internal fun fileGlyph(type: String): FileGlyph {
 internal fun isAttachedMessage(type: String): Boolean =
     type.substringBefore(';').trim().equals("message/rfc822", ignoreCase = true)
 
+/**
+ * Outlook packed the real files into one wrapper named winmail.dat.
+ *
+ * The type is the signal that is supposed to be there. The name is the fallback:
+ * a server that is not Exchange often labels the same file as a generic attachment,
+ * and only the filename says what it is.
+ */
+internal fun isTnef(type: String, name: String = ""): Boolean {
+    if (type.substringBefore(';').trim().equals("application/ms-tnef", ignoreCase = true)) return true
+    if (isWinmailName(name)) return true
+    val params = type.substringAfter(';', "")
+    for (piece in params.split(';')) {
+        val key = piece.substringBefore('=', "").trim()
+        if (!key.equals("name", ignoreCase = true) && !key.equals("filename", ignoreCase = true)) continue
+        if (isWinmailName(piece.substringAfter('=', ""))) return true
+    }
+    return false
+}
+
+/**
+ * The last part of a path, matching winmail.dat.
+ *
+ * "notwinmail.dat" ends with the same letters and is a different file, so the
+ * character before the name has to be a separator.
+ */
+private fun isWinmailName(name: String): Boolean {
+    val base = name.replace('\\', '/').substringAfterLast('/').trim().trim('"')
+    val suffix = "winmail.dat"
+    if (base.length < suffix.length) return false
+    if (!base.endsWith(suffix, ignoreCase = true)) return false
+    if (base.length == suffix.length) return true
+    return !base[base.length - suffix.length - 1].isLetterOrDigit()
+}
+
 fun humanSize(bytes: Long): String {
     if (bytes < 1024L) return "$bytes bytes"
     val kb = bytes / 1024.0
