@@ -8,8 +8,9 @@ Three asks, written down on 2026-09-17, in the order they were made:
    filters, tags, folders, identities.
 3. **MCP support**, so that assistant is any MCP client, not one we wrote.
 
-None of this is built. This is the design, written before the code so the decisions are
-arguable while they are still cheap.
+This was the design, written before the code so the decisions were arguable while they
+were still cheap. As of 2026-09-22, the filter builder, the chat panel, thread summaries
+and drafting a reply are built; the loopback API, MCP and triage are not.
 
 ---
 
@@ -52,6 +53,10 @@ builder and in Bulwark, still running with the assistant switched off forever. T
 opposite of an AI inbox that stops working when the subscription lapses. `RuleInWords.kt`,
 and `RuleInWordsTest` is the list of things a model is not allowed to get away with.
 
+A second way in, 2026-09-22: right-click a message for "AI Filter", which opens the same
+box seeded with that message's sender and subject, so the only thing left to say is what
+to do about mail like it. Same builder, same consent, same refusal rules. `FiltersPage.kt`.
+
 **A panel you can talk to, that can act.** Built 2026-09-20. On the right, collapsible,
 beside the mail rather than instead of it: every question worth asking it is about
 something on screen.
@@ -84,6 +89,11 @@ is read-only, it is per-thread, and a bad summary costs a few seconds.
 **Draft a reply.** The model proposes, the composer opens with it, and nothing leaves
 until a person presses Send. The draft carries a mark saying it was drafted by a model,
 in the window, not in the message.
+
+Built 2026-09-22, as a prompt bar in the composer's own toolbar rather than a proposal
+that opens unasked: describe what the message needs to say, and Formalize, Elaborate and
+Shorten refine the draft that comes back, the same shape as Gmail's Help me write.
+`ComposeDraft.kt`.
 
 **Triage.** "Is this a lead, an invoice, a newsletter or a scam." The output is a
 suggested tag, never an automatic file. Sorting mail out of sight on a model's say-so is
