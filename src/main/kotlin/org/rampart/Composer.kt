@@ -570,10 +570,10 @@ internal fun Composer(
                                 }
                             },
                             enabled = !sending && !attaching,
-                        ) { Text(if (attaching) "Attaching" else "Attach") }
+                        ) { Text(if (attaching) "Attaching" else "Attach", maxLines = 1) }
                     }
                     TextButton(onClick = { draft = draft.copy(receipt = !draft.receipt) }) {
-                        Text(if (draft.receipt) "Receipt on" else "Receipt")
+                        Text(if (draft.receipt) "Receipt on" else "Receipt", maxLines = 1)
                     }
                     /*
                      * Always here, and off where no server has been set up, rather than
@@ -596,6 +596,7 @@ internal fun Composer(
                     ) {
                         Text(
                             if (draft.tracked && trackingReady) "Tracking on" else "Track",
+                            maxLines = 1,
                             color = when {
                                 draft.tracked && trackingReady -> MaterialTheme.colorScheme.primary
                                 trackingReady -> MaterialTheme.colorScheme.onSurfaceVariant
@@ -608,13 +609,16 @@ internal fun Composer(
                     // Next to Discard rather than in the corner, because at panel width
                     // a title bar of its own would cost a line of the message.
                     TextButton(onClick = { onFull(!full) }) {
-                        Text(if (full) "Shrink" else "Full screen")
+                        Text(if (full) "Shrink" else "Full screen", maxLines = 1)
                     }
-                    TextButton(onClick = onDiscard, enabled = !sending) { Text("Discard") }
+                    TextButton(onClick = onDiscard, enabled = !sending) { Text("Discard", maxLines = 1) }
+                    // maxLines = 1 on every label in this row: none of them had it, so at a
+                    // dragged-narrow panel width Compose was free to wrap each one, Send
+                    // included, one letter per line instead of just crowding the row.
                     Button(
                         onClick = ::send,
                         enabled = !sending && draft.recipients.isNotEmpty(),
-                    ) { Text(if (sending) "Sending" else "Send") }
+                    ) { Text(if (sending) "Sending" else "Send", maxLines = 1) }
                 }
             }
             /*
