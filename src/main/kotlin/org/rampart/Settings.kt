@@ -272,13 +272,15 @@ object Settings {
     /**
      * Whether only configured identities count as you.
      *
-     * Off by default, which is the catch-all: an address on a domain you already send as
-     * is treated as yours even when that exact address was never set up. On, an address
-     * counts only when it matches an identity. Reply all and the address a reply goes out
-     * as both follow this.
+     * On by default, which is what Rampart has always done: an address counts only when
+     * it matches an identity you actually set up. Off, mail to any address sharing a
+     * domain with one of your identities is treated as yours too, tag or no tag. That is
+     * a real behaviour change for anyone else on that domain, not just an alias of your
+     * own, so it stays opt-in rather than becoming what every existing install wakes up
+     * to. Reply all and the address a reply goes out as both follow this.
      */
     fun exactIdentitiesOnly(): Boolean =
-        read()["exactIdentitiesOnly"]?.jsonPrimitive?.booleanOrNull ?: false
+        read()["exactIdentitiesOnly"]?.jsonPrimitive?.booleanOrNull ?: true
 
     fun setExactIdentitiesOnly(value: Boolean) =
         write { put("exactIdentitiesOnly", JsonPrimitive(value)) }
