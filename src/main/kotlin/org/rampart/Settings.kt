@@ -226,6 +226,33 @@ object Settings {
     fun setIconPack(value: String) = write { put("iconPack", JsonPrimitive(value)) }
 
     /**
+     * Whether Send asks before every message, not only when something looks wrong.
+     *
+     * Off by default. A missing subject or a promised attachment is already asked about,
+     * and a second confirmation on every ordinary message is the one people turn off
+     * after a week. On, those still come first: one question per send, and the plain
+     * "Send this message?" only when nothing else was worth asking.
+     */
+    fun confirmBeforeSend(): Boolean =
+        read()["confirmBeforeSend"]?.jsonPrimitive?.booleanOrNull ?: false
+
+    fun setConfirmBeforeSend(value: Boolean) =
+        write { put("confirmBeforeSend", JsonPrimitive(value)) }
+
+    /**
+     * Whether a bare Reply addresses everyone.
+     *
+     * Off by default, which is what Reply has always done: the sender only, with Reply
+     * all offered beside it when the message has other people on it. On, Reply itself
+     * addresses everyone. The Reply all button is unchanged.
+     */
+    fun defaultReplyAll(): Boolean =
+        read()["defaultReplyAll"]?.jsonPrimitive?.booleanOrNull ?: false
+
+    fun setDefaultReplyAll(value: Boolean) =
+        write { put("defaultReplyAll", JsonPrimitive(value)) }
+
+    /**
      * How long a sent message waits before it actually goes, in seconds.
      *
      * Five by default, which is long enough to notice the wrong recipient and short enough

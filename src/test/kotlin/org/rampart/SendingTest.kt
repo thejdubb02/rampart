@@ -58,4 +58,27 @@ class SendingTest {
     fun `nothing to ask about`() {
         assertNull(sendWarning(subject = "Tuesday", body = "Sounds good.", attachments = 0))
     }
+
+    @Test
+    fun `a plain confirm is asked only when nothing else was`() {
+        assertEquals(
+            "Send this message?",
+            askBeforeSend(subject = "Tuesday", body = "Sounds good.", attachments = 0, confirmEvery = true),
+        )
+        assertNull(
+            askBeforeSend(subject = "Tuesday", body = "Sounds good.", attachments = 0, confirmEvery = false),
+        )
+    }
+
+    @Test
+    fun `a content warning is the only question even when every send is confirmed`() {
+        assertEquals(
+            "This message has no subject. Send it anyway?",
+            askBeforeSend(subject = "", body = "Sounds good.", attachments = 0, confirmEvery = true),
+        )
+        assertEquals(
+            "This message mentions an attachment and does not have one. Send it anyway?",
+            askBeforeSend(subject = "", body = "The quote is attached.", attachments = 0, confirmEvery = true),
+        )
+    }
 }

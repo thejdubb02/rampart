@@ -8,6 +8,7 @@ import androidx.compose.foundation.TooltipArea
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.input.pointer.PointerButton
@@ -1271,6 +1272,9 @@ private fun Reader(
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf<String?>(null) }
+    /** A message/rfc822 attachment opened for reading. Not a message in the mailbox. */
+    var attached by remember { mutableStateOf<AttachedMessage?>(null) }
+    var attachedSaved by remember { mutableStateOf<String?>(null) }
     var showShortcuts by remember { mutableStateOf(false) }
     var showPalette by remember { mutableStateOf(false) }
 
@@ -3105,6 +3109,29 @@ private fun Reader(
     }
 
     /**
+     * A message/rfc822 attachment, fetched the same way Save fetches a file, then read
+     * as a message. The file lands in a temporary folder and is removed: opening it is
+     * not the same as saving it into Downloads.
+     */
+    fun openAttached(key: String, attachment: Attachment) {
+        scope.launch {
+            val parsed = io {
+                val dir = Files.createTempDirectory("rampart-attached")
+                try {
+                    val path = session(key).jmap.download(attachment, dir)
+                    readAttachedMessage(Files.readAllBytes(path))
+                } finally {
+                    runCatching { dir.toFile().deleteRecursively() }
+                }
+            }
+            if (parsed != null) {
+                attachedSaved = null
+                attached = parsed
+            }
+        }
+    }
+
+    /**
      * One message's card: its own header, avatar, body and action row, exactly what the
      * reading pane has always drawn for whichever message was open, called once per
      * expanded card rather than once for the whole pane.
@@ -3297,6 +3324,9 @@ private fun Reader(
                     }
                 }
             },
+            onOpenMessage = { attachment ->
+                if (key != null) openAttached(key, attachment)
+            },
             showSubject = showSubject,
             onHeaderClick = onHeaderClick,
             externalScroll = externalScroll,
@@ -3318,7 +3348,11 @@ private fun Reader(
         val from = ours.firstOrNull().orEmpty()
         when (id) {
             "compose" -> { sendError = null; composing = Draft(from = from) }
-            "reply" -> selected?.let { composing = replyTo(it, cardFor(it).body, writingIdentity(cardFor(it).body)) }
+            "reply" -> selected?.let {
+                val body = cardFor(it).body
+                val all = bareReplyAll(Settings.defaultReplyAll(), hasOtherRecipients(it, body, ours))
+                composing = replyTo(it, body, writingIdentity(body), all, ours)
+            }
             "reply-all" -> selected?.let {
                 composing = replyTo(it, cardFor(it).body, writingIdentity(cardFor(it).body), true, ours)
             }
@@ -3382,6 +3416,15 @@ private fun Reader(
             showShortcuts = false
             return true
         }
+        // A forwarded message is on top of the mailbox. Keys belong to it, and Esc is
+        // the way out, the same as the other overlays.
+        if (attached != null) {
+            if (event.key == Key.Escape) {
+                attached = null
+                attachedSaved = null
+            }
+            return true
+        }
         if (event.isCtrlPressed && event.key == Key.Comma) {
             settingsOpen = true
             return true
@@ -3420,7 +3463,12 @@ private fun Reader(
             Key.C -> { sendError = null; composing = Draft(from = identities[writingAccount()].orEmpty().firstOrNull()?.email.orEmpty()); true }
             Key.U -> { run("unread-only"); true }
             Key.R -> {
-                selected?.let { m -> composing = replyTo(m, cardFor(m).body, writingIdentity(cardFor(m).body)) }
+                selected?.let { m ->
+                    val body = cardFor(m).body
+                    val ours = identities[writingAccount()].orEmpty().map { it.email }.toSet()
+                    val all = bareReplyAll(Settings.defaultReplyAll(), hasOtherRecipients(m, body, ours))
+                    composing = replyTo(m, body, writingIdentity(body), all, ours)
+                }
                 true
             }
             Key.F -> {
@@ -4398,6 +4446,70 @@ private fun Reader(
             onAgree = { Assistant.agree(Assistant.SUMMARISE); summariseAgreed = true },
             onDismiss = { summarisePacket = null },
         )
+    }
+
+    attached?.let { mail ->
+        val shots = remember(mail) {
+            mail.partBytes.mapNotNull { (id, bytes) ->
+                val part = mail.attachments.find { it.blobId == id } ?: return@mapNotNull null
+                if (fileGlyph(part.type) != FileGlyph.IMAGE) return@mapNotNull null
+                scaledPreview(bytes)?.let { id to it }
+            }.toMap()
+        }
+        // Clicks on the dimmed mail behind this must not archive or open something else.
+        Box(
+            Modifier.fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.35f))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = {},
+                ),
+        ) {
+            Surface(
+                Modifier.align(Alignment.Center).padding(32.dp).fillMaxSize(),
+                shape = MaterialTheme.shapes.medium,
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 12.dp,
+            ) {
+                val who = mail.fromName.ifBlank { mail.fromEmail }.ifBlank { "Unknown sender" }
+                Message(
+                    summary = Summary(
+                        id = "attached",
+                        from = who,
+                        fromEmail = mail.fromEmail,
+                        subject = mail.subject.ifBlank { "(no subject)" },
+                        receivedAt = mail.sentAt.orEmpty(),
+                        preview = "",
+                        seen = true,
+                    ),
+                    body = mail.body,
+                    readOnly = true,
+                    onClose = {
+                        attached = null
+                        attachedSaved = null
+                    },
+                    attachments = mail.attachments,
+                    images = shots,
+                    imageBytes = mail.partBytes,
+                    savedTo = attachedSaved,
+                    onDownload = { part ->
+                        val bytes = mail.partBytes[part.blobId]
+                        if (bytes == null) {
+                            error = "That file is not in the attached message."
+                        } else {
+                            scope.launch {
+                                val path = io {
+                                    Files.write(uniqueIn(downloadsFolder(), part.name), bytes)
+                                }
+                                if (path != null && attached === mail) attachedSaved = path.toString()
+                            }
+                        }
+                    },
+                    onLink = { confirm = it },
+                )
+            }
+        }
     }
 }
 
@@ -5990,7 +6102,7 @@ private fun RowMenu(message: Summary, actions: RowActions, open: Boolean, onClos
             },
         )
         actions.reply?.let {
-            entry("Reply") { it(message, false) }
+            entry("Reply") { it(message, bareReplyAll(Settings.defaultReplyAll(), false)) }
             entry("Reply all") { it(message, true) }
         }
         actions.forward?.let { entry("Forward") { it(message) } }
@@ -6184,6 +6296,20 @@ internal fun Message(
     savedTo: String? = null,
     onDownload: (Attachment) -> Unit = {},
     /**
+     * A forwarded message opened from an attachment.
+     *
+     * It is not in the mailbox, so Reply, Forward and the rest have nowhere to land.
+     * Close is the only action.
+     */
+    readOnly: Boolean = false,
+    onClose: () -> Unit = {},
+    /**
+     * Opening a message that arrived as a file. Absent on a message that is already
+     * one of those, so a forwarded message inside a forwarded message is saved rather
+     * than opened again.
+     */
+    onOpenMessage: ((Attachment) -> Unit)? = null,
+    /**
      * Drawn above the avatar row. Off inside a thread stack, where the subject already
      * heads the whole conversation once and would otherwise repeat on every card.
      */
@@ -6336,7 +6462,15 @@ internal fun Message(
                 return@Column
             }
 
-            Row(
+            if (readOnly) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = onClose) { Text("Close") }
+                }
+            } else Row(
                 Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -6352,7 +6486,10 @@ internal fun Message(
                         )
                     }
                 }
-                OutlinedButton(onClick = { onReply(false) }, enabled = body != null) { Text("Reply") }
+                OutlinedButton(
+                    onClick = { onReply(bareReplyAll(Settings.defaultReplyAll(), replyAll)) },
+                    enabled = body != null,
+                ) { Text("Reply") }
                 // Only when it would reach someone Reply would not.
                 if (replyAll) {
                     OutlinedButton(onClick = { onReply(true) }, enabled = body != null) { Text("Reply all") }
@@ -6761,6 +6898,7 @@ internal fun Message(
                         Spacer(Modifier.height(10.dp))
                         MessageDetails(summary, body, proof.spamScore)
                     }
+                    if (!readOnly) {
                     val colours = LocalTagColours.current
                     val tags = remember(summary.keywords, colours) { tagsOf(summary.keywords, colours) }
                     var adding by remember(summary.id) { mutableStateOf<String?>(null) }
@@ -6827,6 +6965,7 @@ internal fun Message(
                                     .padding(horizontal = 8.dp, vertical = 4.dp),
                             )
                         }
+                    }
                     }
                     invitation?.let { meeting ->
                         Spacer(Modifier.height(16.dp))
@@ -6911,7 +7050,7 @@ internal fun Message(
                             summary.fromEmail,
                         )
                     }
-                    if (asked != null) {
+                    if (asked != null && !readOnly) {
                         Spacer(Modifier.height(16.dp))
                         Row(
                             Modifier.fillMaxWidth()
@@ -7047,17 +7186,12 @@ internal fun Message(
                                  * recognisable from it, and "Screenshot 2026-09-19 at
                                  * 10.44.51 AM.png" is not.
                                  */
-                                images[attachment.blobId]?.let { picture ->
-                                    Image(
-                                        picture,
-                                        contentDescription = attachment.name,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier
-                                            .padding(end = 12.dp)
-                                            .size(56.dp)
-                                            .clip(RoundedCornerShape(6.dp)),
-                                    )
-                                }
+                                FileMark(
+                                    name = safeFileName(attachment.name),
+                                    type = attachment.type,
+                                    picture = images[attachment.blobId],
+                                    glyphForImage = false,
+                                )
                                 Column(Modifier.weight(1f)) {
                                     Text(
                                         // The name a sender chose is shown as the name it will be
@@ -7073,7 +7207,12 @@ internal fun Message(
                                         color = MaterialTheme.colorScheme.outline,
                                     )
                                 }
-                                TextButton(onClick = { onDownload(attachment) }) { Text("Save") }
+                                val openNested = onOpenMessage?.takeIf { isAttachedMessage(attachment.type) }
+                                TextButton(
+                                    onClick = {
+                                        if (openNested != null) openNested(attachment) else onDownload(attachment)
+                                    },
+                                ) { Text(if (openNested != null) "Open" else "Save") }
                             }
                         }
                         if (savedTo != null) {

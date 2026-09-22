@@ -149,6 +149,33 @@ class AttachmentsTest {
     }
 
     @Test
+    fun `a file type picks one of five glyphs`() {
+        assertEquals(FileGlyph.PDF, fileGlyph("application/pdf"))
+        assertEquals(FileGlyph.PDF, fileGlyph("application/x-pdf"))
+        assertEquals(FileGlyph.IMAGE, fileGlyph("image/png"))
+        assertEquals(FileGlyph.IMAGE, fileGlyph("IMAGE/JPEG; name=\"a.jpg\""))
+        assertEquals(FileGlyph.ARCHIVE, fileGlyph("application/zip"))
+        assertEquals(FileGlyph.ARCHIVE, fileGlyph("application/x-7z-compressed"))
+        assertEquals(FileGlyph.ARCHIVE, fileGlyph("application/gzip"))
+        assertEquals(FileGlyph.DOCUMENT, fileGlyph("text/plain"))
+        assertEquals(
+            FileGlyph.DOCUMENT,
+            fileGlyph("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        )
+        assertEquals(FileGlyph.DOCUMENT, fileGlyph("message/rfc822"))
+        assertEquals(FileGlyph.GENERIC, fileGlyph("application/octet-stream"))
+        assertEquals(FileGlyph.GENERIC, fileGlyph(""))
+    }
+
+    @Test
+    fun `only a forwarded message opens instead of saving`() {
+        assertTrue(isAttachedMessage("message/rfc822"))
+        assertTrue(isAttachedMessage("Message/RFC822; name=\"note.eml\""))
+        assertFalse(isAttachedMessage("application/octet-stream"))
+        assertFalse(isAttachedMessage("text/plain"))
+    }
+
+    @Test
     fun `sizes read in the units a person expects`() {
         assertEquals("412 bytes", humanSize(412))
         assertEquals("0 bytes", humanSize(0))

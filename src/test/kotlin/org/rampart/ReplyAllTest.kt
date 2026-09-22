@@ -10,6 +10,18 @@ import kotlin.test.assertTrue
  * sent before they are noticed, and they go to everyone.
  */
 class ReplyAllTest {
+    @Test
+    fun `a pin makes Reply address everyone`() {
+        assertTrue(bareReplyAll(pinned = true, others = false))
+        assertTrue(bareReplyAll(pinned = true, others = true))
+    }
+
+    @Test
+    fun `without a pin Reply stays a reply to the sender`() {
+        assertFalse(bareReplyAll(pinned = false, others = true))
+        assertFalse(bareReplyAll(pinned = false, others = false))
+    }
+
     private val message = Summary(
         id = "1",
         from = "Dana Whitfield",

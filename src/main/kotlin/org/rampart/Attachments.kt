@@ -83,6 +83,37 @@ fun uniqueIn(directory: Path, name: String): Path {
     error("There are too many files with that name in the folder already.")
 }
 
+/**
+ * Which glyph a file gets, from its MIME type.
+ *
+ * Five buckets, not a table of every type a server has ever sent. A picture is drawn
+ * from its bytes when those are already here. This only decides the mark beside a file
+ * that is not being drawn.
+ */
+internal enum class FileGlyph { PDF, IMAGE, ARCHIVE, DOCUMENT, GENERIC }
+
+internal fun fileGlyph(type: String): FileGlyph {
+    val mime = type.substringBefore(';').trim().lowercase()
+    val sub = mime.substringAfter('/', "")
+    return when {
+        sub == "pdf" || sub == "x-pdf" -> FileGlyph.PDF
+        mime.startsWith("image/") -> FileGlyph.IMAGE
+        sub == "zip" || sub.endsWith("+zip") || sub.contains("gzip") || sub == "x-gzip" ||
+            sub.contains("rar") || sub.contains("7z") || sub.contains("tar") ||
+            sub == "x-bzip2" || sub == "x-xz" || sub.contains("compressed") -> FileGlyph.ARCHIVE
+        mime.startsWith("text/") || mime.startsWith("message/") ||
+            sub.contains("word") || sub.contains("excel") || sub.contains("powerpoint") ||
+            sub.contains("opendocument") || sub.contains("rtf") ||
+            sub.contains("document") || sub.contains("sheet") ||
+            sub.contains("presentation") -> FileGlyph.DOCUMENT
+        else -> FileGlyph.GENERIC
+    }
+}
+
+/** A forwarded message that arrived as its own file, rather than as the message open now. */
+internal fun isAttachedMessage(type: String): Boolean =
+    type.substringBefore(';').trim().equals("message/rfc822", ignoreCase = true)
+
 fun humanSize(bytes: Long): String {
     if (bytes < 1024L) return "$bytes bytes"
     val kb = bytes / 1024.0

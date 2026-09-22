@@ -1,6 +1,7 @@
 package org.rampart
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -57,9 +58,12 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
@@ -70,6 +74,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.PaddingValues
 import java.awt.FileDialog
 import java.awt.Frame
+import java.nio.file.Files
 import java.nio.file.Path
 import kotlinx.coroutines.CancellationException
 import java.awt.Desktop
@@ -198,6 +203,21 @@ internal fun replyTo(
 internal fun hasOtherRecipients(summary: Summary, body: Body?, mine: Set<String>): Boolean {
     val ours = (mine + summary.fromEmail).map(::forMatching).filter { it.isNotEmpty() }.toSet()
     return dedupe(body?.to.orEmpty() + body?.cc.orEmpty(), ours).isNotEmpty()
+}
+
+/**
+ * Whether a bare Reply addresses everyone.
+ *
+ * [pinned] is the setting. Off, Reply goes to the sender, which is what it has always
+ * done, and [others] only decides whether Reply all is offered beside it. Turning Reply
+ * itself into Reply all whenever [others] is true would make the two buttons send the
+ * same mail. On, the bare Reply is Reply all even when [others] is false: a one-to-one
+ * message has nobody else to add, and [replyTo] already leaves the sender as the only
+ * recipient.
+ */
+internal fun bareReplyAll(pinned: Boolean, others: Boolean): Boolean {
+    if (others && !pinned) return false
+    return pinned
 }
 
 /**
@@ -350,6 +370,8 @@ internal fun Composer(
     var pickingIdentity by remember { mutableStateOf(false) }
     var saveState by remember(initial) { mutableStateOf("") }
     var attaching by remember(initial) { mutableStateOf(false) }
+    /** Thumbnails of pictures picked from disk, by blob id. Not recomputed while typing. */
+    var previews by remember { mutableStateOf<Map<String, ImageBitmap>>(emptyMap()) }
     var attachError by remember(initial) { mutableStateOf<String?>(null) }
     var warning by remember(initial) { mutableStateOf<String?>(null) }
     var showPromptBar by remember { mutableStateOf(false) }
@@ -405,7 +427,12 @@ internal fun Composer(
      */
     fun send() {
         if (sending || draft.recipients.isEmpty()) return
-        val question = sendWarning(draft.subject, draft.body, draft.attachments.size)
+        val question = askBeforeSend(
+            draft.subject,
+            draft.body,
+            draft.attachments.size,
+            Settings.confirmBeforeSend(),
+        )
         if (question == null) onSend(draft) else warning = question
     }
 
@@ -560,7 +587,11 @@ internal fun Composer(
                                         attaching = true
                                         attachError = null
                                         try {
-                                            draft = draft.copy(attachments = draft.attachments + onAttach(chosen))
+                                            val added = onAttach(chosen)
+                                            previews = previews + withContext(Dispatchers.IO) {
+                                                pickedPreviews(chosen, added)
+                                            }
+                                            draft = draft.copy(attachments = draft.attachments + added)
                                         } catch (e: Exception) {
                                             attachError = whyFailed(e).ifBlank { "That file could not be attached." }
                                         } finally {
@@ -712,10 +743,18 @@ internal fun Composer(
                             Modifier.fillMaxWidth().padding(vertical = 3.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
+                            FileMark(
+                                name = safeFileName(file.name),
+                                type = file.type,
+                                picture = previews[file.blobId],
+                                glyphForImage = true,
+                            )
                             Text(
                                 safeFileName(file.name),
                                 style = MaterialTheme.typography.bodyMedium,
                                 maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
                             )
                             Spacer(Modifier.width(8.dp))
                             Text(
@@ -728,6 +767,7 @@ internal fun Composer(
                                 onClick = {
                                     // The blob stays on the server and expires on its own.
                                     // Nothing else references it, so there is nothing to clean up.
+                                    previews = previews - file.blobId
                                     draft = draft.copy(attachments = draft.attachments - file)
                                 },
                                 enabled = !sending,
@@ -905,6 +945,9 @@ internal fun Composer(
                                         try {
                                             val put = onAttach(listOf(chosen)).firstOrNull()
                                             if (put != null) {
+                                                previews = previews + withContext(Dispatchers.IO) {
+                                                    pickedPreviews(listOf(chosen), listOf(put))
+                                                }
                                                 val inline = put.copy(cid = cidFor(put.blobId), inline = true)
                                                 draft = draft.copy(attachments = draft.attachments + inline)
                                                 apply(insertAt(body, "![${put.name}](cid:${inline.cid})"))
@@ -997,7 +1040,7 @@ internal fun Composer(
                         warning = null
                         onSend(draft)
                     },
-                ) { Text("Send anyway") }
+                ) { Text(if (question == "Send this message?") "Send" else "Send anyway") }
             },
             dismissButton = { TextButton(onClick = { warning = null }) { Text("Go back") } },
         )
@@ -1291,6 +1334,86 @@ internal fun cidFor(blobId: String): String =
  * picker does anyway, and it is called from the click handler on the UI thread for the same
  * reason.
  */
+/**
+ * Thumbnails for pictures just chosen on disk, keyed by the blob the upload returned.
+ *
+ * Read from the file that was picked, not fetched back from the server: the bytes are
+ * already on this machine, and a thumbnail is not a reason to download them again.
+ * A file that is not a picture, or that will not decode, is simply absent.
+ */
+internal fun pickedPreviews(paths: List<Path>, added: List<Attachment>): Map<String, ImageBitmap> {
+    val raw = paths.zip(added).mapNotNull { (path, part) ->
+        if (fileGlyph(part.type) != FileGlyph.IMAGE) return@mapNotNull null
+        val bytes = runCatching { Files.readAllBytes(path) }.getOrNull() ?: return@mapNotNull null
+        part.blobId to bytes
+    }
+    return raw.mapNotNull { (id, bytes) -> scaledPreview(bytes)?.let { id to it } }.toMap()
+}
+
+/**
+ * The mark beside an attached file: the picture itself when we have one, otherwise a
+ * glyph for the kind of file it is.
+ *
+ * [glyphForImage] is for the composer, where a picture that did not decode should still
+ * have something beside the name. The reading view leaves a picture with no bytes blank,
+ * which is what it did before there were glyphs.
+ */
+@Composable
+internal fun FileMark(name: String, type: String, picture: ImageBitmap?, glyphForImage: Boolean) {
+    val kind = fileGlyph(type)
+    if (kind == FileGlyph.IMAGE && picture != null) {
+        Image(
+            picture,
+            contentDescription = name,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .padding(end = 12.dp)
+                .size(56.dp)
+                .clip(RoundedCornerShape(6.dp)),
+        )
+        return
+    }
+    if (kind == FileGlyph.IMAGE) {
+        if (!glyphForImage) return
+        Box(
+            Modifier
+                .padding(end = 12.dp)
+                .size(56.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                RampartIcons.Page,
+                contentDescription = "Image",
+                tint = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+        return
+    }
+    val icon = when (kind) {
+        FileGlyph.PDF -> RampartIcons.Page
+        FileGlyph.ARCHIVE -> RampartIcons.Archive
+        FileGlyph.DOCUMENT -> RampartIcons.Drafts
+        FileGlyph.GENERIC -> RampartIcons.Attachment
+        FileGlyph.IMAGE -> RampartIcons.Page
+    }
+    val label = when (kind) {
+        FileGlyph.PDF -> "PDF"
+        FileGlyph.ARCHIVE -> "Archive"
+        FileGlyph.DOCUMENT -> "Document"
+        FileGlyph.GENERIC -> "File"
+        FileGlyph.IMAGE -> "Image"
+    }
+    Icon(
+        icon,
+        contentDescription = label,
+        tint = MaterialTheme.colorScheme.outline,
+        modifier = Modifier.padding(end = 12.dp).size(22.dp),
+    )
+}
+
 internal fun pickFiles(): List<Path> {
     val dialog = FileDialog(null as Frame?, "Attach files", FileDialog.LOAD)
     dialog.isMultipleMode = true

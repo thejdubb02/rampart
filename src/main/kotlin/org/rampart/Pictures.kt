@@ -1,7 +1,11 @@
 package org.rampart
 
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import org.jetbrains.skia.EncodedImageFormat
 import org.jetbrains.skia.Image
+import org.jetbrains.skia.Rect
+import org.jetbrains.skia.Surface
 
 /**
  * A picture the message carried, turned into one the engine will actually draw.
@@ -51,6 +55,33 @@ internal fun drawable(type: String, bytes: ByteArray): Pair<String, ByteArray> {
      */
     return (if (opaque) "image/jpeg" else "image/png") to encoded
 }
+
+/**
+ * A small picture for a file just picked from disk.
+ *
+ * The full image is what gets uploaded. This is only what sits beside the name, and a
+ * photo from a phone is several megabytes of pixels the row will never show. Anything
+ * that will not decode comes back null, and the row draws a glyph instead.
+ */
+internal fun scaledPreview(bytes: ByteArray, edge: Int = 112): ImageBitmap? = runCatching {
+    val image = Image.makeFromEncoded(bytes)
+    val longest = maxOf(image.width, image.height)
+    if (longest <= 0) return null
+    if (longest <= edge) return image.toComposeImageBitmap()
+    val scale = edge.toFloat() / longest
+    val width = (image.width * scale).toInt().coerceAtLeast(1)
+    val height = (image.height * scale).toInt().coerceAtLeast(1)
+    val surface = Surface.makeRasterN32Premul(width, height)
+    surface.canvas.drawImageRect(
+        image,
+        Rect.makeWH(image.width.toFloat(), image.height.toFloat()),
+        Rect.makeWH(width.toFloat(), height.toFloat()),
+    )
+    // Encoded and read back so the bitmap does not keep the surface it was drawn on.
+    val png = surface.makeImageSnapshot().encodeToData(EncodedImageFormat.PNG)?.bytes
+    surface.close()
+    png?.let { Image.makeFromEncoded(it).toComposeImageBitmap() }
+}.getOrNull()
 
 /**
  * Characters that arrive in mail and come out as an empty box.

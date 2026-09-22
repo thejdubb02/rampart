@@ -553,6 +553,55 @@ private fun ReadingPage(
 
     Spacer(Modifier.height(18.dp))
     Section(
+        "Sending",
+        "What Reply and Send do, before a message goes.",
+    )
+    var confirmSend by remember { mutableStateOf(Settings.confirmBeforeSend()) }
+    Row(
+        Modifier.fillMaxWidth().clickable {
+            confirmSend = !confirmSend
+            Settings.setConfirmBeforeSend(confirmSend)
+        }.padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Always confirm before sending", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "Ask once before every message goes. A missing subject or a missing " +
+                    "attachment still asks its own question, and that one is enough.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+        Switch(
+            checked = confirmSend,
+            onCheckedChange = { confirmSend = it; Settings.setConfirmBeforeSend(it) },
+        )
+    }
+    var replyAllByDefault by remember { mutableStateOf(Settings.defaultReplyAll()) }
+    Row(
+        Modifier.fillMaxWidth().clickable {
+            replyAllByDefault = !replyAllByDefault
+            Settings.setDefaultReplyAll(replyAllByDefault)
+        }.padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Default to Reply all", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "Reply addresses everyone on the message. Reply all stays available on each one.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+        Switch(
+            checked = replyAllByDefault,
+            onCheckedChange = { replyAllByDefault = it; Settings.setDefaultReplyAll(it) },
+        )
+    }
+
+    Spacer(Modifier.height(18.dp))
+    Section(
         "Archiving",
         "A folder with fifteen years of mail in it is a folder nobody opens.",
     )

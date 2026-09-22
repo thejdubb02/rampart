@@ -2,6 +2,7 @@ package org.rampart
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class PicturesTest {
@@ -37,6 +38,23 @@ class PicturesTest {
         val png = javaClass.getResourceAsStream("/clear.png")?.readBytes() ?: error("fixture missing")
         val (type, _) = drawable("image/png", png)
         assertEquals("image/png", type, "transparency was thrown away")
+    }
+
+    @Test
+    fun `a picture larger than the edge is scaled down`() {
+        val bytes = javaClass.getResourceAsStream("/clear.png")?.readBytes() ?: error("fixture missing")
+        val full = scaledPreview(bytes, edge = 112)!!
+        assertEquals(4, full.width)
+        assertEquals(4, full.height)
+        val small = scaledPreview(bytes, edge = 2)!!
+        assertTrue(small.width <= 2 && small.height <= 2)
+        assertTrue(small.width >= 1 && small.height >= 1)
+    }
+
+    @Test
+    fun `bytes that are not a picture are not a thumbnail`() {
+        assertNull(scaledPreview("hello".toByteArray()))
+        assertNull(scaledPreview(ByteArray(0)))
     }
 
     @Test

@@ -47,3 +47,17 @@ internal fun sendWarning(subject: String, body: String, attachments: Int): Strin
     subject.isBlank() -> "This message has no subject. Send it anyway?"
     else -> null
 }
+
+/**
+ * The one question to ask before this message goes, or null when it should just go.
+ *
+ * A content warning wins. It is the more specific of the two, and asking both would be
+ * the second stop [sendWarning] exists to avoid. The plain confirm is only asked when
+ * nothing else was, and only when [confirmEvery] is on.
+ */
+internal fun askBeforeSend(
+    subject: String,
+    body: String,
+    attachments: Int,
+    confirmEvery: Boolean,
+): String? = sendWarning(subject, body, attachments) ?: if (confirmEvery) "Send this message?" else null

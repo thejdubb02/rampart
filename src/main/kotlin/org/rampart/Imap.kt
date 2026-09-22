@@ -550,9 +550,14 @@ internal class Imap private constructor(
     }
 
     override fun download(attachment: Attachment, into: Path): Path {
-        val bytes = blob(attachment, Long.MAX_VALUE) ?: throw JmapError("That attachment is no longer on the server.")
-        into.writeBytes(bytes)
-        return into
+        val bytes = blob(attachment, Long.MAX_VALUE)
+            ?: throw JmapError("That attachment is no longer on the server.")
+        // Save passes the folder, and so does opening a forwarded message. Writing the
+        // bytes onto the folder path itself fails, so this matches the JMAP side and
+        // puts a file inside the folder.
+        val dest = uniqueIn(into, attachment.name)
+        dest.writeBytes(bytes)
+        return dest
     }
 
     /**
@@ -1066,6 +1071,54 @@ internal fun attachmentsOf(message: MimeMessage, emailId: String): List<Attachme
         )
     }
     visit(message)
+}
+
+/**
+ * A message that arrived as a file, read the same way a message fetched over IMAP is.
+ *
+ * The bytes are whatever Save would have written. [attachmentsOf] and the body walk
+ * already know how to read a [MimeMessage], so this only has to build one from the
+ * bytes rather than from a folder.
+ */
+internal data class AttachedMessage(
+    val subject: String,
+    val fromName: String,
+    val fromEmail: String,
+    val sentAt: String?,
+    val body: Body,
+    val attachments: List<Attachment>,
+    /** Decoded bytes of each file, by the blob id [attachmentsOf] assigned. */
+    val partBytes: Map<String, ByteArray>,
+)
+
+internal fun readAttachedMessage(bytes: ByteArray): AttachedMessage {
+    val message = MimeMessage(Session.getInstance(Properties()), bytes.inputStream())
+    val found = FoundBody()
+    walk(message, found)
+    val headers = bodyFromHeaders(headerPairs(message))
+    val body = headers.copy(html = found.html, text = found.text, size = bytes.size.toLong())
+    val attachments = attachmentsOf(message, "attached")
+    val partBytes = buildMap {
+        for (part in attachments) {
+            val index = part.blobId.substringAfterLast('#').toIntOrNull() ?: continue
+            val raw = partAt(message, index)?.let { piece ->
+                runCatching { piece.inputStream.use { it.readBytes() } }.getOrNull()
+            } ?: continue
+            put(part.blobId, raw)
+        }
+    }
+    val sender = runCatching { message.from }.getOrNull()
+        ?.filterIsInstance<InternetAddress>()
+        ?.firstOrNull()
+    return AttachedMessage(
+        subject = runCatching { message.subject }.getOrNull().orEmpty(),
+        fromName = sender?.personal?.takeIf { it.isNotBlank() } ?: sender?.address.orEmpty(),
+        fromEmail = sender?.address.orEmpty(),
+        sentAt = body.sentAt,
+        body = body,
+        attachments = attachments,
+        partBytes = partBytes,
+    )
 }
 
 /**
