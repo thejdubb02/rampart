@@ -366,6 +366,11 @@ internal fun Composer(
     onSave: (suspend (Draft) -> Unit)? = null,
     /** Puts the chosen files on the server and says what to attach. Null when it cannot. */
     onAttach: (suspend (List<Path>) -> List<Attachment>)? = null,
+    /**
+     * Writes one attached file to a temp file so its row can be dragged out.
+     * Null where there is nowhere to fetch it from, and the row then only removes.
+     */
+    onDragFile: ((Attachment) -> java.io.File)? = null,
     /** Addresses to offer while a recipient is being typed. */
     book: List<Person> = emptyList(),
     /** Filling the window rather than sitting in the corner of it. */
@@ -838,8 +843,15 @@ internal fun Composer(
             if (draft.attachments.isNotEmpty()) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp)) {
                     draft.attachments.forEach { file ->
+                        val dragOut = onDragFile
                         Row(
-                            Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                            Modifier.fillMaxWidth().padding(vertical = 3.dp).then(
+                                if (dragOut == null) Modifier
+                                else Modifier.dragAttachmentOut(
+                                    prepare = { dragOut(file) },
+                                    onFailed = { attachError = it },
+                                ),
+                            ),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             FileMark(

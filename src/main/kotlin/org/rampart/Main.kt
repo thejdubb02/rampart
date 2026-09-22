@@ -3601,6 +3601,10 @@ private fun Reader(
                     }
                 }
             },
+            onDragFile = if (key == null) null else { attachment ->
+                materializeAttachment { dir -> session(key).jmap.download(attachment, dir) }
+            },
+            onDragFailed = { error = it },
             onOpenMessage = { attachment ->
                 if (key != null) openAttached(key, attachment)
             },
@@ -3836,6 +3840,11 @@ private fun Reader(
                 // One at a time rather than in parallel: a mail server is not a CDN, and
                 // three large files racing each other is how an upload limit gets hit.
                 withContext(Dispatchers.IO) { files.map { account.jmap.upload(it) } }
+            },
+            onDragFile = { attachment ->
+                val accountKey = writingAccount()
+                    ?: throw JmapError("Pick an account before dragging a file out.")
+                materializeAttachment { dir -> session(accountKey).jmap.download(attachment, dir) }
             },
             onSave = { draft ->
                 val key = writingAccount()
@@ -4791,6 +4800,12 @@ private fun Reader(
                             }
                         }
                     },
+                    onDragFile = { part ->
+                        val bytes = mail.partBytes[part.blobId]
+                            ?: throw IllegalStateException("That file is not in the attached message.")
+                        materializeAttachment { dir -> Files.write(uniqueIn(dir, part.name), bytes) }
+                    },
+                    onDragFailed = { error = it },
                     onOpenTnef = { part ->
                         val bytes = mail.partBytes[part.blobId]
                         if (bytes == null) {
@@ -6748,6 +6763,14 @@ internal fun Message(
     savedTo: String? = null,
     onDownload: (Attachment) -> Unit = {},
     /**
+     * Writes one attachment to a temp file so the row can be dragged out of the
+     * window. Absent where there is nothing to fetch, and the row then only
+     * clicks, as before.
+     */
+    onDragFile: ((Attachment) -> java.io.File)? = null,
+    /** Shown when that temp file could not be written. */
+    onDragFailed: (String) -> Unit = {},
+    /**
      * A forwarded message opened from an attachment.
      *
      * It is not in the mailbox, so Reply, Forward and the rest have nowhere to land.
@@ -7361,7 +7384,10 @@ internal fun Message(
 
                     if (attachmentsBeside && fileList.isNotEmpty()) {
                         Spacer(Modifier.height(10.dp))
-                        FileRows(fileList, ::openFile, images, savedTo, onOpenMessage, onOpenTnef)
+                        FileRows(
+                            fileList, ::openFile, images, savedTo, onOpenMessage, onOpenTnef,
+                            onDragFile, onDragFailed,
+                        )
                     }
 
                     /*
@@ -7676,7 +7702,10 @@ internal fun Message(
                         Spacer(Modifier.height(24.dp))
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         Spacer(Modifier.height(14.dp))
-                        FileRows(fileList, ::openFile, images, savedTo, onOpenMessage, onOpenTnef)
+                        FileRows(
+                            fileList, ::openFile, images, savedTo, onOpenMessage, onOpenTnef,
+                            onDragFile, onDragFailed,
+                        )
                     }
                     Spacer(Modifier.height(40.dp))
                 }
@@ -7726,7 +7755,8 @@ internal fun Message(
  *
  * The same rows wherever the list is drawn. Open is a forwarded message, or a
  * winmail.dat. Preview is an image when that is what a click is set to do.
- * Everything else saves.
+ * Everything else saves. Dragging the row past a short movement hands the file
+ * to the desktop or to another program. The button is unchanged for a click.
  */
 @Composable
 private fun FileRows(
@@ -7736,10 +7766,22 @@ private fun FileRows(
     savedTo: String?,
     onOpenMessage: ((Attachment) -> Unit)?,
     onOpenTnef: ((Attachment) -> Unit)?,
+    onDragFile: ((Attachment) -> java.io.File)?,
+    onDragFailed: (String) -> Unit,
 ) {
     files.forEach { attachment ->
+        // The button stays a button. The drag source uses the same movement
+        // threshold as any other drag in this window, so a click that does not
+        // move still presses it, and a drag does not.
+        val dragOut = onDragFile
         Row(
-            Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            Modifier.fillMaxWidth().padding(vertical = 4.dp).then(
+                if (dragOut == null) Modifier
+                else Modifier.dragAttachmentOut(
+                    prepare = { dragOut(attachment) },
+                    onFailed = onDragFailed,
+                ),
+            ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             /*
