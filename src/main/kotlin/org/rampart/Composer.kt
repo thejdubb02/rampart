@@ -371,8 +371,12 @@ internal fun Composer(
      * again should leave no trace, and an untouched draft in the folder is exactly the kind
      * of litter that makes people stop trusting a Drafts folder.
      */
-    LaunchedEffect(draft) {
-        if (onSave == null || draft == initial) return@LaunchedEffect
+    // Keyed on sending too, not just draft: without it, a save already sitting in its
+    // debounce delay when Send is clicked keeps running underneath the send in flight,
+    // and lands after the message is gone, autosaving a draft of a message already sent.
+    // Restarting this effect the moment sending flips true cancels that delay outright.
+    LaunchedEffect(draft, sending) {
+        if (onSave == null || draft == initial || sending) return@LaunchedEffect
         delay(1200)
         saveState = "Saving"
         saveState = try {
