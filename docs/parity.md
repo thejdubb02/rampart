@@ -79,8 +79,12 @@ that lives in `roadmap.md` under the matching section number.
 - **2.5 Folder management.** Have. Create, rename, nest, move, delete, with the tree shown
   and a role-bearing folder protected from both.
 - **2.6 Templates, read receipts, scheduled send.** Templates and receipts have.
-  Undo-send have. Scheduled send remains impossible on this server: Stalwart advertises
-  submission with no `maxDelayedSend`, which per RFC 8621 means zero.
+  Undo-send have. Scheduled send has too, 2026-09-22, client-held rather than
+  server-side: Stalwart advertises submission with no `maxDelayedSend`, which per RFC
+  8621 means zero, so the server still refuses a future send time. Rampart saves the
+  draft immediately and fires it itself on its own minute poll, including once on
+  startup, so a time that passed while it was closed goes as soon as it is next open
+  rather than silently missing it.
 - **2.7 The message list.** Have, all of it, plus paging and sender marks.
 
 ---
@@ -267,7 +271,6 @@ gap nobody is working on.
 | Shared and delegated mailboxes, and cross-account unified views | 45 |
 | Files: the JMAP FileNode side of Stalwart | 46 |
 | Calendar as an application rather than an invitation answerer | 47 |
-| Scheduled send, TNEF and `winmail.dat`, nested `.eml`, drag an attachment out | 48 |
 | 27 languages, right-to-left, and an accessibility pass | 49 |
 | Message list shapes and a density control | 42 |
 | Sender favicons as avatars | 27 |
