@@ -162,11 +162,11 @@ internal fun SettingsPane(
                              * another account's folder is one the server will refuse.
                              * Rules kept for every account offer what they all have.
                              */
-                            folders = accounts
-                                .filter { filterAccount == null || it.key == filterAccount }
-                                .map { account -> account.mailboxes.map { it.name }.toSet() }
-                                .reduceOrNull { all, next -> all intersect next }
-                                .orEmpty().sorted(),
+                            folders = commonFolders(
+                                accounts
+                                    .filter { filterAccount == null || it.key == filterAccount }
+                                    .map { account -> account.mailboxes.map { it.name }.toSet() },
+                            ),
                             saving = filtersSaving,
                             error = filtersError,
                             supported = filtersSupported,

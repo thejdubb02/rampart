@@ -126,4 +126,29 @@ class RuleInWordsTest {
         assertContains(packet, "delete DMARC reports")
         assertContains(packet, "Invoices")
     }
+
+    /** The sentence a right-click starts from. No model: the words are built here. */
+    @Test
+    fun `a message seeds the sentence and leaves the action to the person`() {
+        val message = Summary(
+            "a",
+            "Stalwart",
+            "stalwart@example.org",
+            "Your certificate renews in 7 days",
+            "2026-09-16T09:12:00Z",
+            "The certificate will be renewed.",
+            false,
+        )
+        assertEquals(
+            "Filter emails like this: from stalwart@example.org, " +
+                "subject like \"Your certificate renews in 7 days\". Say what to do with them.",
+            filterSeed(message),
+        )
+        // No address on the row: the name is used, and that name is sometimes only a domain.
+        assertEquals(
+            "Filter emails like this: from news.example.org, " +
+                "subject like \"Your certificate renews in 7 days\". Say what to do with them.",
+            filterSeed(message.copy(from = "news.example.org", fromEmail = "")),
+        )
+    }
 }

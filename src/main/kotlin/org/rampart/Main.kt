@@ -1102,6 +1102,8 @@ private fun Reader(
     // A folder operation waiting on a name, or on a yes.
     var folderAsk by remember { mutableStateOf<FolderAsk?>(null) }
     var folderError by remember { mutableStateOf<String?>(null) }
+    /** The message whose row asked for a filter, or null while that dialog is closed. */
+    var filterFor by remember { mutableStateOf<Summary?>(null) }
     var loadingMore by remember { mutableStateOf(false) }
     // Set when a page comes back short, so the bottom of a folder is not re-queried forever.
     var exhausted by remember { mutableStateOf(false) }
@@ -2940,6 +2942,7 @@ private fun Reader(
         trash = { message -> fileAway(message, "trash")?.invoke() },
         star = ::starOne,
         markRead = ::markRead,
+        filter = { message -> filterFor = message },
     )
 
     /**
@@ -3751,6 +3754,19 @@ private fun Reader(
                     error = folderError,
                     onClose = { folderAsk = null; folderError = null },
                     onConfirm = { answer -> doFolderJob(ask, answer) },
+                )
+            }
+            filterFor?.let { message ->
+                // The set kept for every account, so a folder has to exist on all of them.
+                // A name only one server has is a rule the others will refuse.
+                val folders = commonFolders(sessions.map { open -> mailboxes[open.key].orEmpty().map { it.name }.toSet() })
+                FilterFromMessageDialog(
+                    message = message,
+                    folders = folders,
+                    onClose = { filterFor = null },
+                    onMade = { rule ->
+                        saveGlobalFilters(globalFilters.copy(rules = globalFilters.rules + rule))
+                    },
                 )
             }
             changelogDialog?.let { changes ->
@@ -5937,6 +5953,10 @@ private fun RowMenu(message: Summary, actions: RowActions, open: Boolean, onClos
         }
         actions.star?.let { entry(if (message.flagged) "Remove star" else "Star") { it(message) } }
         actions.archive?.let { entry("Archive") { it(message) } }
+        actions.filter?.let { offer ->
+            HorizontalDivider()
+            entry("AI Filter") { offer(message) }
+        }
         actions.snooze?.let { put ->
             // The four named times rather than a submenu with a calendar in it: the whole
             // value of a snooze is that it is one gesture.
@@ -5969,6 +5989,8 @@ internal data class RowActions(
     val markRead: ((Summary, read: Boolean) -> Unit)? = null,
     /** Putting it away until later. Null on an account with nowhere to put it. */
     val snooze: ((Summary, SnoozeUntil) -> Unit)? = null,
+    /** A filter described from this message. Null where the row does not offer one. */
+    val filter: ((Summary) -> Unit)? = null,
 )
 
 /**

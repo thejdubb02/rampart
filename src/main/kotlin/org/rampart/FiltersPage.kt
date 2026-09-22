@@ -11,6 +11,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -297,6 +300,57 @@ private fun RuleList(
 }
 
 /**
+ * The sentence a right-click starts from.
+ *
+ * It names this message and stops. The model is told to refuse a sentence with nothing
+ * to do, so the box is left for the person to say what should happen to mail like it.
+ * The address when the row has one, otherwise the name on the row, which is sometimes
+ * only a domain.
+ */
+/** Folder names every one of [perAccount] has, since a rule kept for all of them can only file into what they share. */
+internal fun commonFolders(perAccount: List<Set<String>>): List<String> =
+    perAccount.reduceOrNull { all, next -> all intersect next }.orEmpty().sorted()
+
+internal fun filterSeed(message: Summary): String {
+    val who = message.fromEmail.trim().ifBlank { message.from.trim() }.ifBlank { "this sender" }
+    val subject = message.subject.trim()
+    return "Filter emails like this: from $who, subject like \"$subject\". Say what to do with them."
+}
+
+/**
+ * The same "describe a filter" box, opened on one message.
+ *
+ * Nothing is saved here. Add it is still [DescribeRule]'s, and the caller writes the
+ * rule the same way Settings does.
+ */
+@Composable
+internal fun FilterFromMessageDialog(
+    message: Summary,
+    folders: List<String>,
+    onClose: () -> Unit,
+    onMade: (Rule) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("AI Filter") },
+        text = {
+            Column(
+                Modifier
+                    .widthIn(min = 360.dp, max = 520.dp)
+                    .heightIn(max = 480.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                DescribeRule(folders, filterSeed(message)) { rule ->
+                    onMade(rule)
+                    onClose()
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onClose) { Text("Close") } },
+    )
+}
+
+/**
  * A filter said in a sentence, built into a rule.
  *
  * The first thing the assistant is for, and the shape every later one should copy: the
@@ -305,7 +359,15 @@ private fun RuleList(
  * for why it cannot produce anything this build would not have accepted from a person.
  */
 @Composable
-private fun DescribeRule(folders: List<String>, onMade: (Rule) -> Unit) {
+private fun DescribeRule(
+    folders: List<String>,
+    /**
+     * What the box starts with. Blank from Settings. A message puts a sentence here so
+     * the person only has to say what to do with mail like it.
+     */
+    seed: String = "",
+    onMade: (Rule) -> Unit,
+) {
     val config = remember { Assistant.config() }
     if (config.mode == AssistantMode.OFF) {
         Note("Rules can be described in words. Turn the assistant on in Settings to do that.")
@@ -313,7 +375,7 @@ private fun DescribeRule(folders: List<String>, onMade: (Rule) -> Unit) {
     }
 
     val scope = rememberCoroutineScope()
-    var words by remember { mutableStateOf("") }
+    var words by remember(seed) { mutableStateOf(seed) }
     var thinking by remember { mutableStateOf(false) }
     var trouble by remember { mutableStateOf<String?>(null) }
     var draft by remember { mutableStateOf<Rule?>(null) }
@@ -364,6 +426,7 @@ private fun DescribeRule(folders: List<String>, onMade: (Rule) -> Unit) {
         label = { Text("Describe a filter") },
         placeholder = { Text("If I get a DMARC report, mark it read and delete it") },
         enabled = !thinking,
+        minLines = if (seed.isBlank()) 1 else 3,
         modifier = Modifier.fillMaxWidth(),
     )
     Spacer(Modifier.height(6.dp))
