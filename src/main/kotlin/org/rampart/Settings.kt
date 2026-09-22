@@ -253,6 +253,68 @@ object Settings {
         write { put("defaultReplyAll", JsonPrimitive(value)) }
 
     /**
+     * The character that separates a tag from the mailbox, as in `you+invoices@`.
+     *
+     * Plus is what most systems use, and it is what Rampart assumed before this was a
+     * choice. A single character, and never `@`, which is the address itself: anything
+     * else is read back as plus, so a mangled setting cannot stop an address matching.
+     */
+    fun subAddressDelimiter(): Char {
+        val raw = read()["subAddressDelimiter"]?.jsonPrimitive?.contentOrNull
+        val one = raw?.singleOrNull()
+        return if (one != null && one != '@') one else '+'
+    }
+
+    fun setSubAddressDelimiter(value: Char) = write {
+        put("subAddressDelimiter", JsonPrimitive(if (value == '@') "+" else value.toString()))
+    }
+
+    /**
+     * Whether only configured identities count as you.
+     *
+     * Off by default, which is the catch-all: an address on a domain you already send as
+     * is treated as yours even when that exact address was never set up. On, an address
+     * counts only when it matches an identity. Reply all and the address a reply goes out
+     * as both follow this.
+     */
+    fun exactIdentitiesOnly(): Boolean =
+        read()["exactIdentitiesOnly"]?.jsonPrimitive?.booleanOrNull ?: false
+
+    fun setExactIdentitiesOnly(value: Boolean) =
+        write { put("exactIdentitiesOnly", JsonPrimitive(value)) }
+
+    /**
+     * Where a message's files are listed.
+     *
+     * "below" is under the body, which is where they have always been. "beside" puts the
+     * same list under the sender's name. Anything else is read as "below".
+     */
+    fun attachmentPosition(): String {
+        val raw = read()["attachmentPosition"]?.jsonPrimitive?.contentOrNull
+        return if (raw == "beside") "beside" else "below"
+    }
+
+    fun setAttachmentPosition(value: String) = write {
+        put("attachmentPosition", JsonPrimitive(if (value == "beside") "beside" else "below"))
+    }
+
+    /**
+     * What a click on a file does.
+     *
+     * "download" saves it, which is what a click has always done. "preview" opens an image
+     * in the window instead, and only an image: every other kind of file still saves,
+     * because there is nothing to show for it. Anything else is read as "download".
+     */
+    fun attachmentClickBehavior(): String {
+        val raw = read()["attachmentClickBehavior"]?.jsonPrimitive?.contentOrNull
+        return if (raw == "preview") "preview" else "download"
+    }
+
+    fun setAttachmentClickBehavior(value: String) = write {
+        put("attachmentClickBehavior", JsonPrimitive(if (value == "preview") "preview" else "download"))
+    }
+
+    /**
      * How long a sent message waits before it actually goes, in seconds.
      *
      * Five by default, which is long enough to notice the wrong recipient and short enough

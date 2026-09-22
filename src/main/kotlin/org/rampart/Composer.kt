@@ -163,12 +163,14 @@ internal fun replyTo(
     from: String,
     all: Boolean = false,
     mine: Set<String> = emptySet(),
+    exactOnly: Boolean = Settings.exactIdentitiesOnly(),
+    delimiter: Char = Settings.subAddressDelimiter(),
 ): Draft {
     val original = plainTextOf(body)
     val quoted = original.trim().lineSequence().joinToString("\n") { if (it.isEmpty()) ">" else "> $it" }
     val subject = summary.subject.trim()
     val answered = body?.messageId?.firstOrNull()
-    val ours = (mine + from).map(::forMatching).filterTo(mutableSetOf()) { it.isNotEmpty() }
+    val ours = (mine + from).map { forMatching(it, delimiter) }.filterTo(mutableSetOf()) { it.isNotEmpty() }
     /*
      * **Reply-To wins over From, because that is what it is for.** A mailing list sets it to
      * the list, a ticketing system to the address that files the answer against the ticket,
@@ -181,8 +183,9 @@ internal fun replyTo(
     // Answering your own message is the case where dropping your own address leaves nobody
     // to send to, so the sender goes back in rather than the reply opening addressed to no one.
     val to = if (!all) answerTo
-    else dedupe(answerTo + body?.to.orEmpty(), ours).ifEmpty { answerTo }
-    val cc = if (!all) emptyList() else dedupe(body?.cc.orEmpty(), ours + to.map(::forMatching))
+    else dedupe(answerTo + body?.to.orEmpty(), ours, mine, exactOnly, delimiter).ifEmpty { answerTo }
+    val cc = if (!all) emptyList()
+    else dedupe(body?.cc.orEmpty(), ours + to.map { forMatching(it, delimiter) }, mine, exactOnly, delimiter)
     return Draft(
         from = from,
         to = to.joinToString(", "),
@@ -200,9 +203,15 @@ internal fun replyTo(
  * the button. On the usual one-to-one message it would send exactly the same mail, and a
  * second button that does the same thing as the first is a button people click by mistake.
  */
-internal fun hasOtherRecipients(summary: Summary, body: Body?, mine: Set<String>): Boolean {
-    val ours = (mine + summary.fromEmail).map(::forMatching).filter { it.isNotEmpty() }.toSet()
-    return dedupe(body?.to.orEmpty() + body?.cc.orEmpty(), ours).isNotEmpty()
+internal fun hasOtherRecipients(
+    summary: Summary,
+    body: Body?,
+    mine: Set<String>,
+    exactOnly: Boolean = Settings.exactIdentitiesOnly(),
+    delimiter: Char = Settings.subAddressDelimiter(),
+): Boolean {
+    val ours = (mine + summary.fromEmail).map { forMatching(it, delimiter) }.filter { it.isNotEmpty() }.toSet()
+    return dedupe(body?.to.orEmpty() + body?.cc.orEmpty(), ours, mine, exactOnly, delimiter).isNotEmpty()
 }
 
 /**
@@ -226,12 +235,34 @@ internal fun bareReplyAll(pinned: Boolean, others: Boolean): Boolean {
  * Compared through [forMatching], so two spellings of one mailbox count as one. The address
  * kept is the one the sender actually wrote.
  */
-private fun dedupe(addresses: List<String>, exclude: Set<String>): List<String> {
+private fun dedupe(
+    addresses: List<String>,
+    exclude: Set<String>,
+    identities: Collection<String> = emptyList(),
+    exactOnly: Boolean = true,
+    delimiter: Char = '+',
+): List<String> {
     val seen = exclude.toMutableSet()
     return addresses.mapNotNull { address ->
-        val key = forMatching(address)
-        if (key.isEmpty() || !seen.add(key)) null else address.trim()
+        val key = forMatching(address, delimiter)
+        if (key.isEmpty() || !seen.add(key)) return@mapNotNull null
+        // Counts as you: a configured identity, or, unless exact mode is on, any address
+        // on a domain you already send as. Reply all does not copy you in on either.
+        if (countsAsMine(address, identities, exactOnly, delimiter)) return@mapNotNull null
+        address.trim()
     }
+}
+
+/** Whether [address] sits on a domain one of [identities] already uses. */
+private fun domainOwned(address: String, identities: Collection<String>): Boolean {
+    val domain = domainOf(address)
+    return domain.isNotBlank() && identities.any { domainOf(it) == domain }
+}
+
+/** "Fwd:" once. A message that already says it is a forward does not get a second one. */
+internal fun forwardedSubject(subject: String): String {
+    val trimmed = subject.trim()
+    return if (trimmed.startsWith("Fwd:", ignoreCase = true)) trimmed else "Fwd: $trimmed"
 }
 
 /**
@@ -242,19 +273,32 @@ private fun dedupe(addresses: List<String>, exclude: Set<String>): List<String> 
  * the old one, and attaching it to a thread they cannot see is worse than not threading.
  */
 internal fun forwardOf(summary: Summary, body: Body?, from: String): Draft {
-    val subject = summary.subject.trim()
     return Draft(
         from = from,
-        subject = if (subject.startsWith("Fwd:", ignoreCase = true)) subject else "Fwd: $subject",
+        subject = forwardedSubject(summary.subject),
         body = buildString {
             append("\n\n---------- Forwarded message ----------\n")
             append("From: ${summary.from} <${summary.fromEmail}>\n")
             append("Date: ${summary.receivedAt.asLocalTime()}\n")
-            append("Subject: $subject\n\n")
+            append("Subject: ${summary.subject.trim()}\n\n")
             append(plainTextOf(body))
         },
     )
 }
+
+/**
+ * A forward that carries the original as a file rather than quoting it.
+ *
+ * The body stays empty on purpose: the message is the attachment, and putting the same
+ * text on the page as well is the forward this is the alternative to. The subject follows
+ * [forwardedSubject], so a message that is already a forward is not labelled twice.
+ */
+internal fun forwardAsAttachment(summary: Summary, from: String, file: Attachment): Draft = Draft(
+    from = from,
+    subject = forwardedSubject(summary.subject),
+    body = "",
+    attachments = listOf(file),
+)
 
 /** The message as text, whichever way it arrived, so a quote never carries markup. */
 internal fun plainTextOf(body: Body?): String =
@@ -1430,35 +1474,73 @@ internal fun pickFiles(): List<Path> {
  * it is the reason a client stops being trusted.
  *
  * To before Cc, because being written to directly is a better claim than being copied. An
- * address that matched nothing falls back to [fallback], which is the account's first
- * identity and the right answer for a message that reached you by an alias or a list we
- * cannot see.
+ * address on a domain you already send as matches the identity on that domain, unless
+ * [exactOnly] is set, in which case only a configured identity counts. Anything that
+ * matched nothing falls back to [fallback], the account's first identity, which is the
+ * right answer for a list or a forward we cannot see.
  */
-internal fun identityFor(body: Body?, mine: List<String>, fallback: String): String {
+internal fun identityFor(
+    body: Body?,
+    mine: List<String>,
+    fallback: String,
+    exactOnly: Boolean = Settings.exactIdentitiesOnly(),
+    delimiter: Char = Settings.subAddressDelimiter(),
+): String {
     if (mine.isEmpty()) return fallback
-    val known = mine.associateBy(::forMatching)
+    val known = mine.associateBy { forMatching(it, delimiter) }
     fun match(addresses: List<String>): String? =
-        addresses.asSequence().mapNotNull { known[forMatching(it)] }.firstOrNull()
-    return match(body?.to.orEmpty()) ?: match(body?.cc.orEmpty()) ?: fallback
+        addresses.asSequence().mapNotNull { known[forMatching(it, delimiter)] }.firstOrNull()
+    match(body?.to.orEmpty())?.let { return it }
+    match(body?.cc.orEmpty())?.let { return it }
+    if (exactOnly) return fallback
+    // Catch-all: the address is not an identity, but its domain is one you send as.
+    // The identity on that domain is what the reply goes out as. Returning the alias
+    // itself would show an address the send still replaces with an identity.
+    fun onDomain(addresses: List<String>): String? {
+        val hit = addresses.firstOrNull { countsAsMine(it, mine, exactOnly = false, delimiter) } ?: return null
+        return mine.firstOrNull { domainOf(it) == domainOf(hit) }
+    }
+    return onDomain(body?.to.orEmpty()) ?: onDomain(body?.cc.orEmpty()) ?: fallback
 }
 
 /**
  * An address reduced to what makes it yours, for comparing two of them.
  *
  * Takes the address out of "Name <address>", which is how a header writes it as often as
- * not, lowercases it because case is not part of an address, and **drops a `+tag` suffix**.
+ * not, lowercases it because case is not part of an address, and **drops a tag suffix**.
  *
  * Sub-addressing is the whole reason for that last part. Mail to `you+invoices@example.org`
  * is mail to you, and a client that cannot see that answers it as the wrong identity and
- * then copies you in on your own reply. Only for matching: the address is never rewritten,
- * so a reply still goes to exactly what the sender wrote.
+ * then copies you in on your own reply. [delimiter] is that character, plus unless someone
+ * has chosen another. Only for matching: the address is never rewritten, so a reply still
+ * goes to exactly what the sender wrote.
  */
-internal fun forMatching(address: String): String {
+internal fun forMatching(address: String, delimiter: Char = Settings.subAddressDelimiter()): String {
     val bare = address.substringAfterLast('<').substringBefore('>').trim().lowercase()
     val at = bare.lastIndexOf('@')
     if (at <= 0) return bare
-    val local = bare.substring(0, at).substringBefore('+')
+    val local = bare.substring(0, at).substringBefore(delimiter)
     return local + bare.substring(at)
+}
+
+/**
+ * Whether [address] counts as one of [identities].
+ *
+ * An exact match, after [forMatching], always counts. With [exactOnly] off, so does any
+ * address on a domain one of those identities uses: that is the catch-all, and it is how
+ * mail to an alias you never configured is still answered as you and left off Reply all.
+ */
+internal fun countsAsMine(
+    address: String,
+    identities: Collection<String>,
+    exactOnly: Boolean,
+    delimiter: Char = '+',
+): Boolean {
+    val key = forMatching(address, delimiter)
+    if (key.isEmpty()) return false
+    if (identities.any { forMatching(it, delimiter) == key }) return true
+    if (exactOnly) return false
+    return domainOwned(address, identities)
 }
 
 @Composable

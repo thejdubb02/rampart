@@ -599,6 +599,100 @@ private fun ReadingPage(
             onCheckedChange = { replyAllByDefault = it; Settings.setDefaultReplyAll(it) },
         )
     }
+    var exactIdentities by remember { mutableStateOf(Settings.exactIdentitiesOnly()) }
+    Row(
+        Modifier.fillMaxWidth().clickable {
+            exactIdentities = !exactIdentities
+            Settings.setExactIdentitiesOnly(exactIdentities)
+        }.padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Only use configured identities", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "Off, mail to any address on a domain you send as is treated as you. " +
+                    "On, only the addresses you have set up count.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+        Switch(
+            checked = exactIdentities,
+            onCheckedChange = { exactIdentities = it; Settings.setExactIdentitiesOnly(it) },
+        )
+    }
+    var delimiter by remember { mutableStateOf(Settings.subAddressDelimiter().toString()) }
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Text("Sub-address character", style = MaterialTheme.typography.bodyMedium)
+        Text(
+            "The character before a tag, as in you+invoices@. Some systems use a hyphen.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline,
+        )
+        Spacer(Modifier.height(6.dp))
+        Box(Modifier.width(48.dp)) {
+            Entry(delimiter, "+") { typed ->
+                val ch = typed.lastOrNull()
+                if (ch != null && ch != '@' && !ch.isWhitespace()) {
+                    delimiter = ch.toString()
+                    Settings.setSubAddressDelimiter(ch)
+                } else {
+                    delimiter = "+"
+                    Settings.setSubAddressDelimiter('+')
+                }
+            }
+        }
+    }
+    var attachmentWhere by remember { mutableStateOf(Settings.attachmentPosition()) }
+    Text(
+        "Where files are listed",
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = Modifier.padding(top = 8.dp),
+    )
+    listOf(
+        "below" to "Under the message",
+        "beside" to "Next to the sender",
+    ).forEach { (value, label) ->
+        Row(
+            Modifier.fillMaxWidth().clickable {
+                attachmentWhere = value
+                Settings.setAttachmentPosition(value)
+            }.padding(vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(selected = attachmentWhere == value, onClick = {
+                attachmentWhere = value
+                Settings.setAttachmentPosition(value)
+            })
+            Spacer(Modifier.width(8.dp))
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+    var attachmentClick by remember { mutableStateOf(Settings.attachmentClickBehavior()) }
+    Text(
+        "Clicking a file",
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = Modifier.padding(top = 8.dp),
+    )
+    listOf(
+        "download" to "Save it",
+        "preview" to "Preview images, save everything else",
+    ).forEach { (value, label) ->
+        Row(
+            Modifier.fillMaxWidth().clickable {
+                attachmentClick = value
+                Settings.setAttachmentClickBehavior(value)
+            }.padding(vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(selected = attachmentClick == value, onClick = {
+                attachmentClick = value
+                Settings.setAttachmentClickBehavior(value)
+            })
+            Spacer(Modifier.width(8.dp))
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
 
     Spacer(Modifier.height(18.dp))
     Section(

@@ -59,6 +59,7 @@ internal val COMMANDS: List<Command> = listOf(
     Command("Reply", "R", "reply"),
     Command("Reply to everyone", "A", "reply-all"),
     Command("Forward", "F", "forward"),
+    Command("Forward as attachment", null, "forward-file"),
     Command("Archive", "E", "archive"),
     Command("Move to trash", "Del", "trash"),
     // One entry for both directions. The command does whichever of the two the open message

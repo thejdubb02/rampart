@@ -130,6 +130,30 @@ class ReplyAllTest {
     }
 
     @Test
+    fun `an alias on your domain is you, unless identities are exact`() {
+        val alias = body.copy(to = listOf("sales@willhitestrategy.com"), cc = emptyList())
+        val caught = replyTo(message, alias, "justin@willhitestrategy.com", all = true, mine = mine, exactOnly = false)
+        assertEquals("dana@example.org", caught.to)
+        assertEquals("", caught.cc)
+        assertFalse(hasOtherRecipients(message, alias, mine, exactOnly = false))
+
+        val exact = replyTo(message, alias, "justin@willhitestrategy.com", all = true, mine = mine, exactOnly = true)
+        assertEquals("dana@example.org, sales@willhitestrategy.com", exact.to)
+        assertTrue(hasOtherRecipients(message, alias, mine, exactOnly = true))
+    }
+
+    @Test
+    fun `forwarding as a file quotes nothing and does not double the prefix`() {
+        val file = Attachment("b", "Fwd - the quote - 2026-09-17.eml", "message/rfc822", 12)
+        val draft = forwardAsAttachment(message, "justin@willhitestrategy.com", file)
+        assertEquals("Fwd: the quote", draft.subject)
+        assertEquals("", draft.body)
+        assertEquals(listOf(file), draft.attachments)
+        val again = forwardAsAttachment(message.copy(subject = "Fwd: the quote"), "justin@willhitestrategy.com", file)
+        assertEquals("Fwd: the quote", again.subject)
+    }
+
+    @Test
     fun `the address the sender wrote is the address that is used`() {
         // Matching strips a plus tag; sending never does. Answering a list address that
         // carries one and dropping it would deliver somewhere the sender never named.

@@ -61,6 +61,18 @@ internal fun bodyOf(raw: String): String {
     }
 }
 
+/**
+ * The file a forward-as-attachment is saved under before it is uploaded.
+ *
+ * `Fwd - {subject} - {date}.eml`, with the date as `yyyy-MM-dd`. The subject is someone
+ * else's text, so the whole name goes through [safeFileName] and cannot leave the folder.
+ */
+internal fun forwardEmlName(subject: String, receivedAt: String): String {
+    val day = runCatching { DATE.format(Instant.parse(receivedAt)) }.getOrDefault("undated")
+    val title = subject.trim().ifBlank { "message" }
+    return safeFileName("Fwd - $title - $day.eml")
+}
+
 /** A filename for saving the message, dated so a folder of them sorts by date. */
 internal fun emlName(subject: String, receivedAt: String): String {
     val stem = if (subject.isBlank()) "message" else subject.take(60)

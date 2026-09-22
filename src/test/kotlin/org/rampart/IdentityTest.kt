@@ -2,6 +2,8 @@ package org.rampart
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class IdentityTest {
 
@@ -96,5 +98,38 @@ class IdentityTest {
     fun `a plus in the domain, or no address at all, does not confuse it`() {
         assertEquals(fallback, identityFor(body(to = listOf("justin@ex+ample.org")), mine, fallback))
         assertEquals(fallback, identityFor(body(to = listOf("not an address")), mine, fallback))
+    }
+
+    @Test
+    fun `an alias on a domain you send as is answered as that identity`() {
+        // sales@ was never configured. example.org was, so the reply goes out as that
+        // identity rather than as whichever address happens to be first.
+        assertEquals(
+            "justin@example.org",
+            identityFor(body(to = listOf("sales@example.org")), mine, fallback, exactOnly = false),
+        )
+        assertEquals(
+            "justin@example.com",
+            identityFor(body(to = listOf("billing@example.com")), mine, fallback, exactOnly = false),
+        )
+    }
+
+    @Test
+    fun `exact identities ignore an alias that was never configured`() {
+        assertEquals(
+            fallback,
+            identityFor(body(to = listOf("sales@example.org")), mine, fallback, exactOnly = true),
+        )
+        assertTrue(
+            countsAsMine("sales@example.org", mine, exactOnly = false),
+        )
+        assertFalse(countsAsMine("sales@example.org", mine, exactOnly = true))
+    }
+
+    @Test
+    fun `the delimiter is what separates a tag, and plus is not special otherwise`() {
+        assertEquals("user@example.com", forMatching("user-news@example.com", '-'))
+        assertEquals("user-news@example.com", forMatching("user-news@example.com", '+'))
+        assertEquals("user@example.com", forMatching("User <user-news@Example.com>", '-'))
     }
 }

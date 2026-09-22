@@ -2960,6 +2960,36 @@ private fun Reader(
         }
     }
 
+    /**
+     * A new message with the original attached as a .eml file, and nothing quoted.
+     *
+     * The file is written the same way [openAttached] writes one, uploaded through the
+     * same call the Attach button uses, and removed whether the upload worked or not.
+     */
+    fun forwardAsFile(message: Summary) {
+        val key = accountOf(message) ?: return
+        sendError = null
+        scope.launch {
+            val letter = cardFor(message).body ?: io { session(key).jmap.body(message.id) }
+            val mine = identities[key].orEmpty().map { it.email }
+            val from = identityFor(letter, mine, mine.firstOrNull().orEmpty())
+            val draft = io {
+                val raw = session(key).jmap.raw(message.id) ?: return@io null
+                val dir = Files.createTempDirectory("rampart-attached")
+                try {
+                    val name = forwardEmlName(message.subject, message.receivedAt)
+                    val path = dir.resolve(name)
+                    Files.writeString(path, raw)
+                    val uploaded = session(key).jmap.upload(path)
+                    forwardAsAttachment(message, from, uploaded.copy(type = "message/rfc822"))
+                } finally {
+                    runCatching { dir.toFile().deleteRecursively() }
+                }
+            }
+            if (draft != null) composing = draft
+        }
+    }
+
     val rowActions = RowActions(
         snooze = { message, until -> snooze(message, until) },
         reply = { message, all ->
@@ -2985,6 +3015,7 @@ private fun Reader(
                 }
             }
         },
+        forwardFile = { message -> forwardAsFile(message) },
         archive = { message -> fileAway(message, "archive")?.invoke() },
         junk = { message -> fileAway(message, "junk")?.invoke() },
         notJunk = { message -> fileAway(message, "inbox")?.invoke() },
@@ -3165,6 +3196,7 @@ private fun Reader(
                 sendError = null
                 composing = forwardOf(cardSummary, card.body, writingIdentity(card.body))
             },
+            onForwardFile = { forwardAsFile(cardSummary) },
             onLink = { confirm = it },
             invitation = if (isPrimary) invitation else null,
             /*
@@ -3327,6 +3359,13 @@ private fun Reader(
             onOpenMessage = { attachment ->
                 if (key != null) openAttached(key, attachment)
             },
+            onLoadImage = { attachment ->
+                if (key == null) null
+                else io {
+                    val bytes = session(key).jmap.blob(attachment) ?: return@io null
+                    runCatching { Image.makeFromEncoded(bytes).toComposeImageBitmap() }.getOrNull()
+                }
+            },
             showSubject = showSubject,
             onHeaderClick = onHeaderClick,
             externalScroll = externalScroll,
@@ -3357,6 +3396,7 @@ private fun Reader(
                 composing = replyTo(it, cardFor(it).body, writingIdentity(cardFor(it).body), true, ours)
             }
             "forward" -> selected?.let { composing = forwardOf(it, cardFor(it).body, writingIdentity(cardFor(it).body)) }
+            "forward-file" -> selected?.let { forwardAsFile(it) }
             "archive" -> actions.archive?.invoke()
             "trash" -> actions.trash?.invoke()
             // One command, and it does whichever of the two is the one on offer, so the
@@ -6106,6 +6146,7 @@ private fun RowMenu(message: Summary, actions: RowActions, open: Boolean, onClos
             entry("Reply all") { it(message, true) }
         }
         actions.forward?.let { entry("Forward") { it(message) } }
+        actions.forwardFile?.let { entry("Forward as attachment") { it(message) } }
         actions.markRead?.let {
             entry(if (message.seen) "Mark unread" else "Mark read") { it(message, !message.seen) }
         }
@@ -6136,6 +6177,8 @@ private fun RowMenu(message: Summary, actions: RowActions, open: Boolean, onClos
 internal data class RowActions(
     val reply: ((Summary, all: Boolean) -> Unit)? = null,
     val forward: ((Summary) -> Unit)? = null,
+    /** The original attached as a file, rather than quoted. */
+    val forwardFile: ((Summary) -> Unit)? = null,
     val archive: ((Summary) -> Unit)? = null,
     val junk: ((Summary) -> Unit)? = null,
     /** Out of Junk again, offered on a row that is in it. */
@@ -6290,6 +6333,8 @@ internal fun Message(
     /** True while a field in here has focus, so a bare letter is not read as a shortcut. */
     onTyping: (Boolean) -> Unit = {},
     onForward: () -> Unit = {},
+    /** The original attached as a .eml, rather than quoted. */
+    onForwardFile: () -> Unit = {},
     actions: MessageActions = MessageActions(),
     summarise: SummariseActions? = null,
     attachments: List<Attachment> = emptyList(),
@@ -6331,6 +6376,8 @@ internal fun Message(
      */
     externalScroll: ScrollState? = null,
     onLink: (String) -> Unit,
+    /** Bytes for an image that was not already fetched with the body, for a preview. */
+    onLoadImage: (suspend (Attachment) -> ImageBitmap?)? = null,
 ) {
     val linkColor = MaterialTheme.colorScheme.primary
     val quoteColor = MaterialTheme.colorScheme.outline
@@ -6431,6 +6478,45 @@ internal fun Message(
     }
     /** The pictures the body puts on screen itself. Everything else the message brought is a file. */
     val shown = remember(body) { citedCids(body?.html) }
+    // Files the body did not already draw. The invitation card is the .ics, so that
+    // part is not listed again underneath it.
+    val fileList = attachments
+        .filter { cidKey(it.cid) !in shown }
+        .filter { invitation == null || !it.type.equals("text/calendar", ignoreCase = true) }
+    // The nested viewer keeps the list where it has always been. The setting is for
+    // the ordinary reading view only.
+    val attachmentsBeside = !readOnly && Settings.attachmentPosition() == "beside"
+    val messageScope = rememberCoroutineScope()
+    var preview by remember { mutableStateOf<Pair<Attachment, ImageBitmap>?>(null) }
+    fun bitmapOf(bytes: ByteArray): ImageBitmap? =
+        runCatching { Image.makeFromEncoded(bytes).toComposeImageBitmap() }.getOrNull()
+    fun openFile(attachment: Attachment) {
+        val nested = onOpenMessage?.takeIf { isAttachedMessage(attachment.type) }
+        if (nested != null) {
+            nested(attachment)
+            return
+        }
+        val wantsPreview = Settings.attachmentClickBehavior() == "preview" &&
+            fileGlyph(attachment.type) == FileGlyph.IMAGE
+        if (!wantsPreview) {
+            onDownload(attachment)
+            return
+        }
+        val ready = images[attachment.blobId] ?: imageBytes[attachment.blobId]?.let(::bitmapOf)
+        if (ready != null) {
+            preview = attachment to ready
+            return
+        }
+        val load = onLoadImage
+        if (load == null) {
+            onDownload(attachment)
+            return
+        }
+        messageScope.launch {
+            val bitmap = load(attachment)
+            if (bitmap != null) preview = attachment to bitmap else onDownload(attachment)
+        }
+    }
     // The body refers to a picture it carries by its Content-ID, not by its blob, so the
     // two have to be joined up before anything can be drawn in place.
     val carried = remember(attachments, images) {
@@ -6495,6 +6581,7 @@ internal fun Message(
                     OutlinedButton(onClick = { onReply(true) }, enabled = body != null) { Text("Reply all") }
                 }
                 OutlinedButton(onClick = onForward, enabled = body != null) { Text("Forward") }
+                OutlinedButton(onClick = onForwardFile, enabled = body != null) { Text("Forward as attachment") }
                 Spacer(Modifier.weight(1f))
                 actions.archive?.let { OutlinedButton(onClick = it) { Text("Archive") } }
                 /*
@@ -6855,6 +6942,11 @@ internal fun Message(
                         }
                     }
 
+                    if (attachmentsBeside && fileList.isNotEmpty()) {
+                        Spacer(Modifier.height(10.dp))
+                        FileRows(fileList, ::openFile, images, savedTo, onOpenMessage)
+                    }
+
                     /*
                      * Who else got it, and everything else on request.
                      *
@@ -7161,74 +7253,123 @@ internal fun Message(
                     }
                     }
 
-                    // Only the ones the body did not already put on screen, which is the ones
-                    // it actually refers to rather than the ones that happen to have a
-                    // Content-ID. See [citedCids]: Outlook gives one to every part.
-                    val files = attachments
-                        .filter { cidKey(it.cid) !in shown }
-                        // The card above is the invitation. Listing invite.ics underneath it
-                        // offers somebody a file whose entire content is already on screen.
-                        .filter { invitation == null || !it.type.equals("text/calendar", ignoreCase = true) }
-                    if (files.isNotEmpty()) {
+                    // Under the body, unless the reader asked for the list beside the sender.
+                    // A nested message keeps it here either way.
+                    if (!attachmentsBeside && fileList.isNotEmpty()) {
                         Spacer(Modifier.height(24.dp))
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         Spacer(Modifier.height(14.dp))
-                        files.forEach { attachment ->
-                            Row(
-                                Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                /*
-                                 * A picture is shown, not just named. The bytes are already
-                                 * here and already decoded, because a part with a Content-ID
-                                 * is fetched with the body whether the body draws it or not,
-                                 * so this costs a draw call. A screenshot somebody sent is
-                                 * recognisable from it, and "Screenshot 2026-09-19 at
-                                 * 10.44.51 AM.png" is not.
-                                 */
-                                FileMark(
-                                    name = safeFileName(attachment.name),
-                                    type = attachment.type,
-                                    picture = images[attachment.blobId],
-                                    glyphForImage = false,
-                                )
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        // The name a sender chose is shown as the name it will be
-                                        // saved under, so the two can never disagree.
-                                        safeFileName(attachment.name),
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    Text(
-                                        humanSize(attachment.size),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.outline,
-                                    )
-                                }
-                                val openNested = onOpenMessage?.takeIf { isAttachedMessage(attachment.type) }
-                                TextButton(
-                                    onClick = {
-                                        if (openNested != null) openNested(attachment) else onDownload(attachment)
-                                    },
-                                ) { Text(if (openNested != null) "Open" else "Save") }
-                            }
-                        }
-                        if (savedTo != null) {
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                "Saved to $savedTo",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.outline,
-                            )
-                        }
+                        FileRows(fileList, ::openFile, images, savedTo, onOpenMessage)
                     }
                     Spacer(Modifier.height(40.dp))
                 }
                 }
             }
         }
+        preview?.let { (attachment, bitmap) ->
+            Box(
+                Modifier.matchParentSize()
+                    .background(Color.Black.copy(alpha = 0.35f))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {},
+                    ),
+            ) {
+                Surface(
+                    Modifier.align(Alignment.Center).padding(32.dp),
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.surface,
+                    shadowElevation = 12.dp,
+                ) {
+                    Column(
+                        Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Image(
+                            bitmap,
+                            contentDescription = safeFileName(attachment.name),
+                            modifier = Modifier.sizeIn(maxWidth = 720.dp, maxHeight = 520.dp),
+                            contentScale = ContentScale.Fit,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row {
+                            TextButton(onClick = { onDownload(attachment) }) { Text("Save") }
+                            TextButton(onClick = { preview = null }) { Text("Close") }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * One file on a message: what it is, what it is called, and Save, Open, or Preview.
+ *
+ * The same rows wherever the list is drawn. Open is a forwarded message. Preview is an
+ * image when that is what a click is set to do. Everything else saves.
+ */
+@Composable
+private fun FileRows(
+    files: List<Attachment>,
+    onOpen: (Attachment) -> Unit,
+    images: Map<String, ImageBitmap>,
+    savedTo: String?,
+    onOpenMessage: ((Attachment) -> Unit)?,
+) {
+    files.forEach { attachment ->
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            /*
+             * A picture is shown, not just named. The bytes are already here and already
+             * decoded when the body carried them, so this costs a draw call. A screenshot
+             * somebody sent is recognisable from it, and a long camera filename is not.
+             */
+            FileMark(
+                name = safeFileName(attachment.name),
+                type = attachment.type,
+                picture = images[attachment.blobId],
+                glyphForImage = false,
+            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    // The name a sender chose is shown as the name it will be saved under,
+                    // so the two can never disagree.
+                    safeFileName(attachment.name),
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    humanSize(attachment.size),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+            val openNested = onOpenMessage?.takeIf { isAttachedMessage(attachment.type) }
+            val previewLabel = Settings.attachmentClickBehavior() == "preview" &&
+                fileGlyph(attachment.type) == FileGlyph.IMAGE
+            TextButton(onClick = { onOpen(attachment) }) {
+                Text(
+                    when {
+                        openNested != null -> "Open"
+                        previewLabel -> "Preview"
+                        else -> "Save"
+                    },
+                )
+            }
+        }
+    }
+    if (savedTo != null) {
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Saved to $savedTo",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline,
+        )
     }
 }
 

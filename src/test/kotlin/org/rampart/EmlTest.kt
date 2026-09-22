@@ -2,6 +2,7 @@ package org.rampart
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -102,6 +103,21 @@ class EmlTest {
         // Non-ISO 8601 receivedAt leaves prefix blank
         assertEquals("Hello.eml", emlName("Hello", "not-a-date"))
         assertEquals("message.eml", emlName("   ", "not-a-date"))
+    }
+
+    @Test
+    fun `a forwarded message is named from the subject and the date`() {
+        assertEquals(
+            "Fwd - the quote - 2026-09-17.eml",
+            forwardEmlName("the quote", "2026-09-17T09:00:00Z"),
+        )
+        assertEquals("Fwd - message - undated.eml", forwardEmlName("   ", "not-a-date"))
+        val hostile = forwardEmlName("../../etc/passwd", "2026-09-17T09:00:00Z")
+        assertEquals("passwd - 2026-09-17.eml", hostile)
+        assertFalse(hostile.contains('/'))
+        assertFalse(hostile.contains('\\'))
+        val punctuated = forwardEmlName("Hello: <World>*", "2026-09-17T09:00:00Z")
+        assertEquals("Fwd - Hello World - 2026-09-17.eml", punctuated)
     }
 
     @Test
