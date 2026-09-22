@@ -1043,7 +1043,14 @@ private fun Reader(
     var tintRows by remember { mutableStateOf(Settings.tintRowsByTag()) }
     var undoBarSeconds by remember { mutableStateOf(Settings.undoBarSeconds()) }
     var loader by remember { mutableStateOf(Loader.of(Settings.loader())) }
-    var pendingTrack: Tracked? = null
+    /*
+     * What is waiting to go out, so a Drafts row can say when. The file is the
+     * record. This is only so the list does not re-read that file for every row
+     * on every recomposition. It is written again whenever the file changes.
+     */
+    var scheduledSends by remember { mutableStateOf(ScheduledSends.pending()) }
+    // Ids currently in [deliverNow], so the minute poll and Send now cannot both send one message.
+    val firing = remember { mutableSetOf<String>() }
     var trackingServer by remember { mutableStateOf(Settings.trackingServer()) }
     /** The meeting this message is about, when it is about one. */
     var invitation by remember { mutableStateOf<Invitation?>(null) }
@@ -2528,6 +2535,186 @@ private fun Reader(
         }
     }
 
+    /**
+     * Sends [draft] the way the Send button does, without touching the compose window.
+     *
+     * The tracking id is minted here, at the last moment, and never in the composer.
+     * A draft that is edited and saved five times would otherwise carry five ids, or
+     * the same id on two different messages if it were copied. Minting on the way out
+     * means one id belongs to exactly one message that actually went. The Message-ID
+     * is minted with it, because a tracked message keeps a different object in Sent
+     * from the one that was sent and the two have to agree or the reply threads
+     * against nothing.
+     *
+     * Success and failure come back as a result. The compose window decides what to
+     * do with that. A scheduled send has no window open, and it makes the same call.
+     */
+    suspend fun deliverNow(
+        account: Session,
+        draft: Draft,
+        identity: Identity,
+        draftsId: String,
+        sentId: String?,
+        draftId: String?,
+        key: String,
+    ): Result<Unit> = tried {
+        val trackingBase = Settings.trackingServer()
+        var tracked: Tracked? = null
+        val outgoing = if (!draft.tracked || trackingBase.isBlank()) {
+            draft
+        } else {
+            val id = newTrackingId()
+            draft.copy(
+                trackingPixel = pixelHtml(trackingBase, id),
+                messageId = newTrackingId() + "@" + (domainOf(identity.email).ifBlank { "rampart.invalid" }),
+            ).also { ready ->
+                tracked = Tracked(
+                    id = id,
+                    messageId = ready.messageId.orEmpty(),
+                    account = key,
+                    recipient = draft.recipients.firstOrNull().orEmpty(),
+                    subject = draft.subject,
+                    sentAt = Instant.now(),
+                )
+            }
+        }
+        // Measured from here, not from an undo wait the caller may have done first:
+        // that pause is deliberate, not server latency, and counting it would make
+        // every send look exactly [Settings.undoSeconds] slower than it was.
+        Diagnostics.time(Metric.SEND_COMPOSE_TO_SENT) {
+            withContext(Dispatchers.IO) {
+                account.jmap.send(outgoing, identity, draftsId, sentId)
+                // Written down only once it has actually gone. A tracked id for a
+                // message that failed to send would sit in the list forever waiting
+                // for an open that cannot come.
+                tracked?.let { account.store?.track(it) }
+                // The sent message is its own copy in Sent, so the working copy in
+                // Drafts is now a duplicate of mail already gone.
+                draftId?.let { runCatching { account.jmap.destroy(listOf(it)) } }
+            }
+        }
+        // Who you write to counts for more than who writes to you, so a sent
+        // message is the strongest signal the book gets. Remembered by domain, so
+        // the next message to the same place starts with the same answer rather
+        // than asking again.
+        draft.recipients.firstOrNull()?.let {
+            Settings.rememberTracking(trackingDomain(it), draft.tracked)
+        }
+        var book = books[key] ?: AddressBook.read(AddressBook.file(key))
+        draft.recipients.forEach { book = noted(book, it) }
+        books = books + (key to book)
+        runCatching { AddressBook.write(book, AddressBook.file(key)) }
+        Unit
+    }.also { result ->
+        result.onFailure { thrown ->
+            Diagnostics.event(Metric.SEND_FAILURE, sendFailureCategoryOf(thrown))
+        }
+    }
+
+    /**
+     * Sends one scheduled message, if its account is open and ready.
+     *
+     * Null means skipped: the account is not signed in, its folders have not
+     * arrived yet, or a send of this same message is already in flight. None of
+     * those cancel the schedule. A failure is a result, and the schedule stays
+     * so the next pass can try again.
+     */
+    suspend fun fireOne(item: ScheduledSend): Result<Unit>? {
+        if (!firing.add(item.id)) return null
+        try {
+            val account = sessions.firstOrNull { it.key == item.account } ?: return null
+            val identity = identities[item.account].orEmpty()
+                .firstOrNull { it.email.equals(item.identityEmail, ignoreCase = true) }
+                ?: identities[item.account].orEmpty().firstOrNull()
+                ?: return null
+            val boxes = mailboxes[item.account].orEmpty()
+            val drafts = folderFor("drafts", boxes) ?: return null
+            val result = deliverNow(
+                account,
+                item.draft,
+                identity,
+                drafts.id,
+                folderFor("sent", boxes)?.id,
+                item.draftId,
+                item.account,
+            )
+            // Dropped before this function returns, so a second pass cannot
+            // start another send of a message that has already gone.
+            if (result.isSuccess) ScheduledSends.cancel(item.id)
+            return result
+        } finally {
+            firing.remove(item.id)
+        }
+    }
+
+    /*
+     * Fires anything whose time has come, for accounts that are signed in.
+     *
+     * This server advertises submission with maxDelayedSend of zero, so JMAP's
+     * own future sendAt is refused. Rampart holds the message and sends it
+     * itself. The message is already in Drafts. This only decides when.
+     *
+     * If Rampart is not running when the time arrives, nothing sends until the
+     * next time it is opened. A message can go out late. If Rampart is never
+     * opened again, the draft sits in Drafts until somebody sends it by hand.
+     * It does not disappear.
+     *
+     * An account that is not signed in is skipped, not cancelled, and is tried
+     * again whenever that account is open. A send that fails is left in the
+     * list and tried again on the next pass.
+     */
+    suspend fun fireDue() {
+        var sentAny = false
+        var problem: String? = null
+        try {
+            for (item in ScheduledSends.due()) {
+                if (sessions.none { it.key == item.account }) continue
+                when (val outcome = fireOne(item)) {
+                    null -> Unit
+                    else -> if (outcome.isSuccess) {
+                        if (selected?.id == item.draftId) selected = null
+                        sentAny = true
+                    } else {
+                        outcome.exceptionOrNull()?.let { thrown ->
+                            problem = "A scheduled message could not be sent: ${whyFailed(thrown)}. " +
+                                "It is still in Drafts and will be tried again."
+                        }
+                    }
+                }
+            }
+            if (sentAny) refreshNow()
+            problem?.let { if (error.isBlank()) error = it }
+        } finally {
+            scheduledSends = ScheduledSends.pending()
+        }
+    }
+
+    /** Send a scheduled draft now, from its row in Drafts. */
+    fun sendScheduledNow(message: Summary) {
+        val item = ScheduledSends.pending().firstOrNull { it.draftId == message.id } ?: return
+        scope.launch {
+            when (val outcome = fireOne(item)) {
+                null -> Unit
+                else -> if (outcome.isSuccess) {
+                    if (selected?.id == item.draftId) selected = null
+                    scheduledSends = ScheduledSends.pending()
+                    refreshNow()
+                } else {
+                    outcome.exceptionOrNull()?.let { thrown ->
+                        error = "That message could not be sent: ${whyFailed(thrown)}. It is still scheduled."
+                    }
+                }
+            }
+        }
+    }
+
+    /** Drop the schedule. The draft stays in Drafts, as an ordinary draft. */
+    fun cancelScheduled(message: Summary) {
+        val item = ScheduledSends.pending().firstOrNull { it.draftId == message.id } ?: return
+        ScheduledSends.cancel(item.id)
+        scheduledSends = ScheduledSends.pending()
+    }
+
     /*
      * Its own round rather than a line inside the poll above, because a local function
      * cannot be called before it is declared and the poll is written further up.
@@ -2535,10 +2722,31 @@ private fun Reader(
      * A minute is as often as it is worth asking: the messages here are ones somebody
      * deliberately put down, so a minute either way is nothing, and the folder shows what is
      * due in the meantime.
+     *
+     * The body runs once immediately, so a message whose time passed while Rampart
+     * was closed goes on this open rather than a minute later. Folders and identities
+     * arrive in their own effect, a moment after sign-in. While a due message is
+     * waiting on those, this looks again each second, up to half a minute, and then
+     * settles into the usual minute. Nothing scheduled means no extra wait, so the
+     * snooze check is not slowed for anyone who never schedules a message.
      */
     LaunchedEffect(sessions) {
+        var waited = 0
+        var gaveUp = false
         while (true) {
+            val notReady = !gaveUp && ScheduledSends.due().any { item ->
+                sessions.any { it.key == item.account } &&
+                    (mailboxes[item.account] == null || identities[item.account] == null)
+            }
+            if (notReady && waited < 30) {
+                waited++
+                delay(1_000)
+                continue
+            }
+            if (notReady) gaveUp = true
+            waited = 0
             sessions.forEach { runCatching { wakeSnoozed(it.key) } }
+            runCatching { fireDue() }
             delay(60_000)
         }
     }
@@ -3024,6 +3232,8 @@ private fun Reader(
         star = ::starOne,
         markRead = ::markRead,
         filter = { message -> filterFor = message },
+        sendScheduled = ::sendScheduledNow,
+        cancelScheduled = ::cancelScheduled,
     )
 
     /**
@@ -3625,11 +3835,10 @@ private fun Reader(
                          * The pause before it goes, held here rather than asked of the
                          * server.
                          *
-                         * Scheduled send is not possible against this server: it advertises
-                         * submission with no maxDelayedSend, which per RFC 8621 means zero,
-                         * so a future sendAt is refused. Holding it in the client is the
-                         * only version of undo that works, and it is the version every
-                         * webmail actually uses.
+                         * The server advertises submission with maxDelayedSend of zero, which
+                         * per RFC 8621 means a future sendAt is refused. The pause before a
+                         * send has to be held here. A scheduled send is the same constraint
+                         * on a longer clock: Rampart fires it, because the server will not.
                          *
                          * Cancelling is a plain flag rather than cancelling the coroutine,
                          * because the window is the easy part and what matters is that
@@ -3651,71 +3860,68 @@ private fun Reader(
                                 return@launch
                             }
                         }
-                        /*
-                         * The tracking id is minted here, at the last moment, and never in
-                         * the composer.
-                         *
-                         * A draft that is edited and saved five times would otherwise carry
-                         * five ids, or the same id on two different messages if it were
-                         * copied. Minting on the way out means one id belongs to exactly one
-                         * message that actually went.
-                         *
-                         * The Message-ID is minted with it, because a tracked message keeps
-                         * a different object in Sent from the one that was sent and the two
-                         * have to agree or the reply threads against nothing.
-                         */
-                        val trackingBase = Settings.trackingServer()
-                        val outgoing = if (!draft.tracked || trackingBase.isBlank()) {
-                            draft
-                        } else {
-                            val id = newTrackingId()
-                            draft.copy(
-                                trackingPixel = pixelHtml(trackingBase, id),
-                                messageId = newTrackingId() + "@" + (domainOf(identity.email).ifBlank { "rampart.invalid" }),
-                            ).also { ready ->
-                                pendingTrack = Tracked(
-                                    id = id,
-                                    messageId = ready.messageId.orEmpty(),
-                                    account = key,
-                                    recipient = draft.recipients.firstOrNull().orEmpty(),
-                                    subject = draft.subject,
-                                    sentAt = Instant.now(),
-                                )
-                            }
-                        }
                         try {
-                            // Measured from here, not from the undo wait above: that pause is
-                            // deliberate UX, not server latency, and counting it would make
-                            // every send look exactly [Settings.undoSeconds] slower than it was.
-                            Diagnostics.time(Metric.SEND_COMPOSE_TO_SENT) {
-                                withContext(Dispatchers.IO) {
-                                    account.jmap.send(outgoing, identity, drafts.id, folderFor("sent", boxes)?.id)
-                                    // Written down only once it has actually gone. A tracked id
-                                    // for a message that failed to send would sit in the list
-                                    // forever waiting for an open that cannot come.
-                                    pendingTrack?.let { account.store?.track(it) }
-                                    // The sent message is its own copy in Sent, so the working
-                                    // copy in Drafts is now a duplicate of mail already gone.
-                                    draftId?.let { runCatching { account.jmap.destroy(listOf(it)) } }
-                                }
+                            val result = deliverNow(
+                                account,
+                                draft,
+                                identity,
+                                drafts.id,
+                                folderFor("sent", boxes)?.id,
+                                draftId,
+                                key,
+                            )
+                            if (result.isSuccess) {
+                                composing = null
+                                draftId = null
+                            } else {
+                                result.exceptionOrNull()?.let { sendError = whyFailed(it) }
                             }
-                            // Who you write to counts for more than who writes to you,
-                            // so a sent message is the strongest signal the book gets.
-                            // Remembered by domain, so the next message to the same place
-                            // starts with the same answer rather than asking again.
-                            draft.recipients.firstOrNull()?.let {
-                                Settings.rememberTracking(trackingDomain(it), draft.tracked)
+                        } finally {
+                            sending = false
+                        }
+                    }
+                }
+            },
+            onSchedule = { draft, sendAt ->
+                val key = writingAccount()
+                val account = key?.let(::session)
+                val boxes = mailboxes[key].orEmpty()
+                val drafts = folderFor("drafts", boxes)
+                val identity = identities[key].orEmpty().firstOrNull { it.email.equals(draft.from, true) }
+                    ?: identities[key].orEmpty().firstOrNull()
+                when {
+                    account == null -> sendError = "Pick an account first."
+                    identity == null -> sendError = "This account has no identity to send from."
+                    drafts == null -> sendError = "This account has no Drafts folder, and the message is written there before it is sent."
+                    else -> scope.launch {
+                        // Same flag as Send, so an autosave already waiting out its
+                        // debounce is cancelled instead of landing after this draft
+                        // has been put away for later.
+                        sending = true
+                        sendError = null
+                        try {
+                            val id = withContext(Dispatchers.IO) {
+                                account.jmap.saveDraft(draft, identity, drafts.id, draftId)
                             }
-                            pendingTrack = null
-                            var book = books[key] ?: AddressBook.read(AddressBook.file(key))
-                            draft.recipients.forEach { book = noted(book, it) }
-                            books = books + (key to book)
-                            runCatching { AddressBook.write(book, AddressBook.file(key)) }
+                            // Point the next save at the copy that now exists, even if
+                            // recording the schedule fails. The old id was destroyed
+                            // as part of the save.
+                            draftId = id
+                            ScheduledSends.schedule(
+                                ScheduledSend(
+                                    id = java.util.UUID.randomUUID().toString(),
+                                    account = key,
+                                    draftId = id,
+                                    identityEmail = identity.email,
+                                    draft = draft,
+                                    sendAt = sendAt,
+                                ),
+                            )
+                            scheduledSends = ScheduledSends.pending()
                             composing = null
                             draftId = null
                         } catch (e: Exception) {
                             sendError = whyFailed(e)
-                            Diagnostics.event(Metric.SEND_FAILURE, sendFailureCategoryOf(e))
                         } finally {
                             sending = false
                         }
@@ -4159,6 +4365,7 @@ private fun Reader(
                 order = order,
                 onOrder = { order = it; Settings.setOrder(it) },
                 rowActions = rowActions,
+                scheduled = scheduledSends.associate { it.draftId to it.sendAt },
                 filters = quick,
                 onFilters = { next ->
                     quick = next
@@ -5582,6 +5789,8 @@ internal fun MessageList(
     onOrder: (Order) -> Unit = {},
     /** What a right-click or a hover button on a row can do. */
     rowActions: RowActions = RowActions(),
+    /** Drafts waiting for a time, by message id, as epoch millis. */
+    scheduled: Map<String, Long> = emptyMap(),
     /** Dragging a row onto a tag. See [MessageRow]. */
     onDrag: ((Summary, Offset?) -> Unit)? = null,
     /**
@@ -5757,6 +5966,7 @@ internal fun MessageList(
                             accountLabel = accountLabels[message.account],
                             actions = rowActions,
                             showHover = showHover,
+                            scheduledAt = scheduled[message.id],
                             onDrag = onDrag,
                             onSelect = onSelect,
                         )
@@ -5787,6 +5997,8 @@ private fun MessageRow(
     accountLabel: String? = null,
     actions: RowActions = RowActions(),
     showHover: Boolean = false,
+    /** When this draft is due to be sent, or null when it is an ordinary message. */
+    scheduledAt: Long? = null,
     /**
      * Dragging the row onto a tag. Called with where the pointer is, in window
      * coordinates, and with null when the drag ends.
@@ -5872,7 +6084,7 @@ private fun MessageRow(
             .onPointerEvent(PointerEventType.Exit) { pointerOver = false }
             .height(IntrinsicSize.Min),
     ) {
-        RowMenu(message, actions, menu) { menu = false }
+        RowMenu(message, actions, menu, scheduledAt != null) { menu = false }
         // A 2px edge rather than a fully tinted row: it marks the selection without
         // competing with the unread dot for the same piece of attention.
         Box(
@@ -6007,7 +6219,19 @@ private fun MessageRow(
              * sentence the code was found in.
              */
             val code = remember(message.id) { oneTimeCode(message.subject, message.preview) }
-            if (code != null) {
+            // The preview of a scheduled draft is whatever was typed. When it will
+            // go is the thing the row has to say, in the same place.
+            if (scheduledAt != null) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "Scheduled for ${Instant.ofEpochMilli(scheduledAt).toString().asLocalTime()}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = 13.dp),
+                )
+            } else if (code != null) {
                 val clipboard = LocalClipboardManager.current
                 Spacer(Modifier.height(3.dp))
                 Row(
@@ -6128,7 +6352,13 @@ private val HOVER_SLOT = 78.dp
  * under the pointer cannot delete something on the way past.
  */
 @Composable
-private fun RowMenu(message: Summary, actions: RowActions, open: Boolean, onClose: () -> Unit) {
+private fun RowMenu(
+    message: Summary,
+    actions: RowActions,
+    open: Boolean,
+    scheduled: Boolean = false,
+    onClose: () -> Unit,
+) {
     DropdownMenu(expanded = open, onDismissRequest = onClose) {
         // Closing before acting, so the menu is gone by the time the list under it changes.
         @Composable
@@ -6141,6 +6371,11 @@ private fun RowMenu(message: Summary, actions: RowActions, open: Boolean, onClos
                 does()
             },
         )
+        if (scheduled && (actions.sendScheduled != null || actions.cancelScheduled != null)) {
+            actions.sendScheduled?.let { send -> entry("Send now") { send(message) } }
+            actions.cancelScheduled?.let { drop -> entry("Cancel") { drop(message) } }
+            HorizontalDivider()
+        }
         actions.reply?.let {
             entry("Reply") { it(message, bareReplyAll(Settings.defaultReplyAll(), false)) }
             entry("Reply all") { it(message, true) }
@@ -6192,6 +6427,10 @@ internal data class RowActions(
     val snooze: ((Summary, SnoozeUntil) -> Unit)? = null,
     /** A filter described from this message. Null where the row does not offer one. */
     val filter: ((Summary) -> Unit)? = null,
+    /** Send a scheduled draft immediately. Shown only on a row that is scheduled. */
+    val sendScheduled: ((Summary) -> Unit)? = null,
+    /** Leave the draft in Drafts and forget the time. */
+    val cancelScheduled: ((Summary) -> Unit)? = null,
 )
 
 /**

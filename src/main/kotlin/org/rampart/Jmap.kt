@@ -1,5 +1,6 @@
 package org.rampart
 
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -116,6 +117,7 @@ data class Identity(
     val htmlSignature: String = "",
 )
 
+@Serializable
 data class Attachment(
     val blobId: String,
     val name: String,

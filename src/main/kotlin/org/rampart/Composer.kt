@@ -5,6 +5,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -79,6 +80,10 @@ import java.nio.file.Path
 import kotlinx.coroutines.CancellationException
 import java.awt.Desktop
 import java.net.URI
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
+import java.util.Locale
+import kotlinx.serialization.Serializable
 
 /**
  * A message on its way out, in the terms the writer used: addresses as they typed them,
@@ -89,6 +94,7 @@ import java.net.URI
  * keeping the boundary here is what lets the composer be drawn and reviewed without a
  * server.
  */
+@Serializable
 data class Draft(
     val from: String,
     val to: String = "",
@@ -375,6 +381,12 @@ internal fun Composer(
     account: String? = null,
     /** The folder [replyContext] was read from, for the same check. */
     folder: String? = null,
+    /**
+     * Hold the message and send it later, instead of now.
+     *
+     * Null hides the control, so a caller that only sends is unchanged.
+     */
+    onSchedule: ((Draft, sendAt: Long) -> Unit)? = null,
 ) {
     var draft by remember(initial) { mutableStateOf(initial) }
     /*
@@ -418,6 +430,10 @@ internal fun Composer(
     var previews by remember { mutableStateOf<Map<String, ImageBitmap>>(emptyMap()) }
     var attachError by remember(initial) { mutableStateOf<String?>(null) }
     var warning by remember(initial) { mutableStateOf<String?>(null) }
+    /** The time a warning is asking about, or null when the warning is for Send. */
+    var heldSendAt by remember(initial) { mutableStateOf<Long?>(null) }
+    var scheduleMenu by remember { mutableStateOf(false) }
+    var showSchedule by remember { mutableStateOf(false) }
     var showPromptBar by remember { mutableStateOf(false) }
     var prompt by remember { mutableStateOf("") }
     var running by remember { mutableStateOf(false) }
@@ -469,7 +485,11 @@ internal fun Composer(
      * a refusal: a client that will not send a message with no subject is one people learn
      * to fight, and the fight is won by turning the warnings off.
      */
-    fun send() {
+    /*
+     * Both Send and Schedule ask the same questions first. A missing subject is
+     * still worth asking about when the message will not go for an hour.
+     */
+    fun askThen(sendAt: Long?, go: () -> Unit) {
         if (sending || draft.recipients.isEmpty()) return
         val question = askBeforeSend(
             draft.subject,
@@ -477,8 +497,17 @@ internal fun Composer(
             draft.attachments.size,
             Settings.confirmBeforeSend(),
         )
-        if (question == null) onSend(draft) else warning = question
+        if (question == null) {
+            go()
+        } else {
+            heldSendAt = sendAt
+            warning = question
+        }
     }
+
+    fun send() = askThen(null) { onSend(draft) }
+
+    fun schedule(at: Long) = askThen(at) { onSchedule?.invoke(draft, at) }
 
     /*
      * Every change to the body goes through one of these three, which is what lets undo and
@@ -690,10 +719,36 @@ internal fun Composer(
                     // maxLines = 1 on every label in this row: none of them had it, so at a
                     // dragged-narrow panel width Compose was free to wrap each one, Send
                     // included, one letter per line instead of just crowding the row.
-                    Button(
-                        onClick = ::send,
-                        enabled = !sending && draft.recipients.isNotEmpty(),
-                    ) { Text(if (sending) "Sending" else "Send", maxLines = 1) }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Button(
+                            onClick = ::send,
+                            enabled = !sending && draft.recipients.isNotEmpty(),
+                        ) { Text(if (sending) "Sending" else "Send", maxLines = 1) }
+                        if (onSchedule != null) {
+                            Box {
+                                IconButton(
+                                    onClick = { scheduleMenu = true },
+                                    enabled = !sending && draft.recipients.isNotEmpty(),
+                                    modifier = Modifier.size(40.dp),
+                                ) {
+                                    Icon(
+                                        RampartIcons.Expand,
+                                        contentDescription = "Schedule send",
+                                        modifier = Modifier.size(16.dp).rotate(90f),
+                                    )
+                                }
+                                DropdownMenu(scheduleMenu, onDismissRequest = { scheduleMenu = false }) {
+                                    DropdownMenuItem(
+                                        text = { Text("Schedule...") },
+                                        onClick = {
+                                            scheduleMenu = false
+                                            showSchedule = true
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
             /*
@@ -1075,18 +1130,48 @@ internal fun Composer(
     }
 
     warning?.let { question ->
+        val scheduling = heldSendAt != null
         AlertDialog(
-            onDismissRequest = { warning = null },
+            onDismissRequest = {
+                warning = null
+                heldSendAt = null
+            },
             text = { Text(question) },
             confirmButton = {
                 TextButton(
                     onClick = {
+                        val at = heldSendAt
                         warning = null
-                        onSend(draft)
+                        heldSendAt = null
+                        if (at != null) onSchedule?.invoke(draft, at) else onSend(draft)
                     },
-                ) { Text(if (question == "Send this message?") "Send" else "Send anyway") }
+                ) {
+                    Text(
+                        when {
+                            scheduling && question == "Send this message?" -> "Schedule"
+                            scheduling -> "Schedule anyway"
+                            question == "Send this message?" -> "Send"
+                            else -> "Send anyway"
+                        },
+                    )
+                }
             },
-            dismissButton = { TextButton(onClick = { warning = null }) { Text("Go back") } },
+            dismissButton = {
+                TextButton(onClick = {
+                    warning = null
+                    heldSendAt = null
+                }) { Text("Go back") }
+            },
+        )
+    }
+
+    if (showSchedule) {
+        ScheduleDialog(
+            onDismiss = { showSchedule = false },
+            onConfirm = { at ->
+                showSchedule = false
+                schedule(at)
+            },
         )
     }
 
@@ -1244,6 +1329,115 @@ private fun Entry(
                 )
             }
         }
+    }
+}
+
+private val SCHEDULE_CLOCK: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("EEE d MMM, HH:mm", Locale.UK)
+
+/**
+ * A few named times, or a date and a clock the person types.
+ *
+ * The sentence at the top is the limitation, said where the choice is made: Rampart
+ * sends the message itself, so a time that arrives while it is closed waits until
+ * the next time it is opened. The draft is already in Drafts either way.
+ */
+@Composable
+private fun ScheduleDialog(onDismiss: () -> Unit, onConfirm: (Long) -> Unit) {
+    val now = remember { ZonedDateTime.now() }
+    val hour = remember(now) { inOneHour(now) }
+    val evening = remember(now) { thisEvening(now) }
+    val morning = remember(now) { tomorrowMorning(now) }
+    var date by remember { mutableStateOf("") }
+    var time by remember { mutableStateOf("") }
+    var problem by remember { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Schedule send") },
+        text = {
+            Column(Modifier.widthIn(min = 300.dp, max = 440.dp)) {
+                Text(
+                    "Rampart sends this when it is open. If it is closed at that time, " +
+                        "the message stays in Drafts until Rampart is opened again.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+                Spacer(Modifier.height(8.dp))
+                ScheduleChoice("In 1 hour", hour, onConfirm)
+                ScheduleChoice("This evening", evening, onConfirm)
+                ScheduleChoice("Tomorrow morning", morning, onConfirm)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Or a date and time",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+                Spacer(Modifier.height(6.dp))
+                ClockField(date, "yyyy-MM-dd") {
+                    date = it
+                    problem = null
+                }
+                Spacer(Modifier.height(6.dp))
+                ClockField(time, "HH:mm") {
+                    time = it
+                    problem = null
+                }
+                problem?.let {
+                    Spacer(Modifier.height(6.dp))
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                when (val parsed = parseSchedule(date, time, ZonedDateTime.now())) {
+                    is ScheduleWhen.At -> onConfirm(parsed.millis)
+                    is ScheduleWhen.Problem -> problem = parsed.message
+                }
+            }) { Text("Schedule") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun ScheduleChoice(label: String, at: ZonedDateTime, onPick: (Long) -> Unit) {
+    TextButton(onClick = { onPick(at.toInstant().toEpochMilli()) }, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(label)
+            Text(
+                at.format(SCHEDULE_CLOCK),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+    }
+}
+
+/** A one-line box, the same shape Settings uses, so a dialog does not invent a second kind. */
+@Composable
+private fun ClockField(value: String, hint: String, onChange: (String) -> Unit) {
+    Box(
+        Modifier.fillMaxWidth().height(36.dp)
+            .background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+    ) {
+        if (value.isEmpty()) {
+            Text(hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+        }
+        BasicTextField(
+            value = value,
+            onValueChange = onChange,
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 
