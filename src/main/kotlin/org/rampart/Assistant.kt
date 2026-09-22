@@ -94,6 +94,13 @@ object Assistant {
      */
     const val CHAT = "chat"
 
+    /**
+     * AI compose-drafting feature, modeled on Help me write.
+     *
+     * Its own agreement again, gating access to the AI drafting toolbar helper.
+     */
+    const val COMPOSE = "compose"
+
     /** Settings as saved, or the defaults, which are off. */
     fun config(): AssistantConfig {
         val saved = read()

@@ -3410,6 +3410,15 @@ private fun Reader(
      */
     @Composable
     fun ComposerPanel(composer: Draft) {
+        val key = writingAccount()
+        val currentSelected = selected
+        var replyContext by remember { mutableStateOf<List<Turn>>(emptyList()) }
+        LaunchedEffect(composer.replying, key, currentSelected) {
+            if (composer.replying && key != null && currentSelected != null) {
+                replyContext = runCatching { summariseTurns(key, currentSelected) }.getOrDefault(emptyList())
+            }
+        }
+
         Composer(
             identities = identities[writingAccount()]?.map { it.email }.orEmpty(),
             // The sign-off comes off the identity on the server, so one written in Bulwark
@@ -3420,6 +3429,9 @@ private fun Reader(
                 ?: composer,
             sending = sending,
             error = sendError,
+            replyContext = replyContext,
+            account = key,
+            folder = key?.let { currentFolderName(it) },
             onDiscard = {
                 // What was autosaved goes with it. Discard has to mean discarded, or the
                 // Drafts folder fills with messages somebody decided against.
