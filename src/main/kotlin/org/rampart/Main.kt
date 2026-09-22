@@ -160,6 +160,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import java.awt.Cursor
 import java.awt.Desktop
+import javax.swing.JOptionPane
 import java.net.URI
 import java.nio.file.Files
 import java.time.Instant
@@ -362,11 +363,56 @@ internal data class AccountMailboxes(
 )
 
 fun main() {
-    // Before anything is drawn, so a second copy costs a moment rather than a window.
-    if (!SingleInstance.claim()) return
-    // Before the first window, because it is read once when the scene is made.
-    enableWebBody()
-    application { Rampart() }
+    // Catches a startup crash on whichever thread it lands on, Swing's event thread
+    // included: a deferred Windows package update that half-applied is exactly the kind
+    // of thing that breaks composition on the first frame rather than in this function's
+    // own call stack. Without this, that failure was the window simply never appearing,
+    // with nothing recorded and nothing shown.
+    Thread.setDefaultUncaughtExceptionHandler { _, thrown -> reportStartupFailure(thrown) }
+    try {
+        // Before anything is drawn, so a second copy costs a moment rather than a window.
+        if (!SingleInstance.claim()) return
+        // Before the first window, because it is read once when the scene is made.
+        enableWebBody()
+        application { Rampart() }
+    } catch (thrown: Throwable) {
+        reportStartupFailure(thrown)
+    }
+}
+
+/**
+ * What Justin hit on 2026-09-21: a deferred update applied at close, the swap did not go
+ * cleanly, and the next launch gave no window and no reason. This is the fallback for
+ * whatever of that is visible from inside the JVM at all: a package broken badly enough
+ * that Windows never starts this process is outside anything here, but a package broken
+ * just enough to start and then throw is not, and until now that case was just as silent.
+ *
+ * Plain AWT rather than Compose: whatever just failed may be the render pipeline itself,
+ * so the one thing allowed to fail here is Swing.
+ */
+private fun reportStartupFailure(thrown: Throwable) {
+    runCatching { Diagnostics.crash(thrown) }
+    val repair = JOptionPane.showConfirmDialog(
+        null,
+        "Rampart did not start.\n\n${thrown.message ?: thrown.javaClass.simpleName}\n\n" +
+            "This usually means an update did not finish installing. Reinstall the current version now?",
+        "Rampart",
+        JOptionPane.YES_NO_OPTION,
+        JOptionPane.ERROR_MESSAGE,
+    )
+    if (repair == JOptionPane.YES_OPTION) {
+        // Success ends with -ForceTargetApplicationShutdown ending this process, same as
+        // every other call to this from the update bar. Reaching the line after it is the
+        // failure case, and lastProblem is already a sentence by the time it is reached.
+        Updates.restartToUpdate()
+        JOptionPane.showMessageDialog(
+            null,
+            Updates.lastProblem ?: "The reinstall did not go in.",
+            "Rampart",
+            JOptionPane.ERROR_MESSAGE,
+        )
+    }
+    kotlin.system.exitProcess(1)
 }
 
 @Composable
