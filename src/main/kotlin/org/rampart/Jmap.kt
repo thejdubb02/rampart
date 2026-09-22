@@ -1122,8 +1122,16 @@ internal class Jmap private constructor(
                 if (replacing != null) putJsonArray("destroy") { add(replacing) }
             },
         )[0][1].jsonObject
-        return response["created"]?.jsonObject?.get("m")?.jsonObject?.get("id")?.str()
+        val id = response["created"]?.jsonObject?.get("m")?.jsonObject?.get("id")?.str()
             ?: throw JmapError(refusal(response, "notCreated", "The server would not store the draft"))
+        // The new draft is what matters, so a destroy that did not go through does not fail
+        // the save. But silently moving on is how one edited draft turns into several: a
+        // failure here is usually the transient kind, so one more attempt on its own, not
+        // batched with the create this time, catches most of what the first one missed.
+        if (replacing != null && response["destroyed"]?.jsonArray?.any { it.str() == replacing } != true) {
+            runCatching { call(invoke("Email/set", "dr") { putJsonArray("destroy") { add(replacing) } }) }
+        }
+        return id
     }
 
     override fun send(draft: Draft, identity: Identity, draftsMailboxId: String, sentMailboxId: String?) {
