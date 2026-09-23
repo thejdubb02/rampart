@@ -83,6 +83,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -3869,7 +3870,9 @@ private fun Reader(
             // is the one used here without anything having to be imported or kept in step.
             // Computed from the account captured when writing started, so a later change
             // of selection does not hand the composer a new initial draft.
-            initial = draftOpening(writing.draft, accountIdentities, Settings.signatureAboveQuote()),
+            // Remembered per session: the composer resets what has been typed whenever
+            // initial changes, and a refetched identity must not count as a change.
+            initial = remember(writing) { draftOpening(writing.draft, accountIdentities, Settings.signatureAboveQuote()) },
             sending = sending,
             error = sendError,
             replyContext = replyContext,
@@ -4708,7 +4711,8 @@ private fun Reader(
                     ),
             ) {
                 ComposerFrame(full = composeFull) {
-                    ComposerPanel(writing)
+                    // A new session is a new composer, even when its draft equals the last one.
+                    key(writing) { ComposerPanel(writing) }
                 }
                 /*
                  * The corner that moves. The panel is anchored bottom right, so the top

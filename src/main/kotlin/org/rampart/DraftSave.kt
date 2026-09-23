@@ -3,6 +3,7 @@ package org.rampart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -32,26 +33,10 @@ internal class DraftSaves(initialId: String? = null) {
      * Waiting for an earlier save is cancellable: this one has not started, and the one
      * ahead of it records its own id. Once this one holds [gate], it runs to the end.
      */
-    suspend fun save(block: suspend (replacing: String?) -> String): String {
-        gate.lock()
-        try {
-            return withContext(NonCancellable + Dispatchers.IO) {
-                val next = block(id)
-                id = next
-                next
-            }
-        } finally {
-            gate.unlock()
-        }
+    suspend fun save(block: suspend (replacing: String?) -> String): String = gate.withLock {
+        withContext(NonCancellable + Dispatchers.IO) { block(id).also { id = it } }
     }
 
     /** Waits until a [save] that already holds [gate] has finished, then returns [id]. */
-    suspend fun awaitIdle(): String? {
-        gate.lock()
-        try {
-            return id
-        } finally {
-            gate.unlock()
-        }
-    }
+    suspend fun awaitIdle(): String? = gate.withLock { id }
 }
