@@ -39,5 +39,23 @@ internal fun sorted(emails: List<Summary>, order: Order): List<Summary> = when (
 
 private val PREFIX = Regex("^\\s*((re|fw|fwd|aw|sv)\\s*(\\[\\d+])?\\s*:\\s*)+", RegexOption.IGNORE_CASE)
 
+/**
+ * Which row to open after the one at [index] leaves the list.
+ *
+ * The next row that is staying, in the order the list is already in. When this
+ * was the last row, the one above it. Nothing left means nothing selected. An
+ * index outside the list means the open row was not in this list.
+ */
+internal fun <T> nextInList(list: List<T>, index: Int, leaving: (T) -> Boolean = { false }): T? {
+    if (index !in list.indices) return null
+    for (i in index + 1 until list.size) {
+        if (!leaving(list[i])) return list[i]
+    }
+    for (i in index - 1 downTo 0) {
+        if (!leaving(list[i])) return list[i]
+    }
+    return null
+}
+
 /** A subject with its reply and forward prefixes taken off, lowercased for comparison. */
 internal fun bareSubject(subject: String): String = subject.replace(PREFIX, "").trim().lowercase()

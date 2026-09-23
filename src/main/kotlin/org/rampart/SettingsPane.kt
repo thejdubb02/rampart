@@ -802,7 +802,7 @@ private fun AccountsPage(
     Section("Accounts", "Signed in on this computer. Passwords stay in Windows, never in a file.")
     accounts.forEach { account ->
         Row(
-            Modifier.fillMaxWidth().padding(vertical = 6.dp),
+            Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).rowHover().padding(vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Avatar(account.name, account.email, 32.dp)

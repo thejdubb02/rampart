@@ -58,6 +58,10 @@ internal interface IconPack {
     val Sent: ImageVector
     val Trash: ImageVector
     val Folder: ImageVector
+
+    /** An arrow into a folder, for filing a message somewhere other than Archive. */
+    val Move: ImageVector
+
     val Write: ImageVector
     val Settings: ImageVector
     val Check: ImageVector
@@ -161,6 +165,10 @@ internal object LineIcons : IconPack {
     override val Sent = icon("Sent", "M16 2.6 8.4 10.2M16 2.6l-5 13-2.6-5.4L3 7.6Z")
     override val Trash = icon("Trash", "M2.8 4.8h12.4M7 4.8V3.2h4v1.6M4.4 4.8l.7 10a1.2 1.2 0 0 0 1.2 1.1h5.4a1.2 1.2 0 0 0 1.2-1.1l.7-10")
     override val Folder = icon("Folder", "M2.2 5.2A1.2 1.2 0 0 1 3.4 4h3.2l1.6 2h6.4a1.2 1.2 0 0 1 1.2 1.2v6.6A1.2 1.2 0 0 1 14.6 15H3.4a1.2 1.2 0 0 1-1.2-1.2Z")
+    override val Move = icon(
+        "Move",
+        "M2.8 8h6.2M6.4 5.2 9.2 8 6.4 10.8M2.4 11.2V14.2A1.2 1.2 0 0 0 3.6 15.4h10.8a1.2 1.2 0 0 0 1.2-1.2V6.4A1.2 1.2 0 0 0 14.4 5.2H8.4",
+    )
     override val Write = icon("Write", "m11.6 3.2 3.2 3.2M3 15l.7-3.2 8.2-8.2 3.2 3.2-8.2 8.2Z")
     override val Settings = icon(
         "Settings",
@@ -325,6 +333,7 @@ internal object HeavyIcons : IconPack by LineIcons {
     override val Sent by lazy { heavy(LineIcons.Sent) }
     override val Trash by lazy { heavy(LineIcons.Trash) }
     override val Folder by lazy { heavy(LineIcons.Folder) }
+    override val Move by lazy { heavy(LineIcons.Move) }
     override val Star by lazy { heavy(LineIcons.Star) }
     override val Bulb by lazy { heavy(LineIcons.Bulb) }
     override val BulbOn by lazy { heavy(LineIcons.BulbOn) }

@@ -44,10 +44,8 @@ internal fun MessageDetails(
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(28.dp)) {
             Column(Modifier.weight(1f)) {
                 Heading("Recipients and routing")
-                Line("From", listOfNotNull(
-                    summary.from.takeIf { it.isNotBlank() },
-                    summary.fromEmail.takeIf { it.isNotBlank() }?.let { "<$it>" },
-                ).joinToString(" "))
+                val (who, address) = displaySender(summary.from, summary.fromEmail)
+                Line("From", listOfNotNull(who.takeIf { it != "(no sender)" }, address?.let { "<$it>" }).joinToString(" "))
                 // Ordinary rather than alarming, which is why it lives here and not in a
                 // banner: every mailing list and every ticketing system sets one. It is
                 // still the address that would receive an answer, so it is worth being able

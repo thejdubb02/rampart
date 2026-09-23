@@ -382,6 +382,8 @@ internal fun Composer(
     initial: Draft,
     sending: Boolean,
     error: String?,
+    /** The technical line under [error], when the failure came from the server. */
+    errorDetail: String? = null,
     onDiscard: () -> Unit,
     onSend: (Draft) -> Unit,
     /** Writes the draft to the server. Null while there is nowhere to write it. */
@@ -452,10 +454,12 @@ internal fun Composer(
     var showCc by remember(initial) { mutableStateOf(initial.cc.isNotEmpty()) }
     var pickingIdentity by remember { mutableStateOf(false) }
     var saveState by remember(initial) { mutableStateOf("") }
+    var saveDetail by remember(initial) { mutableStateOf<String?>(null) }
     var attaching by remember(initial) { mutableStateOf(false) }
     /** Thumbnails of pictures picked from disk, by blob id. Not recomputed while typing. */
     var previews by remember { mutableStateOf<Map<String, ImageBitmap>>(emptyMap()) }
     var attachError by remember(initial) { mutableStateOf<String?>(null) }
+    var attachDetail by remember(initial) { mutableStateOf<String?>(null) }
     var warning by remember(initial) { mutableStateOf<String?>(null) }
     /** The time a warning is asking about, or null when the warning is for Send. */
     var heldSendAt by remember(initial) { mutableStateOf<Long?>(null) }
@@ -466,6 +470,7 @@ internal fun Composer(
     var running by remember { mutableStateOf(false) }
     var runningRefine by remember { mutableStateOf<String?>(null) }
     var aiError by remember { mutableStateOf<String?>(null) }
+    var aiDetail by remember { mutableStateOf<String?>(null) }
     var composePacket by remember { mutableStateOf<String?>(null) }
     var composeAgreed by remember { mutableStateOf(Assistant.agreed(Assistant.COMPOSE)) }
     val firstField = remember { FocusRequester() }
@@ -490,13 +495,16 @@ internal fun Composer(
         if (onSave == null || draft == initial || sending) return@LaunchedEffect
         delay(1200)
         saveState = "Saving"
+        saveDetail = null
         saveState = try {
             onSave(draft)
             "Saved"
         } catch (e: Exception) {
             // Said plainly and left on screen. A draft that silently failed to save is the
-            // one thing worse than no autosave at all.
-            "Not saved: ${whyFailed(e).ifBlank { "the server refused it" }}"
+            // one thing worse than no autosave at all. The server's own wording sits under
+            // the sentence, not in it.
+            saveDetail = faultDetail(e, "Could not save the draft.")
+            "Could not save the draft."
         }
     }
 
@@ -574,6 +582,7 @@ internal fun Composer(
         scope.launch {
             running = true
             aiError = null
+            aiDetail = null
             try {
                 val fullPacket = Llm.packet(config.model, ComposeDraft.system(), ComposeDraft.user(desc, replyContext))
                 val reply = withContext(Dispatchers.IO) {
@@ -582,7 +591,9 @@ internal fun Composer(
                 Assistant.record(Assistant.COMPOSE, reply.tokensIn, reply.tokensOut, config)
                 apply(TextFieldValue(reply.text))
             } catch (e: Exception) {
-                aiError = e.message ?: "The model could not be reached."
+                val title = "The assistant could not write that."
+                aiError = title
+                aiDetail = faultDetail(e, title)
             } finally {
                 running = false
             }
@@ -599,11 +610,13 @@ internal fun Composer(
         val why = Assistant.whyNot(Assistant.COMPOSE, config, account, folder)
         if (why != null) {
             aiError = why
+            aiDetail = null
             return
         }
         scope.launch {
             runningRefine = instruction
             aiError = null
+            aiDetail = null
             try {
                 val fullPacket = ComposeDraft.refinePacket(config.model, currentBody, instruction)
                 val reply = withContext(Dispatchers.IO) {
@@ -612,7 +625,9 @@ internal fun Composer(
                 Assistant.record(Assistant.COMPOSE, reply.tokensIn, reply.tokensOut, config)
                 apply(TextFieldValue(reply.text))
             } catch (e: Exception) {
-                aiError = e.message ?: "The model could not be reached."
+                val title = "The assistant could not write that."
+                aiError = title
+                aiDetail = faultDetail(e, title)
             } finally {
                 runningRefine = null
             }
@@ -673,12 +688,23 @@ internal fun Composer(
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (saveState.isNotEmpty()) {
-                        Text(
-                            saveState,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (saveState.startsWith("Not saved")) MaterialTheme.colorScheme.error
-                            else MaterialTheme.colorScheme.outline,
-                        )
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                saveState,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (saveDetail != null) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.outline,
+                                maxLines = 1,
+                            )
+                            saveDetail?.let { detail ->
+                                Text(
+                                    detail,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.outline,
+                                    maxLines = 2,
+                                )
+                            }
+                        }
                     }
                     if (onAttach != null) {
                         TextButton(
@@ -688,6 +714,7 @@ internal fun Composer(
                                     scope.launch {
                                         attaching = true
                                         attachError = null
+                                        attachDetail = null
                                         try {
                                             val added = onAttach(chosen)
                                             previews = previews + withContext(Dispatchers.IO) {
@@ -695,7 +722,8 @@ internal fun Composer(
                                             }
                                             draft = draft.copy(attachments = draft.attachments + added)
                                         } catch (e: Exception) {
-                                            attachError = whyFailed(e).ifBlank { "That file could not be attached." }
+                                            attachError = "That file could not be attached."
+                                            attachDetail = faultDetail(e, "That file could not be attached.")
                                         } finally {
                                             attaching = false
                                         }
@@ -808,12 +836,14 @@ internal fun Composer(
             HorizontalDivider()
 
             if (error != null) {
-                Text(
+                FaultText(
                     error,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    errorDetail,
                     modifier = Modifier.fillMaxWidth()
                         .background(MaterialTheme.colorScheme.errorContainer)
                         .padding(horizontal = 20.dp, vertical = 10.dp),
+                    titleColor = MaterialTheme.colorScheme.onErrorContainer,
+                    detailColor = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.75f),
                 )
             }
 
@@ -861,11 +891,10 @@ internal fun Composer(
             }
             HorizontalDivider()
 
-            attachError?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
+            attachError?.let { title ->
+                FaultText(
+                    title,
+                    attachDetail,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
                 )
             }
@@ -878,7 +907,12 @@ internal fun Composer(
                                 if (dragOut == null) Modifier
                                 else Modifier.dragAttachmentOut(
                                     prepare = { dragOut(file) },
-                                    onFailed = { attachError = it },
+                                    onFailed = { detail ->
+                                        attachError = "That file could not be dragged out."
+                                        attachDetail = detail.takeIf {
+                                            it.isNotBlank() && !it.equals(attachError, ignoreCase = true)
+                                        }
+                                    },
                                 ),
                             ),
                             verticalAlignment = Alignment.CenterVertically,
@@ -1082,6 +1116,7 @@ internal fun Composer(
                                     scope.launch {
                                         attaching = true
                                         attachError = null
+                                        attachDetail = null
                                         try {
                                             val put = onAttach(listOf(chosen)).firstOrNull()
                                             if (put != null) {
@@ -1093,7 +1128,9 @@ internal fun Composer(
                                                 apply(insertAt(body, "![${put.name}](cid:${inline.cid})"))
                                             }
                                         } catch (e: Exception) {
-                                            attachError = whyFailed(e).ifBlank { "That picture could not be added." }
+                                            val title = "That picture could not be added."
+                                            attachError = title
+                                            attachDetail = faultDetail(e, title)
                                         } finally {
                                             attaching = false
                                         }
@@ -1114,6 +1151,7 @@ internal fun Composer(
                             val why = Assistant.whyNot(Assistant.COMPOSE, config, account, folder)
                             if (why != null) {
                                 aiError = why
+                                aiDetail = null
                             } else if (!Assistant.agreed(Assistant.COMPOSE)) {
                                 composePacket = Llm.packet(config.model, ComposeDraft.system(), ComposeDraft.user(prompt, replyContext))
                             } else {
@@ -1139,12 +1177,11 @@ internal fun Composer(
                             }
                         }
                     }
-                    aiError?.let {
-                        Text(
-                            it,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp)
+                    aiError?.let { title ->
+                        FaultText(
+                            title,
+                            aiDetail,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
                         )
                     }
                 }

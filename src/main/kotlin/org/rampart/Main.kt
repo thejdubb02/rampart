@@ -698,11 +698,84 @@ internal fun Connect(
     var password by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
+    var errorDetail by remember { mutableStateOf<String?>(null) }
     var trying by remember { mutableStateOf("") }
     var serverOpen by remember { mutableStateOf(false) }
     var rememberPassword by remember { mutableStateOf(canRemember) }
     val storeProblem = remember { Secrets.unavailableReason() }
     val scope = rememberCoroutineScope()
+
+    fun connect() {
+        if (busy || user.isBlank() || password.isBlank()) return
+        busy = true
+        error = ""
+        errorDetail = null
+        trying = ""
+        scope.launch {
+            try {
+                val email = user.trim()
+                val typed = server.trim()
+                // A saved account already told us which protocol worked. Using
+                // that skips a JMAP wait on an IMAP host, which is 15 seconds of
+                // looking hung.
+                val known = saved.firstOrNull {
+                    it.email == email && it.server == typed
+                }?.protocol.orEmpty()
+                val routes = routesToTry(email, typed, known)
+                if (routes.isEmpty()) {
+                    serverOpen = true
+                    error = noServerFor(email)
+                    return@launch
+                }
+                for (route in routes) {
+                    trying = lookingFor(route)
+                    try {
+                        val backend = withContext(Dispatchers.IO) {
+                            openRoute(route, email, password)
+                        }
+                        val account = accountFor(route, email)
+                        // Only after a sign-in that worked, so a typo is never saved.
+                        runCatching { Accounts.remember(account) }
+                        if (rememberPassword) {
+                            // Signing in worked, so this is not a failure worth refusing
+                            // the session over. It is worth saying out loud.
+                            Secrets.store(account, password)?.let { error = "Signed in. $it" }
+                        } else {
+                            Secrets.forget(account)
+                        }
+                        onConnected(account, backend)
+                        return@launch
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        if (passwordRejected(e)) {
+                            error = "The server did not accept that email address and password."
+                            return@launch
+                        }
+                        // Anything else is the wrong host. Shown only if none
+                        // work, so a timeout on the first guess is not the
+                        // message the person reads.
+                    }
+                }
+                serverOpen = true
+                error = noServerFor(email)
+            } catch (e: Exception) {
+                error = "Could not sign in."
+                errorDetail = faultDetail(e, error)
+            } finally {
+                busy = false
+                trying = ""
+            }
+        }
+    }
+
+    val submit = Modifier.onPreviewKeyEvent { event ->
+        val enter = event.type == KeyEventType.KeyDown &&
+            (event.key == Key.Enter || event.key == Key.NumPadEnter)
+        if (!enter) false else {
+            connect()
+            true
+        }
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(48.dp).verticalScroll(rememberScrollState()),
@@ -728,15 +801,18 @@ internal fun Connect(
                     val here = account.email == user && account.server == server
                     Column(
                         Modifier.fillMaxWidth()
+                            .clip(MaterialTheme.shapes.small)
                             .background(
                                 if (here) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
                                 MaterialTheme.shapes.small,
                             )
+                            .rowHover(showWash = !here)
                             .clickable {
                                 server = account.server
                                 user = account.email
                                 password = ""
                                 error = ""
+                                errorDetail = null
                             }
                             .padding(horizontal = 12.dp, vertical = 8.dp),
                     ) {
@@ -755,14 +831,14 @@ internal fun Connect(
             user, { user = it },
             label = { Text("Email address") },
             singleLine = true,
-            modifier = Modifier.width(380.dp),
+            modifier = Modifier.width(380.dp).then(submit),
         )
         OutlinedTextField(
             password, { password = it },
             label = { Text("App password") },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.width(380.dp),
+            modifier = Modifier.width(380.dp).then(submit),
         )
         // Closed by default and marked as a disclosure rather than a grey line that happens
         // to be clickable. Somebody who needs it is somebody whose domain published nothing,
@@ -805,66 +881,8 @@ internal fun Connect(
             if (onCancel != null) TextButton(onClick = onCancel, enabled = !busy) { Text("Cancel") }
             Button(
                 enabled = !busy && user.isNotBlank() && password.isNotBlank(),
-                onClick = {
-                    busy = true
-                    error = ""
-                    trying = ""
-                    scope.launch {
-                        try {
-                            val email = user.trim()
-                            val typed = server.trim()
-                            // A saved account already told us which protocol worked. Using
-                            // that skips a JMAP wait on an IMAP host, which is 15 seconds of
-                            // looking hung.
-                            val known = saved.firstOrNull {
-                                it.email == email && it.server == typed
-                            }?.protocol.orEmpty()
-                            val routes = routesToTry(email, typed, known)
-                            if (routes.isEmpty()) {
-                                serverOpen = true
-                                error = noServerFor(email)
-                                return@launch
-                            }
-                            for (route in routes) {
-                                trying = lookingFor(route)
-                                try {
-                                    val backend = withContext(Dispatchers.IO) {
-                                        openRoute(route, email, password)
-                                    }
-                                    val account = accountFor(route, email)
-                                    // Only after a sign-in that worked, so a typo is never saved.
-                                    runCatching { Accounts.remember(account) }
-                                    if (rememberPassword) {
-                                        // Signing in worked, so this is not a failure worth refusing
-                                        // the session over. It is worth saying out loud.
-                                        Secrets.store(account, password)?.let { error = "Signed in. $it" }
-                                    } else {
-                                        Secrets.forget(account)
-                                    }
-                                    onConnected(account, backend)
-                                    return@launch
-                                } catch (e: Exception) {
-                                    if (e is CancellationException) throw e
-                                    if (passwordRejected(e)) {
-                                        error = "The server did not accept that email address and password."
-                                        return@launch
-                                    }
-                                    // Anything else is the wrong host. Shown only if none
-                                    // work, so a timeout on the first guess is not the
-                                    // message the person reads.
-                                }
-                            }
-                            serverOpen = true
-                            error = noServerFor(email)
-                        } catch (e: Exception) {
-                            error = whyFailed(e)
-                        } finally {
-                            busy = false
-                            trying = ""
-                        }
-                    }
-                },
-            ) { Text(if (busy) "Connecting" else "Connect") }
+                onClick = { connect() },
+            ) { Text(if (busy) "Connecting" else "Connect", maxLines = 1) }
         }
         if (trying.isNotBlank()) {
             Text(
@@ -874,7 +892,9 @@ internal fun Connect(
                 modifier = Modifier.width(380.dp),
             )
         }
-        if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.width(380.dp))
+        if (error.isNotBlank()) {
+            FaultText(error, errorDetail, modifier = Modifier.width(380.dp))
+        }
         if (storeProblem != null) {
             Text(
                 "Passwords cannot be remembered on this machine, so you will be asked each time. $storeProblem",
@@ -1053,6 +1073,7 @@ private fun Reader(
     var composing by remember { mutableStateOf<ComposeSession?>(null) }
     var sending by remember { mutableStateOf(false) }
     var sendError by remember { mutableStateOf<String?>(null) }
+    var sendDetail by remember { mutableStateOf<String?>(null) }
     var update by remember { mutableStateOf<String?>(null) }
     // Whether a check asked for from the About page, rather than the half-hourly one, is
     // still in flight, so the button there can say so instead of doing nothing visibly.
@@ -1315,6 +1336,7 @@ private fun Reader(
     var allowedSenders by remember { mutableStateOf(Settings.imageSenders()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
+    var errorDetail by remember { mutableStateOf<String?>(null) }
     var confirm by remember { mutableStateOf<String?>(null) }
     /** A message/rfc822 attachment opened for reading. Not a message in the mailbox. */
     var attached by remember { mutableStateOf<AttachedMessage?>(null) }
@@ -1327,6 +1349,12 @@ private fun Reader(
     var showPalette by remember { mutableStateOf(false) }
 
     fun session(key: String) = sessions.first { it.key == key }
+
+    /** The red bar: a sentence, and the technical line under it when there is one. */
+    fun report(title: String, detail: String? = null) {
+        error = title
+        errorDetail = detail?.trim()?.takeIf { it.isNotBlank() && !it.equals(title, ignoreCase = true) }
+    }
 
     /** Whether the open folder is the merged one rather than a real folder on a server. */
     fun unified() = here?.first == ALL_ACCOUNTS
@@ -1472,10 +1500,10 @@ private fun Reader(
     )
 
     suspend fun <T> io(block: () -> T): T? = try {
-        error = ""
+        report("")
         withContext(Dispatchers.IO) { block() }
     } catch (e: Exception) {
-        error = whyFailed(e)
+        report("That did not work.", whyFailed(e))
         null
     }
 
@@ -1850,7 +1878,8 @@ private fun Reader(
             } else {
                 null
             }
-            emails = found.orEmpty()
+            // A failed read keeps whatever is already on screen.
+            emails = found ?: emails
             learnFrom(emails)
             loading = false
             exhausted = emails.size < 100
@@ -1938,7 +1967,9 @@ private fun Reader(
                 // have never fetched. The local copy is the answer when it cannot be
                 // reached, which is the difference between "no results" and "no network".
                 ?: io { session(key).store?.search(query) }.takeIf { showingResults && query.isNotBlank() }
-                ?: emptyList()
+                // A refresh that failed is not an empty folder. Blanking the rows
+                // that were already there is what a spinner over a loaded list did.
+                ?: if (showingResults) emptyList() else emails
         }
         loading = false
         exhausted = false
@@ -2123,7 +2154,7 @@ private fun Reader(
         val outcome = tried { withContext(Dispatchers.IO) { block() } }
         val applied = outcome.getOrNull()
         if (applied == null) {
-            outcome.exceptionOrNull()?.let { error = whyFailed(it) }
+            outcome.exceptionOrNull()?.let { report("The server would not do that.", whyFailed(it)) }
             return null
         }
         noteState(key, applied)
@@ -2408,7 +2439,7 @@ private fun Reader(
             }
             answering = null
             if (sent.isSuccess) {
-                sent.getOrNull()?.let { if (error.isBlank()) error = it }
+                sent.getOrNull()?.let { if (error.isBlank()) report(it) }
                 // Shown as answered straight away. The organiser's copy is what counts and
                 // it has gone; re-reading our own part would say nothing new.
                 invitation = meeting.copy(
@@ -2417,7 +2448,7 @@ private fun Reader(
                     },
                 )
             } else {
-                error = "The answer could not be sent."
+                report("The answer could not be sent.")
             }
         }
     }
@@ -2548,7 +2579,7 @@ private fun Reader(
         // was saved with. The account's first identity is only the stand-in when the
         // draft itself names nobody.
         if (here?.second?.role == "drafts" && !showingResults) {
-            sendError = null
+            sendError = null; sendDetail = null
             val from = message.fromEmail.ifBlank {
                 identities[key].orEmpty().firstOrNull()?.email.orEmpty()
             }
@@ -2718,6 +2749,25 @@ private fun Reader(
         }
     }
 
+    /**
+     * Opens the next row after the open one leaves, in the order on screen.
+     *
+     * Called before the row is taken out of [emails], because the neighbour is
+     * chosen from the list the reader is looking at. The next row, or the one
+     * above when this was the last, or nothing when the list is now empty.
+     */
+    fun advancePast(leaving: (Summary) -> Boolean) {
+        val shown = sorted(emails, order)
+        val at = shown.indexOfFirst { selected?.sameMail(it) == true }
+        val open = selected
+        if (at < 0) {
+            if (open != null && leaving(open)) selected = null
+            return
+        }
+        if (!leaving(shown[at])) return
+        selected = nextInList(shown, at, leaving)
+    }
+
     suspend fun carryOut(key: String, message: Summary, into: String, from: String?, verb: String) {
         sayJunk(key, listOf(message.id), from, into)
         // The row stays until the server accepts the move. A refusal used to take
@@ -2727,6 +2777,7 @@ private fun Reader(
         // Out of the local copy as well, or the folder it left would show it
         // again the next time that folder is opened from disk.
         io { session(key).store?.forget(listOf(message.id)) }
+        advancePast { it.sameMail(message) }
         emails = emails.filterNot { it.sameMail(message) }
         // And out of the conversation on screen. A card archived from inside the stack used
         // to stay there, fully interactive, as though the button had not worked, until the
@@ -2738,7 +2789,6 @@ private fun Reader(
         // Remembered, because the thread request for this conversation may still be in
         // flight and its answer was assembled before this move.
         filed = filed + message.id
-        if (selected?.sameMail(message) == true) selected = null
         // One message can be taken back the same way a batch can. Filing the
         // wrong thing is a click, and having to go and find it again is the
         // part that makes people slow and careful about a button.
@@ -2788,14 +2838,14 @@ private fun Reader(
             val boxes = mailboxes[key].orEmpty()
             val folder = boxes.firstOrNull { it.name.equals(SNOOZE_FOLDER, ignoreCase = true) }?.id
                 ?: io { session(key).jmap.createMailbox(SNOOZE_FOLDER) }?.also { refreshFolders(key) }
-                ?: run { error = "This account would not make a $SNOOZE_FOLDER folder."; return@launch }
+                ?: run { report("This account would not make a $SNOOZE_FOLDER folder."); return@launch }
             val due = until.dueAt(ZonedDateTime.now()).toInstant()
             val from = sourceFolder(key)
             if (changed(key) { session(key).jmap.setKeyword(listOf(message.id), snoozeKeyword(due), true) } == null) return@launch
             if (changed(key) { session(key).jmap.move(listOf(message.id), folder) } == null) return@launch
             io { session(key).store?.forget(listOf(message.id)) }
+            advancePast { it.sameMail(message) }
             emails = emails.filterNot { it.sameMail(message) }
-            if (selected?.sameMail(message) == true) selected = null
             undo = from?.let { Undoable(listOf(Move(key, listOf(message.id), it)), "Snoozed") }
         }
     }
@@ -2991,7 +3041,7 @@ private fun Reader(
             // Dropped before this function returns, so a second pass cannot
             // start another send of a message that has already gone.
             if (result.isSuccess) {
-                result.getOrNull()?.let { notice -> if (error.isBlank()) error = notice }
+                result.getOrNull()?.let { notice -> if (error.isBlank()) report(notice) }
                 ScheduledSends.cancel(item.id)
                 return Result.success(Unit)
             }
@@ -3030,14 +3080,15 @@ private fun Reader(
                         sentAny = true
                     } else {
                         outcome.exceptionOrNull()?.let { thrown ->
-                            problem = "A scheduled message could not be sent: ${whyFailed(thrown)}. " +
+                            problem = "A scheduled message could not be sent. " +
                                 "It is still in Drafts and will be tried again."
+                            report(problem!!, whyFailed(thrown))
                         }
                     }
                 }
             }
             if (sentAny) refreshNow()
-            problem?.let { if (error.isBlank()) error = it }
+            problem?.let { if (error.isBlank()) report(it) }
         } finally {
             scheduledSends = ScheduledSends.pending()
         }
@@ -3055,7 +3106,10 @@ private fun Reader(
                     refreshNow()
                 } else {
                     outcome.exceptionOrNull()?.let { thrown ->
-                        error = "That message could not be sent: ${whyFailed(thrown)}. It is still scheduled."
+                        report(
+                            "That message could not be sent. It is still scheduled.",
+                            whyFailed(thrown),
+                        )
                     }
                 }
             }
@@ -3183,8 +3237,8 @@ private fun Reader(
             // needs taking back.
             scope.launch {
                 val gone = ids.toSet()
+                advancePast { it.sameMail(key, gone) }
                 emails = emails.filterNot { it.sameMail(key, gone) }
-                if (selected?.sameMail(key, gone) == true) selected = null
                 undo = from?.let { Undoable(listOf(Move(key, ids, it)), pastTense(role)) }
             }
             return ids.size
@@ -3210,7 +3264,7 @@ private fun Reader(
             val letter = runCatching { session(key).jmap.body(id) }.getOrNull()
             scope.launch {
                 val ours = identities[key].orEmpty().map { it.email }.toSet()
-                sendError = null
+                sendError = null; sendDetail = null
                 // The model's words go above the quoted original, where a person's would.
                 val reply = replyTo(message, letter, identities[key].orEmpty().firstOrNull()?.email.orEmpty(), false, ours)
                 write(key, reply.copy(body = text.trim() + "\n\n" + reply.body))
@@ -3368,8 +3422,8 @@ private fun Reader(
             if (changed(key) { session(key).jmap.move(ids, target) } == null) return@launch
             io { session(key).store?.forget(ids) }
             val gone = ids.toSet()
+            advancePast { it.sameMail(key, gone) }
             emails = emails.filterNot { it.sameMail(key, gone) }
-            selected = null
             thread = emptyList()
             // Twelve messages filed by one click is exactly the act that has to be
             // reversible, and a move is only ever undone by a move the other way.
@@ -3537,7 +3591,7 @@ private fun Reader(
      */
     fun forwardAsFile(message: Summary) {
         val key = accountOf(message) ?: return
-        sendError = null
+        sendError = null; sendDetail = null
         scope.launch {
             val letter = cardFor(message).body ?: io { session(key).jmap.body(message.id) }
             val mine = identities[key].orEmpty().map { it.email }
@@ -3677,6 +3731,9 @@ private fun Reader(
         val message = selected ?: return@run null
         val key = accountOf(message) ?: return@run null
         val config = Assistant.config()
+        // Off means no card at all. The button that turns it on stays in the
+        // sidebar and in the command palette, so the switch is not hidden.
+        if (config.mode == AssistantMode.OFF) return@run null
         val why = Assistant.whyNot(Assistant.SUMMARISE, config, key, currentFolderName(key))
         SummariseActions(
             disabledBecause = why,
@@ -3759,7 +3816,7 @@ private fun Reader(
                 tnefSaved = null
             } else if (saved != null) {
                 updateCard(key, messageId) { copy(saved = saved.toString()) }
-                error = TNEF_UNREADABLE
+                report(TNEF_UNREADABLE)
             }
         }
     }
@@ -3814,14 +3871,14 @@ private fun Reader(
             summary = cardSummary,
             body = card.body,
             onReply = { all ->
-                sendError = null
+                sendError = null; sendDetail = null
                 val account = key ?: writingAccount()
                 val mine = identities[account].orEmpty().map { it.email }.toSet()
                 write(account, replyTo(cardSummary, card.body, writingIdentity(card.body, account), all, mine))
             },
             replyAll = hasOtherRecipients(cardSummary, card.body, ours),
             onForward = {
-                sendError = null
+                sendError = null; sendDetail = null
                 val account = key ?: writingAccount()
                 write(account, forwardOf(cardSummary, card.body, writingIdentity(card.body, account)))
             },
@@ -3873,7 +3930,7 @@ private fun Reader(
                 null
             },
             onReceipt = { to ->
-                sendError = null
+                sendError = null; sendDetail = null
                 val account = key ?: writingAccount()
                 val from = identities[account].orEmpty().firstOrNull()?.email.orEmpty()
                 write(
@@ -3917,7 +3974,7 @@ private fun Reader(
                     // goes through the same confirmation as any other link in a message.
                     off.url != null -> confirm = off.url
                     off.mailto != null -> {
-                        sendError = null
+                        sendError = null; sendDetail = null
                         val account = key ?: writingAccount()
                         write(
                             account,
@@ -3999,7 +4056,7 @@ private fun Reader(
             onDragFile = if (key == null) null else { attachment ->
                 materializeAttachment { dir -> session(key).jmap.download(attachment, dir) }
             },
-            onDragFailed = { error = it },
+            onDragFailed = { report("That file could not be dragged out.", it) },
             onOpenMessage = { attachment ->
                 if (key != null) openAttached(key, attachment)
             },
@@ -4034,7 +4091,7 @@ private fun Reader(
         val ours = identities[account].orEmpty().map { it.email }.toSet()
         val from = ours.firstOrNull().orEmpty()
         when (id) {
-            "compose" -> { sendError = null; write(account, Draft(from = from)) }
+            "compose" -> { sendError = null; sendDetail = null; write(account, Draft(from = from)) }
             "reply" -> selected?.let {
                 val body = cardFor(it).body
                 val all = bareReplyAll(Settings.defaultReplyAll(), hasOtherRecipients(it, body, ours))
@@ -4145,7 +4202,7 @@ private fun Reader(
             Key.K, Key.DirectionUp -> step(-1)
             Key.F5 -> { scope.launch { refreshNow() }; true }
             Key.C -> {
-                sendError = null
+                sendError = null; sendDetail = null
                 val account = writingAccount()
                 write(account, Draft(from = identities[account].orEmpty().firstOrNull()?.email.orEmpty()))
                 true
@@ -4183,7 +4240,16 @@ private fun Reader(
             Key.E -> { actions.archive?.invoke(); true }
             Key.Delete, Key.Backspace -> { actions.trash?.invoke(); true }
             Key.Escape -> {
-                if (query.isNotEmpty()) { query = ""; showingResults = false; scope.launch { reload() } }
+                // Search first, then the open message. The composer sits outside
+                // this handler, and a focused search field returns above, so
+                // Escape there still belongs to them.
+                if (query.isNotEmpty()) {
+                    query = ""
+                    showingResults = false
+                    scope.launch { reload() }
+                } else if (selected != null) {
+                    selected = null
+                }
                 true
             }
             else -> false
@@ -4226,6 +4292,7 @@ private fun Reader(
             initial = remember(writing) { draftOpening(writing.draft, accountIdentities, Settings.signatureAboveQuote()) },
             sending = sending,
             error = sendError,
+            errorDetail = sendDetail,
             replyContext = replyContext,
             account = key,
             folder = key?.let { currentFolderName(it) },
@@ -4237,7 +4304,7 @@ private fun Reader(
                 val accountKey = key
                 val saves = writing.saves
                 composing = null
-                sendError = null
+                sendError = null; sendDetail = null
                 scope.launch {
                     yield()
                     val going = saves.awaitIdle()
@@ -4280,12 +4347,15 @@ private fun Reader(
                 val drafts = folderFor("drafts", boxes)
                 val identity = identityForDraft(identities[key].orEmpty(), draft.from)
                 when {
-                    account == null -> sendError = "Pick an account first."
-                    identity == null -> sendError = "This account has no identity to send from."
-                    drafts == null -> sendError = "This account has no Drafts folder, and the message is written there before it is sent."
+                    account == null -> { sendError = "Pick an account first."; sendDetail = null }
+                    identity == null -> { sendError = "This account has no identity to send from."; sendDetail = null }
+                    drafts == null -> {
+                        sendError = "This account has no Drafts folder, and the message is written there before it is sent."
+                        sendDetail = null
+                    }
                     else -> scope.launch {
                         sending = true
-                        sendError = null
+                        sendError = null; sendDetail = null
                         // The autosave effect keys on this flag. Yield so that recomposition
                         // cancels a debounce that has not started, before anything here sends.
                         yield()
@@ -4333,9 +4403,12 @@ private fun Reader(
                             )
                             if (result.isSuccess) {
                                 composing = null
-                                result.getOrNull()?.let { error = it }
+                                result.getOrNull()?.let { report(it) }
                             } else {
-                                result.exceptionOrNull()?.let { sendError = whyFailed(it) }
+                                result.exceptionOrNull()?.let { thrown ->
+                                    sendError = "That message could not be sent."
+                                    sendDetail = faultDetail(thrown, "That message could not be sent.")
+                                }
                             }
                         } finally {
                             sending = false
@@ -4349,15 +4422,18 @@ private fun Reader(
                 val drafts = folderFor("drafts", boxes)
                 val identity = identityForDraft(identities[key].orEmpty(), draft.from)
                 when {
-                    account == null -> sendError = "Pick an account first."
-                    identity == null -> sendError = "This account has no identity to send from."
-                    drafts == null -> sendError = "This account has no Drafts folder, and the message is written there before it is sent."
+                    account == null -> { sendError = "Pick an account first."; sendDetail = null }
+                    identity == null -> { sendError = "This account has no identity to send from."; sendDetail = null }
+                    drafts == null -> {
+                        sendError = "This account has no Drafts folder, and the message is written there before it is sent."
+                        sendDetail = null
+                    }
                     else -> scope.launch {
                         // Same flag as Send, so an autosave already waiting out its
                         // debounce is cancelled instead of landing after this draft
                         // has been put away for later.
                         sending = true
-                        sendError = null
+                        sendError = null; sendDetail = null
                         yield()
                         try {
                             val id = writing.saves.save { replacing ->
@@ -4376,7 +4452,8 @@ private fun Reader(
                             scheduledSends = ScheduledSends.pending()
                             composing = null
                         } catch (e: Exception) {
-                            sendError = whyFailed(e)
+                            sendError = "Could not schedule that message."
+                            sendDetail = faultDetail(e, "Could not schedule that message.")
                         } finally {
                             sending = false
                         }
@@ -4445,12 +4522,14 @@ private fun Reader(
                     .padding(horizontal = 10.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
+                FaultText(
                     error,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    errorDetail,
                     modifier = Modifier.weight(1f),
+                    titleColor = MaterialTheme.colorScheme.onErrorContainer,
+                    detailColor = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.75f),
                 )
-                IconButton(onClick = { error = "" }, modifier = Modifier.size(24.dp)) {
+                IconButton(onClick = { report("") }, modifier = Modifier.size(24.dp)) {
                     Icon(
                         RampartIcons.Close,
                         contentDescription = "Dismiss",
@@ -4477,6 +4556,9 @@ private fun Reader(
                 }
             }
         }
+        // The mail fills whatever is left after the bars. A row at the full
+        // window height would run under the update bar and cut the sidebar off.
+        Box(Modifier.weight(1f).fillMaxWidth()) {
         CompositionLocalProvider(
             LocalSenderPhotos provides senderPhotos,
             LocalTagColours provides tagColours,
@@ -4540,7 +4622,7 @@ private fun Reader(
                     val account = writingAccount()
                     val from = identities[account].orEmpty().firstOrNull()?.email
                         ?: sessions.firstOrNull { it.key == account }?.account?.email.orEmpty()
-                    sendError = null
+                    sendError = null; sendDetail = null
                     write(account, Draft(from = from))
                 },
             )
@@ -4646,7 +4728,7 @@ private fun Reader(
                     },
                     onWrite = { address ->
                         contactsOpen = false
-                        sendError = null
+                        sendError = null; sendDetail = null
                         val account = writingAccount()
                         write(
                             account,
@@ -4849,6 +4931,7 @@ private fun Reader(
                 filterNote = filterNote,
                 loadingMore = loadingMore,
                 onNeedMore = ::loadMore,
+                searching = showingResults,
                 onSelect = { message, ctrl, shift ->
                     val token = rowToken(message)
                     picked = pickedAfter(emails.map { rowToken(it) }, picked, anchor, token, ctrl, shift)
@@ -4891,18 +4974,22 @@ private fun Reader(
                                     }
                                 }
                                 val failed = results.mapNotNull { it.third.exceptionOrNull() }
-                                if (failed.isNotEmpty()) error = whyFailed(failed.first())
+                                if (failed.isNotEmpty()) {
+                                    report("Those messages could not be moved.", whyFailed(failed.first()))
+                                }
                                 val done = results.filter { it.third.isSuccess }
                                 done.forEach { (key, _, result) -> noteState(key, result.getOrNull()) }
                                 if (done.isNotEmpty()) {
                                     done.forEach { (key, move, _) ->
                                         runCatching { session(key).store?.forget(move.ids) }
                                     }
+                                    advancePast { row ->
+                                        done.any { (key, move, _) -> row.sameMail(key, move.ids.toSet()) }
+                                    }
                                     emails = emails.filterNot { row ->
                                         done.any { (key, move, _) -> row.sameMail(key, move.ids.toSet()) }
                                     }
                                     picked = emptySet()
-                                    selected = null
                                     // A refusal is an error, not an undo. Undo is only for
                                     // a move the server actually made.
                                     if (failed.isEmpty()) undo = Undoable(done.map { it.second }, what)
@@ -5041,6 +5128,7 @@ private fun Reader(
                     onTyping = { typing = it },
                 )
             }
+        }
         }
         }
         UpdateBar(barState) {
@@ -5217,7 +5305,7 @@ private fun Reader(
                     onDownload = { part ->
                         val bytes = mail.partBytes[part.blobId]
                         if (bytes == null) {
-                            error = "That file is not in the attached message."
+                            report("That file is not in the attached message.")
                         } else {
                             scope.launch {
                                 val path = io {
@@ -5232,11 +5320,11 @@ private fun Reader(
                             ?: throw IllegalStateException("That file is not in the attached message.")
                         materializeAttachment { dir -> Files.write(uniqueIn(dir, part.name), bytes) }
                     },
-                    onDragFailed = { error = it },
+                    onDragFailed = { report("That file could not be dragged out.", it) },
                     onOpenTnef = { part ->
                         val bytes = mail.partBytes[part.blobId]
                         if (bytes == null) {
-                            error = "That file is not in the attached message."
+                            report("That file is not in the attached message.")
                         } else {
                             scope.launch {
                                 val fetched = io {
@@ -5252,7 +5340,7 @@ private fun Reader(
                                     tnefSaved = null
                                 } else if (saved != null) {
                                     attachedSaved = saved.toString()
-                                    error = TNEF_UNREADABLE
+                                    report(TNEF_UNREADABLE)
                                 }
                             }
                         }
@@ -5388,7 +5476,7 @@ internal enum class FolderJob { CreateInside, Rename, ToTop, Delete }
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SidebarTooltip(text: String, content: @Composable () -> Unit) {
+internal fun SidebarTooltip(text: String, content: @Composable () -> Unit) {
     TooltipArea(
         tooltip = {
             Surface(
@@ -5452,7 +5540,7 @@ internal fun Sidebar(
     Column(
         Modifier.width(if (collapsed) 60.dp else 232.dp).fillMaxHeight()
             .background(MaterialTheme.colorScheme.background)
-            .padding(horizontal = if (collapsed) 8.dp else 12.dp, vertical = 14.dp),
+            .padding(horizontal = if (collapsed) 8.dp else 12.dp, vertical = 8.dp),
         horizontalAlignment = if (collapsed) Alignment.CenterHorizontally else Alignment.Start,
     ) {
         // Nothing at all when narrowed: a field 44dp wide is not a field, and the sidebar
@@ -5580,36 +5668,34 @@ internal fun Sidebar(
                     )
                 }
             }
+            /*
+             * Accounts scroll with the folders. The icon row under this list is fixed,
+             * so a short window scrolls the mailboxes instead of cutting those icons
+             * in half.
+             */
+            if (collapsed) {
+                items(accounts, key = { "face-${it.key}" }) { account ->
+                    Box(Modifier.padding(vertical = 4.dp).rowHover()) {
+                        Avatar(account.name, account.email, 26.dp)
+                    }
+                }
+            } else {
+                item(key = "account-stack") {
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 4.dp, horizontal = 4.dp).rowHover(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        AccountStack(accounts, onClick = onSettings)
+                        Spacer(Modifier.weight(1f))
+                        AddAccountFace(onClick = onAddAccount)
+                    }
+                }
+            }
         }
 
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(4.dp))
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        Spacer(Modifier.height(8.dp))
-
-        /*
-         * One compact control instead of a full width row per account: which addresses
-         * this is signed into is not news anybody reads on every glance down the sidebar.
-         * It folds into a stack of faces that reads at a glance as "there is more than
-         * one" and opens straight onto Settings, already on Accounts, on a single click.
-         * See [AccountStack] for the cap and what the last slot does past it.
-         */
-        if (collapsed) {
-            // Overlapping is a horizontal idea: stacked vertically in a 44dp rail it would
-            // just be circles touching edge to edge, so collapsed keeps the plain column
-            // of bare faces it has always had, which is already as compact as this gets.
-            accounts.forEach { account ->
-                Box(Modifier.padding(vertical = 4.dp)) { Avatar(account.name, account.email, 26.dp) }
-            }
-        } else {
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 4.dp, horizontal = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                AccountStack(accounts, onClick = onSettings)
-                Spacer(Modifier.weight(1f))
-                AddAccountFace(onClick = onAddAccount)
-            }
-        }
+        Spacer(Modifier.height(4.dp))
 
         if (collapsed) {
             SidebarTooltip("How your mail is going") {
@@ -5952,7 +6038,7 @@ private fun FolderDialog(
 @Composable
 private fun GroupHeading(text: String, open: Boolean, onClick: () -> Unit, top: Dp) {
     Row(
-        Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).clickable(onClick = onClick)
+        Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).rowHover().clickable(onClick = onClick)
             .padding(start = 10.dp, end = 10.dp, top = top, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -6118,6 +6204,7 @@ private fun FolderRow(
         modifier = Modifier.fillMaxWidth().height(32.dp)
             .clip(MaterialTheme.shapes.small)
             .background(if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+            .rowHover(showWash = !selected)
             .clickable(onClick = onClick)
             .onPointerEvent(PointerEventType.Press) { event ->
                 if (event.button == PointerButton.Secondary && onManage != null) menu = true
@@ -6426,6 +6513,8 @@ internal fun MessageList(
     loadingMore: Boolean = false,
     /** Called when the list gets near its own bottom and wants the next page. */
     onNeedMore: () -> Unit = {},
+    /** A search that came back empty, rather than a folder that has no mail. */
+    searching: Boolean = false,
     /**
      * Draws every row as though the pointer were over it.
      *
@@ -6554,18 +6643,18 @@ internal fun MessageList(
         LaunchedEffect(wantsMore) { if (wantsMore) onNeedMore() }
         Box(Modifier.fillMaxSize()) {
             when {
-                loading -> Spinner(Modifier.align(Alignment.Center))
-                emails.isEmpty() -> Text(
-                    filterNote ?: when {
-                        filters == QuickFilters(unread = true) -> "Nothing unread here."
-                        filters.active -> "Nothing matches."
-                        else -> "Nothing here."
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.align(Alignment.Center).padding(horizontal = 24.dp),
+                // A refresh of a list that is already here must not replace it.
+                emails.isNotEmpty() -> Unit
+                loading -> ListSkeleton()
+                else -> EmptyFolder(
+                    searching = searching,
+                    filters = filters,
+                    note = filterNote,
+                    modifier = Modifier.align(Alignment.Center),
                 )
-                else -> LazyColumn(Modifier.fillMaxSize(), state = scroll) {
+            }
+            if (emails.isNotEmpty()) {
+                LazyColumn(Modifier.fillMaxSize(), state = scroll) {
                     // LazyColumn only builds the rows on screen, so a folder with thirty
                     // thousand messages in it costs the same as one with twenty. What that
                     // folder still needs is the next page, which is what `onNeedMore` is.
@@ -6597,6 +6686,72 @@ internal fun MessageList(
             }
         }
     }
+}
+
+/**
+ * Why a folder is showing no rows.
+ *
+ * A filter, a search and an empty folder are three different facts, and one
+ * sentence of "Nothing here." was all three of them.
+ */
+@Composable
+private fun EmptyFolder(
+    searching: Boolean,
+    filters: QuickFilters,
+    note: String?,
+    modifier: Modifier = Modifier,
+) {
+    val (icon, line) = when {
+        note != null -> RampartIcons.Search to note
+        searching -> RampartIcons.Search to "Nothing matched that search."
+        filters == QuickFilters(unread = true) -> RampartIcons.Unread to "Nothing unread here."
+        filters.active -> RampartIcons.Search to "Nothing matches these filters."
+        else -> RampartIcons.Folder to "This folder is empty."
+    }
+    Column(
+        modifier.padding(horizontal = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.outline,
+            modifier = Modifier.size(28.dp),
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            line,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.outline,
+            maxLines = 3,
+        )
+    }
+}
+
+/**
+ * A faint wash while the pointer is over a row.
+ *
+ * The message list was the only place that noticed. Folders, threads, accounts
+ * and files sat still under the pointer, so a click was a guess about which
+ * row it would land on.
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+internal fun Modifier.rowHover(showWash: Boolean = true, onHover: ((Boolean) -> Unit)? = null): Modifier {
+    var over by remember { mutableStateOf(false) }
+    val wash = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+    return this
+        .onPointerEvent(PointerEventType.Enter) {
+            over = true
+            onHover?.invoke(true)
+        }
+        .onPointerEvent(PointerEventType.Exit) {
+            over = false
+            onHover?.invoke(false)
+        }
+        .drawBehind {
+            if (showWash && over) drawRect(wash)
+        }
 }
 
 @OptIn(ExperimentalComposeUiApi::class)
@@ -6690,8 +6845,7 @@ private fun MessageRow(
                     else -> Unit
                 }
             }
-            .onPointerEvent(PointerEventType.Enter) { pointerOver = true }
-            .onPointerEvent(PointerEventType.Exit) { pointerOver = false }
+            .rowHover(showWash = !selected, onHover = { pointerOver = it })
             .height(IntrinsicSize.Min),
     ) {
         RowMenu(message, actions, menu, scheduledAt != null) { menu = false }
@@ -6704,9 +6858,10 @@ private fun MessageRow(
         // Their mark, beside the row rather than above it. Top aligned rather than centred:
         // a row is three lines tall and a circle floating in the middle of it reads as
         // belonging to the preview rather than to the sender.
+        val (who, _) = displaySender(message.from, message.fromEmail)
         Box(Modifier.padding(start = 10.dp, top = 12.dp)) {
             Avatar(
-                label = message.from,
+                label = who,
                 seed = message.fromEmail,
                 size = 30.dp,
                 photo = photoFor(message.fromEmail),
@@ -6730,7 +6885,7 @@ private fun MessageRow(
                 }
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    message.from,
+                    who,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = if (message.seen) FontWeight.Normal else FontWeight.Bold,
                     maxLines = 1,
@@ -7428,196 +7583,33 @@ internal fun Message(
 
             if (readOnly) {
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
+                    Modifier.fillMaxWidth().height(44.dp).padding(horizontal = 20.dp),
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    TextButton(onClick = onClose) { Text("Close") }
+                    TextButton(onClick = onClose) { Text("Close", maxLines = 1) }
                 }
-            } else Row(
-                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(7.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                actions.star?.let { star ->
-                    IconButton(onClick = star, modifier = Modifier.size(34.dp)) {
-                        Icon(
-                            RampartIcons.Star,
-                            contentDescription = if (summary.flagged) "Remove the star" else "Star this",
-                            tint = if (summary.flagged) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.size(17.dp),
-                        )
-                    }
-                }
-                OutlinedButton(
-                    onClick = { onReply(bareReplyAll(Settings.defaultReplyAll(), replyAll)) },
-                    enabled = body != null,
-                ) { Text("Reply") }
-                // Only when it would reach someone Reply would not.
-                if (replyAll) {
-                    OutlinedButton(onClick = { onReply(true) }, enabled = body != null) { Text("Reply all") }
-                }
-                OutlinedButton(onClick = onForward, enabled = body != null) { Text("Forward") }
-                OutlinedButton(onClick = onForwardFile, enabled = body != null) { Text("Forward as attachment") }
-                Spacer(Modifier.weight(1f))
-                actions.archive?.let { OutlinedButton(onClick = it) { Text("Archive") } }
-                /*
-                 * Move, for the folders that have no button of their own.
-                 *
-                 * The list rather than a dialog: filing is a thing people do to one message
-                 * at a time, over and over, and a dialog turns a click into a click, a wait,
-                 * a read and a second click. Nested folders are shown by their depth rather
-                 * than by a submenu, for the same reason.
-                 */
-                if (actions.folders.isNotEmpty() && actions.moveInto != null) {
-                    var picking by remember(summary.id) { mutableStateOf(false) }
-                    Box {
-                        OutlinedButton(onClick = { picking = true }) { Text("Move") }
-                        DropdownMenu(picking, onDismissRequest = { picking = false }) {
-                            actions.folders.forEach { folder ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            folder.name,
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            modifier = Modifier.padding(
-                                                start = (depthOf(folder, actions.folders) * 12).dp,
-                                            ),
-                                        )
-                                    },
-                                    modifier = Modifier.height(32.dp),
-                                    contentPadding = PaddingValues(horizontal = 12.dp),
-                                    onClick = { picking = false; actions.moveInto.invoke(folder.id) },
-                                )
-                            }
-                        }
-                    }
-                }
-                actions.junk?.let { OutlinedButton(onClick = it) { Text("Spam") } }
-                actions.notJunk?.let { OutlinedButton(onClick = it) { Text("Not spam") } }
-                actions.trash?.let { OutlinedButton(onClick = it) { Text("Delete") } }
-                // Unread is what people press to mean "come back to this", and it was only
-                // ever reachable by right-clicking the row the message was opened from.
-                actions.markUnread?.let {
-                    OutlinedButton(onClick = it) { Text(if (summary.seen) "Unread" else "Read") }
-                }
-                // Only where an engine drew it. The block renderer has no page to hand a
-                // printer, and a Print button that does nothing is worse than none.
-                if (engineDraws && page != null) {
-                    OutlinedButton(onClick = { printDocument(page.document) }) { Text("Print") }
-                }
-                // Everything past Delete is something people reach for occasionally, and a
-                // row of eight buttons runs off the edge of the pane at any sensible width.
-                /*
-                 * The light in the room, for one message.
-                 *
-                 * A message with no colours of its own is drawn to match the window, which
-                 * is right for a reply and wrong for the occasional one: an invoice or a
-                 * statement was laid out against white by whoever sent it, and a sender who
-                 * set a text colour but no background can land dark on dark. Lit means the
-                 * message is following the window; unlit means it is on paper, the way the
-                 * sender built it.
-                 *
-                 * In a light window there is nothing for it to switch between, so it is not
-                 * offered rather than being a button that appears to do nothing.
-                 */
-                if (darkWindow) {
-                    IconButton(onClick = { onPaper(!paper) }, modifier = Modifier.size(34.dp)) {
-                        Icon(
-                            if (paper) RampartIcons.Bulb else RampartIcons.BulbOn,
-                            contentDescription =
-                            if (paper) "Draw this message dark" else "Show it as the sender drew it",
-                            tint = if (paper) LocalContentColor.current
-                            else MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(17.dp),
-                        )
-                    }
-                }
-                var more by remember(summary.id) { mutableStateOf(false) }
-                Box {
-                    IconButton(onClick = { more = true }, modifier = Modifier.size(34.dp)) {
-                        Icon(RampartIcons.More, contentDescription = "More", modifier = Modifier.size(17.dp))
-                    }
-                    DropdownMenu(more, onDismissRequest = { more = false }) {
-                        actions.snooze?.let { put ->
-                            SnoozeUntil.entries.forEach { until ->
-                                DropdownMenuItem(
-                                    text = { Text(until.label) },
-                                    onClick = { more = false; put(until) },
-                                )
-                            }
-                            HorizontalDivider()
-                        }
-                        DropdownMenuItem(
-                            text = { Text(if (source == null) "View source" else "Back to the message") },
-                            onClick = { more = false; onSource() },
-                        )
-                        // Only where there is an address book to put them in, and only
-                        // when they are not already in it. An entry that silently makes a
-                        // second copy of somebody is how an address book stops being
-                        // worth opening.
-                        if (onAddContact != null && !inContacts) {
-                            DropdownMenuItem(
-                                text = { Text("Add to contacts") },
-                                onClick = { more = false; onAddContact(summary) },
-                            )
-                        }
-                        // Only when the sender said how. Every client that offers Unsubscribe
-                        // on mail that has no List-Unsubscribe is really offering to send a
-                        // reply saying "unsubscribe" to somebody who is not reading replies.
-                        unsubscribeFrom(body?.listUnsubscribe, body?.listUnsubscribePost)?.let { off ->
-                            DropdownMenuItem(
-                                text = { Text(if (off.oneClick) "Unsubscribe" else "Unsubscribe...") },
-                                onClick = { more = false; onUnsubscribe(off) },
-                            )
-                        }
-                        /*
-                         * The whole conversation, as one act, worded so it cannot be mistaken
-                         * for the row above it acting on one message. This used to be its own
-                         * "Whole conversation" menu, which named a view of the thread and was
-                         * actually four bulk actions; folded in here rather than kept apart,
-                         * because it is a menu of actions either way.
-                         */
-                        actions.conversation?.let { conv ->
-                            HorizontalDivider()
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        if (conv.unread > 0) "Mark whole conversation read"
-                                        else "Mark whole conversation unread",
-                                    )
-                                },
-                                onClick = { more = false; conv.onRead(conv.unread > 0) },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Archive whole conversation") },
-                                onClick = { more = false; conv.onArchive() },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Delete whole conversation") },
-                                onClick = { more = false; conv.onTrash() },
-                            )
-                            DropdownMenuItem(
-                                text = { Text(if (conv.muted) "Stop muting it" else "Mute this conversation") },
-                                onClick = { more = false; conv.onMute(!conv.muted) },
-                            )
-                            if (conv.muted) {
-                                // Said plainly, because it is the one promise here the server
-                                // cannot keep on its own and somebody would otherwise read a
-                                // silent hour as the mute not working.
-                                Text(
-                                    "New messages in this conversation are marked read and " +
-                                        "archived while Rampart is running.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.outline,
-                                    modifier = Modifier.widthIn(max = 260.dp)
-                                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                                )
-                            }
-                        }
-                    }
-                }
+            } else {
+                ReadingToolbar(
+                    summary = summary,
+                    body = body,
+                    bodyReady = body != null,
+                    replyAll = replyAll,
+                    darkWindow = darkWindow,
+                    paper = paper,
+                    canPrint = engineDraws && page != null,
+                    sourceOpen = source != null,
+                    actions = actions,
+                    inContacts = inContacts,
+                    onAddContact = onAddContact,
+                    onReply = onReply,
+                    onForward = onForward,
+                    onForwardFile = onForwardFile,
+                    onPaper = onPaper,
+                    onSource = onSource,
+                    onPrint = { page?.let { printDocument(it.document) } },
+                    onUnsubscribe = onUnsubscribe,
+                )
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
@@ -7753,9 +7745,10 @@ internal fun Message(
                             .padding(vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        val (who, address) = displaySender(summary.from, summary.fromEmail)
                         Avatar(
-                            summary.from,
-                            summary.fromEmail.ifBlank { summary.from },
+                            who,
+                            summary.fromEmail.ifBlank { who },
                             34.dp,
                             photo = photoFor(summary.fromEmail),
                         )
@@ -7763,7 +7756,7 @@ internal fun Message(
                         Column(Modifier.weight(1f)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    summary.from,
+                                    who,
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = FontWeight.SemiBold,
                                     maxLines = 1,
@@ -7785,9 +7778,9 @@ internal fun Message(
                                         )
                                     }
                             }
-                            if (summary.fromEmail.isNotBlank()) {
+                            if (address != null) {
                                 Text(
-                                    summary.fromEmail,
+                                    address,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.outline,
                                     maxLines = 1,
@@ -7993,12 +7986,11 @@ internal fun Message(
                     if (rendered == null) {
                         Spacer(Modifier.height(20.dp))
                         when {
-                            bodyError != null -> Text(
-                                "This message would not open. $bodyError",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.error,
+                            bodyError != null -> FaultText(
+                                "This message would not open.",
+                                bodyError,
                             )
-                            body == null -> Spinner()
+                            body == null -> BodySkeleton()
                             else -> Text("This message has no readable body.")
                         }
                     } else {
@@ -8097,7 +8089,7 @@ internal fun Message(
                      */
                     if (waitingForPage) {
                         Spacer(Modifier.height(20.dp))
-                        Spinner()
+                        BodySkeleton()
                     } else if (engineDraws) WebBody(
                         page.document,
                         onLink = onLink,
@@ -8209,7 +8201,7 @@ private fun FileRows(
         // move still presses it, and a drag does not.
         val dragOut = onDragFile
         Row(
-            Modifier.fillMaxWidth().padding(vertical = 4.dp).then(
+            Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).rowHover().padding(vertical = 4.dp).then(
                 if (dragOut == null) Modifier
                 else Modifier.dragAttachmentOut(
                     prepare = { dragOut(attachment) },
@@ -8390,22 +8382,24 @@ private fun SummaryCard(summarise: SummariseActions) {
  */
 @Composable
 private fun ThreadRow(message: Summary, onClick: () -> Unit) {
+    val (who, _) = displaySender(message.from, message.fromEmail)
     Row(
         Modifier.fillMaxWidth()
             .clip(MaterialTheme.shapes.small)
+            .rowHover()
             .clickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Avatar(
-            message.from,
-            message.fromEmail.ifBlank { message.from },
+            who,
+            message.fromEmail.ifBlank { who },
             24.dp,
             photo = photoFor(message.fromEmail),
         )
         Spacer(Modifier.width(9.dp))
         Text(
-            message.from,
+            who,
             style = MaterialTheme.typography.bodySmall,
             fontWeight = if (message.seen) FontWeight.Normal else FontWeight.SemiBold,
             maxLines = 1,
