@@ -947,6 +947,7 @@ internal fun bodyFromHeaders(headers: List<Pair<String, String>>): Body {
         text = null,
         messageId = values("Message-ID").flatMap(::messageIdsIn),
         references = values("References").flatMap(::messageIdsIn),
+        inReplyTo = values("In-Reply-To").flatMap(::messageIdsIn),
         to = values("To").flatMap(::addressesFrom),
         cc = values("Cc").flatMap(::addressesFrom),
         replyTo = values("Reply-To").flatMap(::addressesFrom),
@@ -983,10 +984,9 @@ private fun unfoldHeader(value: String): String = value.replace(Regex("\\r?\\n[ 
 
 private fun addressesFrom(header: String): List<String> =
     // A To line that is not addresses is treated as no recipients rather than refusing
-    // to open the message.
-    runCatching { InternetAddress.parseHeader(header, false) }
-        .getOrDefault(emptyArray())
-        .mapNotNull { it.address?.takeIf { address -> address.isNotBlank() } }
+    // to open the message. The same parser the send path uses, so a name in front of an
+    // address is not kept as if it were the mailbox.
+    parseAddressList(header).map { it.email }
 
 private fun sentAtFrom(value: String): String? =
     // A Date line that is not a date is ignored rather than blocking the rest of the

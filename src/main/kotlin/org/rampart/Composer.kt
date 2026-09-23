@@ -48,6 +48,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Element
+import org.jsoup.nodes.Node
+import org.jsoup.nodes.TextNode
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.key
@@ -128,6 +132,13 @@ data class Draft(
     /** The same sign-off written as HTML, or empty when there is none. */
     val htmlSignature: String = "",
     /**
+     * The HTML body as it was stored, sent unchanged until the text is edited.
+     *
+     * Empty on anything composed here. Set when a draft is reopened so a later save of
+     * the subject or the recipients does not flatten formatting that only the HTML had.
+     */
+    val html: String = "",
+    /**
      * Whether this answers something. Not derived from [inReplyTo]: a message with no
      * Message-ID of its own is still being replied to, and telling the writer otherwise
      * because a header was missing would be a lie about what they are doing.
@@ -149,7 +160,7 @@ data class Draft(
      */
     val tracked: Boolean = false,
 ) {
-    val recipients: List<String> get() = (to.split(',') + cc.split(',')).map { it.trim() }.filter { it.isNotEmpty() }
+    val recipients: List<String> get() = (parseAddressList(to) + parseAddressList(cc)).map { it.email }
 }
 
 /**
@@ -184,12 +195,23 @@ internal fun replyTo(
      * of those sends the reply somewhere nobody looks, and the sender finds out rather than
      * you.
      */
-    val answerTo = body?.replyTo.orEmpty().filter { it.isNotBlank() }
-        .ifEmpty { listOf(summary.fromEmail) }
+    val replyToHeader = body?.replyTo.orEmpty().filter { it.isNotBlank() }
+    // A reply to mail you sent yourself goes to the people you wrote to, not back to you.
+    // Reply all keeps the Cc line as well. Reply-To still wins, because that header exists
+    // to name a different place, including on your own message.
+    val own = replyToHeader.isEmpty() &&
+        countsAsMine(summary.fromEmail, mine + from, exactOnly, delimiter)
+    val answerTo = when {
+        replyToHeader.isNotEmpty() -> replyToHeader
+        own -> body?.to.orEmpty().ifEmpty { listOf(summary.fromEmail) }
+        else -> listOf(summary.fromEmail)
+    }
     // Answering your own message is the case where dropping your own address leaves nobody
     // to send to, so the sender goes back in rather than the reply opening addressed to no one.
-    val to = if (!all) answerTo
-    else dedupe(answerTo + body?.to.orEmpty(), ours, mine, exactOnly, delimiter).ifEmpty { answerTo }
+    val to = if (!all) {
+        if (own) dedupe(answerTo, ours, mine + from, exactOnly, delimiter).ifEmpty { answerTo }
+        else answerTo
+    } else dedupe(answerTo + body?.to.orEmpty(), ours, mine, exactOnly, delimiter).ifEmpty { answerTo }
     val cc = if (!all) emptyList()
     else dedupe(body?.cc.orEmpty(), ours + to.map { forMatching(it, delimiter) }, mine, exactOnly, delimiter)
     return Draft(
@@ -356,7 +378,7 @@ internal fun ComposerFrame(full: Boolean = false, content: @Composable () -> Uni
  */
 @Composable
 internal fun Composer(
-    identities: List<String>,
+    identities: List<Identity>,
     initial: Draft,
     sending: Boolean,
     error: String?,
@@ -526,7 +548,7 @@ internal fun Composer(
         if (sending) return
         history.push(body)
         body = next
-        draft = draft.copy(body = next.text)
+        draft = draft.withBody(next.text, initial)
         historyTick++
     }
 
@@ -538,12 +560,12 @@ internal fun Composer(
             historyTick++
         }
         body = next
-        draft = draft.copy(body = next.text)
+        draft = draft.withBody(next.text, initial)
     }
 
     fun restore(next: TextFieldValue) {
         body = next
-        draft = draft.copy(body = next.text)
+        draft = draft.withBody(next.text, initial)
         historyTick++
     }
 
@@ -804,11 +826,16 @@ internal fun Composer(
                     Box {
                         TextButton(onClick = { pickingIdentity = true }, enabled = !sending) { Text(draft.from) }
                         DropdownMenu(pickingIdentity, onDismissRequest = { pickingIdentity = false }) {
-                            identities.forEach { address ->
+                            identities.forEach { identity ->
                                 DropdownMenuItem(
-                                    text = { Text(address) },
+                                    text = { Text(identity.email) },
                                     onClick = {
-                                        draft = draft.copy(from = address)
+                                        draft = withFrom(
+                                            draft,
+                                            identity.email,
+                                            identities,
+                                            Settings.signatureAboveQuote(),
+                                        )
                                         pickingIdentity = false
                                     },
                                 )
@@ -1033,14 +1060,14 @@ internal fun Composer(
                                             // Appended rather than substituted, so a
                                             // template dropped into a half-written reply
                                             // does not eat what is already there.
+                                            val nextBody = if (draft.body.isBlank()) {
+                                                filled.body
+                                            } else {
+                                                filled.body + "\n\n" + draft.body
+                                            }
                                             draft = draft.copy(
                                                 subject = draft.subject.ifBlank { filled.subject },
-                                                body = if (draft.body.isBlank()) {
-                                                    filled.body
-                                                } else {
-                                                    filled.body + "\n\n" + draft.body
-                                                },
-                                            )
+                                            ).withBody(nextBody, initial)
                                         },
                                     )
                                 }
@@ -1458,20 +1485,172 @@ private fun ClockField(value: String, hint: String, onChange: (String) -> Unit) 
 /**
  * A draft from the Drafts folder, put back the way it was written.
  *
- * The body is taken as text, because that is what the composer writes: a draft saved by
- * another client as HTML comes back as its text, which is a fair trade against silently
- * dropping the markup on the next save.
+ * Attachments, In-Reply-To and References come with it. When the draft has an HTML body,
+ * that HTML is what a later save sends until the text itself is edited, and the composer
+ * is filled with the same markup it would have held if the draft had been written here.
+ * Inline pictures stay out of the file list: they belong to the body, not to the files
+ * the writer attached.
  */
-internal fun draftOf(summary: Summary, body: Body?, from: String): Draft = Draft(
-    from = from,
-    to = body?.to.orEmpty().joinToString(", "),
-    cc = body?.cc.orEmpty().joinToString(", "),
-    subject = summary.subject,
-    body = plainTextOf(body),
-    inReplyTo = null,
-    references = body?.references.orEmpty(),
-    replying = false,
-)
+internal fun draftOf(
+    summary: Summary,
+    body: Body?,
+    from: String,
+    attachments: List<Attachment> = emptyList(),
+): Draft {
+    val html = body?.html?.takeIf { it.isNotBlank() }
+    val restored = if (html == null) Restored(body?.text.orEmpty(), "", "") else restoreHtmlBody(html, body?.text)
+    return Draft(
+        from = from,
+        to = body?.to.orEmpty().joinToString(", "),
+        cc = body?.cc.orEmpty().joinToString(", "),
+        subject = summary.subject,
+        body = restored.body,
+        inReplyTo = body?.inReplyTo?.firstOrNull(),
+        references = body?.references.orEmpty(),
+        attachments = attachments.filterNot { it.inline },
+        textSignature = restored.textSignature,
+        htmlSignature = restored.htmlSignature,
+        html = html.orEmpty(),
+        replying = false,
+    )
+}
+
+private data class Restored(val body: String, val textSignature: String, val htmlSignature: String)
+
+/**
+ * The sign-off pulled back out of a stored draft, and the message as markup.
+ *
+ * The plain part is where the `-- ` line is. The HTML part is where the formatting is.
+ * When the two can be lined up, the sign-off goes back into [textSignature] and
+ * [htmlSignature] so the next save swaps them the same way a new message does.
+ * When they cannot, the plain part is what the composer shows, separator and all, so
+ * opening the draft does not decide it still needs a sign-off and write a second one.
+ */
+private fun restoreHtmlBody(html: String, text: String?): Restored {
+    val plain = text?.takeIf { it.isNotBlank() }
+    val split = plain?.let(::signatureOutsideQuote)
+    if (split == null || split.text.isBlank()) return Restored(htmlToMarkup(html), "", "")
+    val (messageHtml, sigHtml) = peelHtmlSignature(html, split.text)
+    if (sigHtml.isBlank()) return Restored(plain, split.text, "")
+    val placed = signed(Draft(from = "", body = htmlToMarkup(messageHtml)), split.text, sigHtml, split.above)
+    return Restored(placed.body, placed.textSignature, placed.htmlSignature)
+}
+
+private data class OwnSignOff(val text: String, val above: Boolean)
+
+/** The sign-off that belongs to this draft, which is the one outside the quoted part. */
+private fun signatureOutsideQuote(text: String): OwnSignOff? {
+    val quote = quoteStart(text)
+    val head = if (quote < 0) text else text.take(quote)
+    val headAt = head.lines().indexOf("-- ")
+    if (headAt >= 0) {
+        val sig = head.lines().drop(headAt + 1).joinToString("\n").trimEnd()
+        if (sig.isNotBlank()) return OwnSignOff(sig, above = quote >= 0)
+    }
+    if (quote < 0) return null
+    val first = text.substring(quote).lineSequence().firstOrNull().orEmpty()
+    if (first.contains("Forwarded message")) return null
+    val after = text.substring(quote).lines().drop(1)
+    val below = after.indexOf("-- ")
+    if (below < 0) return null
+    val sig = after.drop(below + 1).joinToString("\n").trimEnd()
+    if (sig.isBlank()) return null
+    return OwnSignOff(sig, above = false)
+}
+
+/**
+ * The elements whose text is the sign-off, lifted out of [html].
+ *
+ * Returned as the message HTML with those elements gone, and the sign-off HTML itself.
+ * Nothing is lifted when no run of elements reads as the sign-off, rather than guessing
+ * a cut in the middle of a sentence.
+ */
+internal fun peelHtmlSignature(html: String, signature: String): Pair<String, String> {
+    val want = normalizeSignature(signature)
+    if (want.isEmpty()) return html to ""
+    val doc = Jsoup.parseBodyFragment(html)
+    val kids = doc.body().children()
+    if (kids.isEmpty()) return html to ""
+    for (start in kids.indices) {
+        val acc = StringBuilder()
+        for (end in start until kids.size) {
+            if (acc.isNotEmpty()) acc.append(' ')
+            acc.append(kids[end].text())
+            val got = normalizeSignature(acc.toString())
+            if (got == want) {
+                val sig = (start..end).joinToString("") { kids[it].outerHtml() }
+                for (i in end downTo start) kids[i].remove()
+                return doc.body().html() to sig
+            }
+            if (got.length > want.length) break
+        }
+    }
+    return html to ""
+}
+
+private fun normalizeSignature(value: String) = value.replace(Regex("\\s+"), " ").trim()
+
+/** HTML from a stored draft, as the markup the composer edits. */
+internal fun htmlToMarkup(html: String): String {
+    val doc = Jsoup.parseBodyFragment(html)
+    doc.select("script, style, noscript").remove()
+    return renderChildren(doc.body()).trim()
+}
+
+private fun renderChildren(el: Element): String = el.childNodes().joinToString("") { renderNode(it) }
+
+private fun renderNode(node: Node): String = when (node) {
+    is TextNode -> node.wholeText
+    is Element -> renderElement(node)
+    else -> ""
+}
+
+private fun renderElement(el: Element): String {
+    val tag = el.normalName()
+    return when (tag) {
+        "br" -> "\n"
+        "b", "strong" -> wrapMarker("**", renderChildren(el))
+        "i", "em" -> wrapMarker("*", renderChildren(el))
+        "u" -> wrapMarker("__", renderChildren(el))
+        "s", "strike", "del" -> wrapMarker("~~", renderChildren(el))
+        "code" -> if (el.parent()?.normalName() == "pre") renderChildren(el) else wrapMarker("`", renderChildren(el))
+        "a" -> {
+            val href = el.attr("href").trim()
+            val label = renderChildren(el).ifBlank { href }
+            if (href.isBlank()) label else "[$label]($href)"
+        }
+        "img" -> {
+            val src = el.attr("src").trim()
+            if (src.isBlank()) "" else "![${el.attr("alt").ifBlank { "image" }}]($src)"
+        }
+        "h1" -> "# " + renderChildren(el).trim() + "\n"
+        "h2", "h3", "h4", "h5", "h6" -> "## " + renderChildren(el).trim() + "\n"
+        "blockquote" -> renderChildren(el).trim().lines().joinToString("\n") { line ->
+            if (line.isBlank()) ">" else "> $line"
+        } + "\n"
+        "ul" -> el.children().joinToString("\n") { "- " + renderChildren(it).trim() } + "\n"
+        "ol" -> el.children().mapIndexed { index, child ->
+            "${index + 1}. " + renderChildren(child).trim()
+        }.joinToString("\n") + "\n"
+        "pre" -> "```\n" + el.wholeText().trim('\n') + "\n```\n"
+        "p", "div", "tr" -> {
+            val inner = renderChildren(el).trimEnd()
+            if (inner.isEmpty()) "\n" else inner + "\n"
+        }
+        "td", "th" -> renderChildren(el).trim() + " "
+        else -> renderChildren(el)
+    }
+}
+
+private fun wrapMarker(marker: String, text: String): String {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return text
+    return marker + trimmed + marker
+}
+
+/** Keeps the stored HTML when the text is still the text it was opened with. */
+private fun Draft.withBody(text: String, original: Draft): Draft =
+    copy(body = text, html = if (text == original.body) original.html else "")
 
 /**
  * Puts the sign-off on the draft, under what is being written.
@@ -1491,7 +1670,9 @@ internal fun signed(
     aboveQuote: Boolean = false,
 ): Draft {
     if (signature.isBlank()) return draft
-    if (draft.body.lineSequence().any { it == "-- " }) return draft
+    // A `-- ` inside the quoted or forwarded original is the other person's sign-off.
+    // Only one outside that part means this draft is already signed.
+    if (hasSignOff(draft.body)) return draft
     val quote = if (aboveQuote) quoteStart(draft.body) else -1
     return draft.copy(
         body = if (quote < 0) draft.body.trimEnd() + signatureBlock(signature)
@@ -1500,6 +1681,21 @@ internal fun signed(
         textSignature = signature.trimEnd(),
         htmlSignature = html,
     )
+}
+
+/**
+ * Whether [body] already carries our sign-off.
+ *
+ * The line `-- ` counts above the quote or the forwarded block, and below a reply's
+ * quote. It does not count inside either, where it belongs to the original message.
+ */
+internal fun hasSignOff(body: String): Boolean {
+    val quote = quoteStart(body)
+    if (quote < 0) return body.lineSequence().any { it == "-- " }
+    if (body.take(quote).lineSequence().any { it == "-- " }) return true
+    val first = body.substring(quote).lineSequence().firstOrNull().orEmpty()
+    if (first.contains("Forwarded message")) return false
+    return body.substring(quote).lineSequence().drop(1).any { it == "-- " }
 }
 
 /**
@@ -1516,6 +1712,31 @@ private val QUOTE_OPENS = Regex("^(.*\\bwrote:|-{3,} Forwarded message -{3,})\\s
 
 /** The separator and the sign-off, exactly as [signed] writes it and [htmlBodyOf] takes it out. */
 internal fun signatureBlock(signature: String) = "\n\n-- \n" + signature.trimEnd()
+
+/** Where [block] sits as a whole sign-off, or -1. A longer line that merely starts with it does not count. */
+private fun exactBlockAt(body: String, block: String): Int {
+    if (block.isEmpty()) return -1
+    var at = body.indexOf(block)
+    while (at >= 0) {
+        val after = at + block.length
+        if (after == body.length || body[after] == '\n') return at
+        at = body.indexOf(block, at + 1)
+    }
+    return -1
+}
+
+/**
+ * The HTML part to send.
+ *
+ * A reopened draft keeps the HTML it was stored with until the text changes. Anything
+ * else is built from the markup and the sign-off.
+ */
+internal fun htmlPartOf(draft: Draft): String? =
+    if (draft.html.isNotBlank()) {
+        if (draft.trackingPixel.isEmpty()) draft.html else draft.html + draft.trackingPixel
+    } else {
+        htmlBodyOf(draft.body, draft.textSignature, draft.htmlSignature, draft.trackingPixel)
+    }
 
 /**
  * The HTML half of the message, or null when nothing in it needs HTML.
@@ -1729,6 +1950,46 @@ internal fun identityForDraft(available: List<Identity>, from: String): Identity
     available.firstOrNull { it.email.equals(from, ignoreCase = true) }?.let { return it }
     if (from.isBlank()) return available.first()
     return available.first().copy(name = "", email = from, textSignature = "", htmlSignature = "")
+}
+
+/**
+ * Swaps the sign-off when From changes to another identity.
+ *
+ * The old block is removed and the new one is written back in the same place, above the
+ * quote or below it, whichever the draft already used. If the writer has edited the
+ * sign-off so it is no longer the identity's, the text is left alone: a partial match
+ * would cut the message in the wrong place.
+ */
+internal fun withFrom(
+    draft: Draft,
+    address: String,
+    identities: List<Identity>,
+    aboveQuote: Boolean,
+): Draft {
+    val next = identities.firstOrNull { it.email.equals(address, ignoreCase = true) }
+        ?: return draft.copy(from = address)
+    if (next.email.equals(draft.from, ignoreCase = true)) return draft.copy(from = next.email)
+    val previous = identities.firstOrNull { it.email.equals(draft.from, ignoreCase = true) }
+    val old = previous?.textSignature?.trimEnd().orEmpty()
+    val oldBlock = if (old.isEmpty()) "" else signatureBlock(old)
+    val oldAt = exactBlockAt(draft.body, oldBlock)
+    // Edited inside the sign-off, so the block is no longer the identity's. Leave the
+    // text alone rather than cutting at a partial match.
+    if (oldBlock.isNotEmpty() && oldAt < 0) return draft.copy(from = next.email)
+    val quoteBefore = quoteStart(draft.body)
+    val stripped = if (oldAt < 0) draft.body else draft.body.removeRange(oldAt, oldAt + oldBlock.length)
+    val placeAbove = when {
+        oldAt < 0 || quoteBefore < 0 -> aboveQuote
+        else -> oldAt < quoteBefore
+    }
+    val swapped = signed(
+        draft.copy(from = next.email, body = stripped, textSignature = "", htmlSignature = ""),
+        next.textSignature,
+        next.htmlSignature,
+        placeAbove,
+    )
+    val unchanged = swapped.body == draft.body && swapped.htmlSignature == draft.htmlSignature
+    return if (unchanged) swapped else swapped.copy(html = "")
 }
 
 /**

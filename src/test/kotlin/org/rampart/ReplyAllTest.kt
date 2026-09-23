@@ -64,6 +64,28 @@ class ReplyAllTest {
     }
 
     @Test
+    fun replyingToYourOwnMessageGoesToTheOriginalRecipients() {
+        val own = message.copy(from = "Justin Willhite", fromEmail = "justin@willhitestrategy.com")
+        val sent = body.copy(to = listOf("dana@example.org"), cc = listOf("sam@example.org"))
+        val reply = replyTo(own, sent, "justin@willhitestrategy.com", all = false, mine = mine, exactOnly = true)
+        assertEquals("dana@example.org", reply.to)
+        assertEquals("", reply.cc)
+
+        val everyone = replyTo(own, sent, "justin@willhitestrategy.com", all = true, mine = mine, exactOnly = true)
+        assertEquals("dana@example.org", everyone.to)
+        assertEquals("sam@example.org", everyone.cc)
+        assertTrue(mine.none { it in everyone.recipients })
+    }
+
+    @Test
+    fun aNameInFrontOfYourOwnAddressStillCountsAsYou() {
+        val own = message.copy(fromEmail = "Justin Willhite <justin@willhitestrategy.com>")
+        val sent = Body(null, "Sent.", to = listOf("dana@example.org"))
+        val reply = replyTo(own, sent, "justin@willhitestrategy.com", mine = mine, exactOnly = true)
+        assertEquals("dana@example.org", reply.to)
+    }
+
+    @Test
     fun answeringYourOwnMessageStillHasSomewhereToGo() {
         val ownMessage = message.copy(fromEmail = "justin@willhitestrategy.com")
         val draft = replyTo(ownMessage, Body(null, "", to = listOf("justin@willhitestrategy.com")),

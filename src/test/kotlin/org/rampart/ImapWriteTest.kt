@@ -122,6 +122,13 @@ class ImapWriteTest {
     }
 
     @Test
+    fun `In-Reply-To is kept bare, the same way References is`() {
+        val body = bodyFromHeaders(listOf("In-Reply-To" to "<parent@x>", "References" to "<root@x>"))
+        assertEquals(listOf("parent@x"), body.inReplyTo)
+        assertEquals(listOf("root@x"), body.references)
+    }
+
+    @Test
     fun `Message-ID and References split into the ids a reply has to quote`() {
         val body = bodyFromHeaders(
             listOf(

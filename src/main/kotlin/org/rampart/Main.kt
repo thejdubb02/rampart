@@ -1359,6 +1359,16 @@ private fun Reader(
      */
     fun write(account: String?, draft: Draft, savedId: String? = null) {
         composing = ComposeSession(account, draft, DraftSaves(savedId))
+        // A signature edited in Bulwark is picked up when a composer opens.
+        // Asked in the background so opening is not held up. The draft already
+        // on screen is remembered for this session, so a fresh list does not
+        // replace what is being typed.
+        if (account != null) scope.launch {
+            val fresh = withContext(Dispatchers.IO) {
+                runCatching { session(account).jmap.identities() }.getOrNull()
+            } ?: return@launch
+            identities = identities + (account to fresh)
+        }
     }
 
     /**
@@ -2257,7 +2267,13 @@ private fun Reader(
             val from = message.fromEmail.ifBlank {
                 identities[key].orEmpty().firstOrNull()?.email.orEmpty()
             }
-            write(key, draftOf(message, cardFor(message).body, from), message.id)
+            val card = cardFor(message)
+            // The card's own list when this open already fetched it. Otherwise ask now,
+            // so a draft is not opened with its files missing and then saved that way.
+            val parts = if (card.loaded) card.attachments else withContext(Dispatchers.IO) {
+                runCatching { session(key).jmap.attachments(message.id) }.getOrDefault(emptyList())
+            }
+            write(key, draftOf(message, card.body, from, parts), message.id)
             return@LaunchedEffect
         }
 
@@ -3865,7 +3881,7 @@ private fun Reader(
         val accountIdentities = identities[key].orEmpty()
 
         Composer(
-            identities = accountIdentities.map { it.email },
+            identities = accountIdentities,
             // The sign-off comes off the identity on the server, so one written in Bulwark
             // is the one used here without anything having to be imported or kept in step.
             // Computed from the account captured when writing started, so a later change

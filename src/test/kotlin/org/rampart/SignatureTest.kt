@@ -103,6 +103,59 @@ class SignatureTest {
         assertEquals("\n\n> -- \n> their sign-off\n\n-- \nJustin", signed.body)
     }
 
+    @Test
+    fun aSeparatorInsideAForwardDoesNotCountAsAlreadySigned() {
+        val original = Body(null, "Please see this.\n\n-- \nDana")
+        val forward = forwardOf(message, original, "me@example.org")
+        val signed = signed(forward, "Justin", aboveQuote = true)
+        assertTrue(signed.body.contains("-- \nJustin"), signed.body)
+        assertTrue(
+            signed.body.indexOf("-- \nJustin") < signed.body.indexOf("Forwarded message"),
+            signed.body,
+        )
+        assertTrue(signed.body.contains("-- \nDana"), signed.body)
+    }
+
+    @Test
+    fun aSeparatorInsideAReplyQuoteDoesNotCountAsAlreadySigned() {
+        val original = Body(null, "Please see this.\n\n-- \nDana")
+        val reply = replyTo(message, original, "me@example.org")
+        val signed = signed(reply, "Justin", aboveQuote = true)
+        assertTrue(signed.body.contains("-- \nJustin"), signed.body)
+        assertTrue(signed.body.indexOf("-- \nJustin") < signed.body.indexOf("wrote:"), signed.body)
+        assertTrue(signed.body.contains("> -- "), signed.body)
+    }
+
+    @Test
+    fun changingFromSwapsTheSignOffInPlace() {
+        val old = Identity("1", "Ada", "ada@example.com", "Thanks", "<p>Thanks</p>")
+        val next = Identity("2", "Bea", "bea@example.com", "Cheers", "<p>Cheers</p>")
+        val draft = signed(
+            Draft(from = "ada@example.com", body = "Hello\n\nOn Tue, Dana wrote:\n> hi"),
+            "Thanks",
+            "<p>Thanks</p>",
+            aboveQuote = true,
+        )
+        val swapped = withFrom(draft, "bea@example.com", listOf(old, next), aboveQuote = false)
+        assertEquals("bea@example.com", swapped.from)
+        assertTrue(swapped.body.contains("-- \nCheers"), swapped.body)
+        assertTrue(!swapped.body.contains("-- \nThanks"), swapped.body)
+        assertTrue(swapped.body.indexOf("-- \nCheers") < swapped.body.indexOf("wrote:"), swapped.body)
+        assertEquals("<p>Cheers</p>", swapped.htmlSignature)
+    }
+
+    @Test
+    fun anEditedSignOffIsLeftAloneWhenFromChanges() {
+        val old = Identity("1", "Ada", "ada@example.com", "Thanks", "<p>Thanks</p>")
+        val next = Identity("2", "Bea", "bea@example.com", "Cheers", "<p>Cheers</p>")
+        val draft = signed(Draft(from = "ada@example.com", body = "Hello"), "Thanks", "<p>Thanks</p>")
+        val edited = draft.copy(body = draft.body.replace("Thanks", "Thanks!!"))
+        val swapped = withFrom(edited, "bea@example.com", listOf(old, next), aboveQuote = true)
+        assertEquals("bea@example.com", swapped.from)
+        assertEquals(edited.body, swapped.body)
+        assertTrue(!swapped.body.contains("Cheers"), swapped.body)
+    }
+
     private val reply = Draft(
         from = "me@example.org",
         body = "Tuesday works.\n\nOn 15 Sep 2026, Dana Whitfield wrote:\n> Is Tuesday any good?",

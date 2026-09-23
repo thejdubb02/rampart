@@ -139,6 +139,8 @@ data class Body(
     val text: String?,
     val messageId: List<String> = emptyList(),
     val references: List<String> = emptyList(),
+    /** In-Reply-To, when this message is itself a reply. Bare ids, same as [messageId]. */
+    val inReplyTo: List<String> = emptyList(),
     /** Everyone the message was addressed to, which is what Reply all needs. */
     val to: List<String> = emptyList(),
     val cc: List<String> = emptyList(),
@@ -451,7 +453,8 @@ internal class Jmap private constructor(
                 putJsonArray("ids") { add(id) }
                 putJsonArray("properties") {
                     add("htmlBody"); add("textBody"); add("bodyValues")
-                    add("messageId"); add("references"); add("to"); add("cc"); add("replyTo")
+                    add("messageId"); add("references"); add("header:In-Reply-To:asMessageIds")
+                    add("to"); add("cc"); add("replyTo")
                     // Asked for by name. These are not JMAP properties, they are ordinary
                     // headers, and a header nobody asks for is not sent.
                     add("header:List-Unsubscribe:asText")
@@ -490,6 +493,7 @@ internal class Jmap private constructor(
             text = join("textBody"),
             messageId = ids("messageId"),
             references = ids("references"),
+            inReplyTo = ids("header:In-Reply-To:asMessageIds"),
             to = addresses("to"),
             replyTo = addresses("replyTo"),
             cc = addresses("cc"),
@@ -777,7 +781,7 @@ internal class Jmap private constructor(
         // Minted by us only when tracking is on, because the Sent copy is then a second
         // object and the two have to agree or a reply threads against nothing.
         draft.messageId?.let { putJsonArray("messageId") { add(it.trim().removePrefix("<").removeSuffix(">")) } }
-        val html = htmlBodyOf(draft.body, draft.textSignature, draft.htmlSignature, draft.trackingPixel)
+        val html = htmlPartOf(draft)
         putJsonArray("textBody") { add(buildJsonObject { put("partId", "b"); put("type", "text/plain") }) }
         if (html != null) {
             putJsonArray("htmlBody") { add(buildJsonObject { put("partId", "h"); put("type", "text/html") }) }
@@ -1288,11 +1292,18 @@ internal class Jmap private constructor(
         setKeyword(listOf(id), "\$seen", true)
     }
 
-    /** Splits what someone typed into a comma separated list, and omits the header entirely if empty. */
+    /** Splits what someone typed, and omits the header entirely if empty. */
     private fun JsonObjectBuilder.addresses(field: String, typed: String) {
-        val parsed = typed.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        val parsed = parseAddressList(typed)
         if (parsed.isEmpty()) return
-        putJsonArray(field) { parsed.forEach { add(buildJsonObject { put("email", it) }) } }
+        putJsonArray(field) {
+            parsed.forEach { address ->
+                add(buildJsonObject {
+                    if (address.name.isNotBlank()) put("name", address.name)
+                    put("email", address.email)
+                })
+            }
+        }
     }
 
     private fun invoke(name: String, id: String, args: JsonObjectBuilder.() -> Unit): JsonArray =

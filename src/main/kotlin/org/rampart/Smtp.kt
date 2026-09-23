@@ -123,12 +123,10 @@ internal fun buildMessage(
     }
     message.setFrom(fromAddress)
 
-    if (draft.to.isNotBlank()) {
-        message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(draft.to))
-    }
-    if (draft.cc.isNotBlank()) {
-        message.setRecipients(Message.RecipientType.CC, InternetAddress.parse(draft.cc))
-    }
+    val to = internetAddresses(draft.to)
+    if (to.isNotEmpty()) message.setRecipients(Message.RecipientType.TO, to)
+    val cc = internetAddresses(draft.cc)
+    if (cc.isNotEmpty()) message.setRecipients(Message.RecipientType.CC, cc)
     message.setSubject(draft.subject, "UTF-8")
 
     // Without both of these, a reply arrives as a new conversation in every client that
@@ -149,7 +147,7 @@ internal fun buildMessage(
         message.setHeader(MDN_HEADER, senderStr)
     }
 
-    val html = htmlBodyOf(draft.body, draft.textSignature, draft.htmlSignature, draft.trackingPixel)
+    val html = htmlPartOf(draft)
     val plainText = markupToPlain(draft.body)
 
     val (inlineFiles, attachments) = files.partition { it.inline && it.cid != null }

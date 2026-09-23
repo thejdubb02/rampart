@@ -31,11 +31,52 @@ class DraftTest {
         assertEquals("justin@willhitestrategy.com", draft.from)
     }
 
-    /** A draft saved as HTML somewhere else still has to be editable here. */
+    /** Formatting in the HTML part has to survive reopening, or the next save flattens it. */
     @Test
-    fun anHtmlDraftComesBackAsText() {
-        val draft = draftOf(summary, Body("<p>Half a <b>sentence</b></p>", null), "justin@willhitestrategy.com")
-        assertEquals("Half a sentence", draft.body.trim())
+    fun anHtmlDraftKeepsItsFormatting() {
+        val html = "<p>Half a <b>sentence</b></p>"
+        val draft = draftOf(summary, Body(html, null), "justin@willhitestrategy.com")
+        assertEquals(html, draft.html)
+        assertTrue(draft.body.contains("**sentence**"), draft.body)
+        assertTrue(!draft.body.contains("<b>"), draft.body)
+    }
+
+    @Test
+    fun aReopenedDraftKeepsAttachmentsAndThreadingHeaders() {
+        val file = Attachment("b1", "quote.pdf", "application/pdf", 1200)
+        val logo = Attachment("b2", "logo.png", "image/png", 40, cid = "logo", inline = true)
+        val draft = draftOf(
+            summary,
+            Body(
+                html = null,
+                text = "See attached.",
+                references = listOf("<root@x>"),
+                inReplyTo = listOf("<parent@x>"),
+            ),
+            "justin@willhitestrategy.com",
+            listOf(file, logo),
+        )
+        assertEquals(listOf(file), draft.attachments)
+        assertEquals("<parent@x>", draft.inReplyTo)
+        assertEquals(listOf("<root@x>"), draft.references)
+    }
+
+    /**
+     * Opening is not an edit. A draft that already carries its sign-off must come back
+     * equal to the draft the composer remembers, or the autosave writes it straight away.
+     */
+    @Test
+    fun anUntouchedReopenedDraftIsNotRewritten() {
+        val from = "justin@willhitestrategy.com"
+        val html = "<div>Hello</div><div><b>Justin</b></div>"
+        val text = "Hello\n\n-- \nJustin"
+        val opened = draftOf(summary.copy(fromEmail = from), Body(html, text), from)
+        val identity = Identity("1", "Justin", from, "Other", "<p>Other</p>")
+        val initial = draftOpening(opened, listOf(identity), aboveQuote = true)
+        assertEquals(opened, initial)
+        assertEquals("Justin", opened.textSignature)
+        assertTrue(opened.htmlSignature.contains("<b>Justin</b>"), opened.htmlSignature)
+        assertTrue(opened.body.contains("-- \nJustin"), opened.body)
     }
 
     @Test

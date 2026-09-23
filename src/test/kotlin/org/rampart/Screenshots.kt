@@ -291,7 +291,7 @@ class Screenshots {
                         // The same frame the app uses, so this picture cannot flatter it.
                         ComposerFrame {
                             Composer(
-                                identities = listOf("you@example.org"),
+                                identities = listOf(Identity("you", "", "you@example.org")),
                                 initial = replyTo(
                                     MESSAGES[1],
                                     Body(null, "Could you confirm the start time?"),
@@ -482,7 +482,10 @@ class Screenshots {
         shoot("icons-heavy", 1400, 900, dark, HeavyIcons) { Panes() }
         shoot("composer", 1000, 640) {
             Composer(
-                identities = listOf("you@example.org", "billing@example.org"),
+                identities = listOf(
+                    Identity("you", "", "you@example.org"),
+                    Identity("billing", "", "billing@example.org"),
+                ),
                 initial = replyTo(MESSAGES[1], Body(null, "Could you confirm the start time?"), "you@example.org")
                     .copy(
                         // With markers in it, because the point of this shot is the
