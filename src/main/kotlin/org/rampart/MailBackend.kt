@@ -108,7 +108,19 @@ internal interface MailBackend {
 
     fun download(attachment: Attachment, into: Path): Path
 
-    fun search(text: String, mailboxId: String? = null, limit: Int = 100): List<Summary>
+    /**
+     * Search.
+     *
+     * A null [mailboxId] is the whole account. [except] names folders to leave
+     * out of that, which is how Junk and Deleted stay out of an ordinary search
+     * without a second way of asking. Passing a mailbox searches only that one.
+     */
+    fun search(
+        text: String,
+        mailboxId: String? = null,
+        limit: Int = 100,
+        except: Collection<String> = emptyList(),
+    ): List<Summary>
 
     /**
      * Every message carrying [keyword], newest first, across the whole account.
@@ -120,13 +132,13 @@ internal interface MailBackend {
 
     // ---- changing what is there ----------------------------------------------------
 
-    fun markSeen(id: String)
+    fun markSeen(id: String): Applied
 
-    fun setKeyword(ids: List<String>, keyword: String, on: Boolean)
+    fun setKeyword(ids: List<String>, keyword: String, on: Boolean): Applied
 
-    fun move(ids: List<String>, toMailboxId: String)
+    fun move(ids: List<String>, toMailboxId: String): Applied
 
-    fun destroy(ids: List<String>)
+    fun destroy(ids: List<String>): Applied
 
     fun createMailbox(name: String, parentId: String? = null): String
 
@@ -144,7 +156,14 @@ internal interface MailBackend {
 
     fun saveDraft(draft: Draft, identity: Identity, draftsMailboxId: String, replacing: String?): String
 
-    fun send(draft: Draft, identity: Identity, draftsMailboxId: String, sentMailboxId: String?)
+    /**
+     * Sends, and files a copy when [sentMailboxId] is set.
+     *
+     * Null means the copy landed, or there was nowhere to file one. A sentence
+     * means the message went and the copy did not: the send itself succeeded,
+     * so this is not a failure of sending.
+     */
+    fun send(draft: Draft, identity: Identity, draftsMailboxId: String, sentMailboxId: String?): String?
 
     // ---- things a server may simply not have ---------------------------------------
 
@@ -196,6 +215,15 @@ internal interface MailBackend {
  * means adding reasons rather than hunting for strings.
  */
 internal class Unsupported(val lacks: Lacks) : Exception(lacks.why)
+
+/**
+ * What an Email/set managed to do.
+ *
+ * [newState] is the account's mail state afterwards, when the server sent one.
+ * A push of that same state is the echo of this call, not a reason to re-read
+ * the folder. Null on a server that has no such string, which IMAP does not.
+ */
+internal data class Applied(val newState: String?)
 
 /**
  * The five toggles above a folder.

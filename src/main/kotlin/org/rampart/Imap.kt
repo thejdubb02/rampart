@@ -217,13 +217,14 @@ internal class Imap private constructor(
      * IMAP cannot address a message without its folder, so [mailboxId] comes first. An
      * empty [ids] list is a no-op and does not open the folder.
      */
-    override fun setKeyword(ids: List<String>, keyword: String, on: Boolean) {
+    override fun setKeyword(ids: List<String>, keyword: String, on: Boolean): Applied {
         byFolder(ids).forEach { (mailboxId, uids) ->
             useFolder(mailboxId, Folder.READ_WRITE) { folder ->
                 val messages = messagesByUid(folder, uids)
                 if (messages.isNotEmpty()) folder.setFlags(messages, flagsFor(keyword), on)
             }
         }
+        return Applied(null)
     }
 
     /**
@@ -231,10 +232,11 @@ internal class Imap private constructor(
      *
      * Empty [ids] does nothing and does not open a folder.
      */
-    override fun move(ids: List<String>, toMailboxId: String) {
+    override fun move(ids: List<String>, toMailboxId: String): Applied {
         byFolder(ids).forEach { (mailboxId, uids) ->
             move(mailboxId, uids, toMailboxId)
         }
+        return Applied(null)
     }
 
     private fun move(mailboxId: String, uids: List<String>, toMailboxId: String) {
@@ -261,7 +263,7 @@ internal class Imap private constructor(
      *
      * Empty [ids] does nothing and does not open a folder.
      */
-    override fun destroy(ids: List<String>) {
+    override fun destroy(ids: List<String>): Applied {
         byFolder(ids).forEach { (mailboxId, uids) ->
             useFolder(mailboxId, Folder.READ_WRITE) { folder ->
             val messages = messagesByUid(folder, uids)
@@ -273,6 +275,7 @@ internal class Imap private constructor(
             folder.expunge(messages)
             }
         }
+        return Applied(null)
     }
 
     /**
@@ -318,7 +321,7 @@ internal class Imap private constructor(
      */
     override fun mailState(): String? = null
 
-    override fun markSeen(id: String) = setKeyword(listOf(id), "\$seen", true)
+    override fun markSeen(id: String): Applied = setKeyword(listOf(id), "\$seen", true)
 
     /**
      * Every message carrying [keyword], by asking each folder in turn.
@@ -345,15 +348,28 @@ internal class Imap private constructor(
         return found.sortedByDescending { it.receivedAt }
     }
 
-    override fun search(text: String, mailboxId: String?, limit: Int): List<Summary> {
-        // One folder, because IMAP has no way to ask the question of the account. The
-        // caller is told so rather than being given the inbox and left to assume it looked
-        // everywhere, which is the answer that quietly loses mail.
-        val folder = mailboxId ?: throw Unsupported(Lacks.SERVER_SEARCH_ALL)
+    override fun search(text: String, mailboxId: String?, limit: Int, except: Collection<String>): List<Summary> {
         val term = searchTerm(text) ?: return emptyList()
-        return useFolder(folder, Folder.READ_ONLY) { open ->
-            summaries(open.search(term).reversed().take(limit), open)
+        // One folder when asked for one. Otherwise every folder except the ones named,
+        // because IMAP has no account-wide search and skipping that is how a search of
+        // everything used to look in the inbox only.
+        if (mailboxId != null) {
+            return useFolder(mailboxId, Folder.READ_ONLY) { open ->
+                summaries(open.search(term).reversed().take(limit), open)
+            }
         }
+        val skip = except.toSet()
+        val found = ArrayList<Summary>()
+        for (box in mailboxes()) {
+            if (found.size >= limit) break
+            if (box.id in skip) continue
+            runCatching {
+                useFolder(box.id, Folder.READ_ONLY) { open ->
+                    found.addAll(summaries(open.search(term).reversed().take(limit - found.size), open))
+                }
+            }
+        }
+        return found.sortedByDescending { it.receivedAt }.take(limit)
     }
 
     /**
@@ -475,39 +491,41 @@ internal class Imap private constructor(
         return id
     }
 
-    override fun send(draft: Draft, identity: Identity, draftsMailboxId: String, sentMailboxId: String?) {
+    override fun send(draft: Draft, identity: Identity, draftsMailboxId: String, sentMailboxId: String?): String? {
         // Opened per send rather than held. A submission connection sitting idle for hours
         // is one the server will drop without telling us, and the failure then lands on
         // whoever pressed Send rather than on the connection that went stale.
         val sent = Smtp.connect(sendHost, user, password, sendPort).use {
             it.send(draft, identity, emptyList())
         }
-        sentMailboxId?.let { folder ->
-            runCatching {
-                val session = Session.getInstance(Properties())
-                val filed = MimeMessage(session, sent.inputStream())
-                /*
-                 * A tracked message is filed without its pixel, so opening your own copy
-                 * cannot register as the recipient reading it.
-                 *
-                 * Easier here than it is on JMAP: IMAP has no EmailSubmission, so the client
-                 * files the copy itself and can simply file a different rendering. The
-                 * Message-ID is lifted off the bytes that actually went out, because two
-                 * renderings of one draft otherwise disagree about it and the reply threads
-                 * against a message that is not in the mailbox.
-                 */
-                if (draft.trackingPixel.isNotEmpty()) {
-                    val copy = buildMessage(session, draft.copy(trackingPixel = ""), identity, emptyList())
-                    copy.saveChanges()
-                    filed.getHeader("Message-ID")?.firstOrNull()?.let { copy.setHeader("Message-ID", it) }
-                    filed.getHeader("Date")?.firstOrNull()?.let { copy.setHeader("Date", it) }
-                    append(folder, copy)
-                } else {
-                    // The bytes that went out, not a second rendering of the draft.
-                    append(folder, filed)
-                }
+        val folder = sentMailboxId ?: return null
+        val filed = runCatching {
+            val session = Session.getInstance(Properties())
+            val copy = MimeMessage(session, sent.inputStream())
+            /*
+             * A tracked message is filed without its pixel, so opening your own copy
+             * cannot register as the recipient reading it.
+             *
+             * Easier here than it is on JMAP: IMAP has no EmailSubmission, so the client
+             * files the copy itself and can simply file a different rendering. The
+             * Message-ID is lifted off the bytes that actually went out, because two
+             * renderings of one draft otherwise disagree about it and the reply threads
+             * against a message that is not in the mailbox.
+             */
+            if (draft.trackingPixel.isNotEmpty()) {
+                val clean = buildMessage(session, draft.copy(trackingPixel = ""), identity, emptyList())
+                clean.saveChanges()
+                copy.getHeader("Message-ID")?.firstOrNull()?.let { clean.setHeader("Message-ID", it) }
+                copy.getHeader("Date")?.firstOrNull()?.let { clean.setHeader("Date", it) }
+                append(folder, clean)
+            } else {
+                // The bytes that went out, not a second rendering of the draft.
+                append(folder, copy)
             }
         }
+        // The message has already gone. A copy that could not be filed is a notice,
+        // not a failed send, or the next attempt would send it a second time.
+        return if (filed.isSuccess) null else "Sent, but the copy could not be filed in Sent Items."
     }
 
     /** APPEND, with the server's new UID when it offers UIDPLUS and a re-read when it does not. */

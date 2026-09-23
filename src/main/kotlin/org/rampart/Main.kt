@@ -978,11 +978,12 @@ private fun quickPage(
  * Everything about one message that has to be fetched, or decided, before its card in the
  * thread stack can be drawn.
  *
- * One map, [Reader]'s `cards`, keyed by message id, rather than a body map and a bodyError
- * map and an attachments map and so on side by side: those were nine declarations that
- * moved together, were cleared together and were never once independent of each other, so
- * the next field a card needs would otherwise be three edits in three places rather than
- * one field here.
+ * One map, [Reader]'s `cards`, keyed by account and message id, rather than a body map
+ * and a bodyError map and an attachments map and so on side by side: those were nine
+ * declarations that moved together, were cleared together and were never once independent
+ * of each other, so the next field a card needs would otherwise be three edits in three
+ * places rather than one field here. The account is part of the key because an id is only
+ * unique inside one account.
  */
 internal data class Card(
     val body: Body? = null,
@@ -1215,7 +1216,14 @@ private fun Reader(
      * a thread must not pay for the first one again when they come back to it. See
      * [loadCard], which is the only place anything is written in here.
      */
-    var cards by remember { mutableStateOf<Map<String, Card>>(emptyMap()) }
+    var cards by remember { mutableStateOf<Map<CardKey, Card>>(emptyMap()) }
+    /**
+     * How many loads have started for each card.
+     *
+     * A load that finishes after a newer one has started for the same card must not
+     * write. The number at the start of the load is the only one allowed to.
+     */
+    val cardEpoch = remember { mutableMapOf<CardKey, Int>() }
     /** The whole conversation, oldest first, including whichever message was opened. */
     var thread by remember { mutableStateOf<List<Summary>>(emptyList()) }
     /**
@@ -1334,11 +1342,21 @@ private fun Reader(
         message?.account?.ifBlank { null } ?: here?.first?.takeIf { it != ALL_ACCOUNTS }
 
     /** [Card] for [message], or an empty one for a message nothing has been fetched for yet. */
-    fun cardFor(message: Summary?): Card = message?.let { cards[it.id] } ?: Card()
+    fun cardFor(message: Summary?): Card {
+        val account = message?.let { accountOf(it) } ?: return Card()
+        return cards[CardKey(account, message.id)] ?: Card()
+    }
 
-    /** [cardFor], with [edit] applied and written back. The only way anything joins [cards]. */
-    fun updateCard(id: String, edit: Card.() -> Card) {
-        cards = cards + (id to (cards[id] ?: Card()).edit())
+    /**
+     * [cardFor], with [edit] applied and written back. The only way anything joins [cards].
+     *
+     * [epoch] set means this write belongs to one load. A newer load of the same card
+     * has already moved the counter on, and this write is dropped.
+     */
+    fun updateCard(account: String, id: String, epoch: Int? = null, edit: Card.() -> Card) {
+        val slot = CardKey(account, id)
+        if (epoch != null && cardEpoch[slot] != epoch) return
+        cards = cards + (slot to (cards[slot] ?: Card()).edit())
     }
 
     /**
@@ -1346,7 +1364,7 @@ private fun Reader(
      * or one the reader said yes to just for this message, from [shownOnce].
      */
     fun showRemoteFor(message: Summary?): Boolean =
-        message != null && (imageSenderKey(message.fromEmail) in allowedSenders || message.id in shownOnce)
+        message != null && (imageSenderKey(message.fromEmail) in allowedSenders || rowToken(message) in shownOnce)
 
     /**
      * The account a new message is written from. The one being replied to, when there is
@@ -1423,6 +1441,18 @@ private fun Reader(
     fun settingsAccount(): String? =
         here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key
 
+    /**
+     * Folders a search of the whole account should leave out.
+     *
+     * Junk and Deleted, unless the folder on screen is that one. The merged inbox
+     * is not inside either, so both stay out there.
+     */
+    fun searchExcept(account: String): List<String> {
+        val role = if (!unified() && here?.first == account) here?.second?.role else null
+        val boxes = mailboxes[account].orEmpty()
+        return foldersToSkip(role, folderFor("junk", boxes)?.id, folderFor("trash", boxes)?.id)
+    }
+
     /** The inbox of every signed in account, as one list. */
     suspend fun everyInbox(memory: Map<String, List<Person>>, asked: QuickFilters): List<Summary> = merged(
         sessions.associate { open ->
@@ -1430,7 +1460,7 @@ private fun Reader(
             open.key to (
                 inbox?.let {
                     runCatching {
-                        if (showingResults && query.isNotBlank()) open.jmap.search(query, it.id)
+                        if (showingResults && query.isNotBlank()) open.jmap.search(query, null, except = searchExcept(open.key))
                         else {
                             val known = if (asked.knownSender) knownAddresses(open.key, memory) else emptySet()
                             quickPage(open.jmap, open.store, it.id, asked, known)
@@ -1449,11 +1479,11 @@ private fun Reader(
         null
     }
 
-    /** The message this id is, wherever the open conversation or the list has it. */
-    fun findSummary(id: String): Summary? =
-        selected?.takeIf { it.id == id }
-            ?: thread.firstOrNull { it.id == id }
-            ?: emails.firstOrNull { it.id == id }
+    /** The message this id is, on this account, wherever the conversation or the list has it. */
+    fun findSummary(account: String, id: String): Summary? =
+        selected?.takeIf { it.sameMail(account, id) }
+            ?: thread.firstOrNull { it.sameMail(account, id) }
+            ?: emails.firstOrNull { it.sameMail(account, id) }
 
     /**
      * Whether an undesigned message is drawn dark.
@@ -1471,7 +1501,9 @@ private fun Reader(
         books.values.flatten().map { domainOf(it.email) }.filter { it.isNotBlank() }.toSet()
 
     fun publishCard(
+        account: String,
         id: String,
+        epoch: Int,
         body: Body,
         attachments: List<Attachment>,
         pictures: Map<String, ByteArray>,
@@ -1481,7 +1513,7 @@ private fun Reader(
         emailBlobId: String?,
         loaded: Boolean,
     ) {
-        updateCard(id) {
+        updateCard(account, id, epoch) {
             copy(
                 body = body,
                 bodyError = null,
@@ -1534,26 +1566,34 @@ private fun Reader(
      * does not fetch it a second time.
      */
     suspend fun loadCard(key: String, id: String, force: Boolean = false) {
-        if (!force && cards[id]?.loaded == true) return
-        val remote = showRemoteFor(findSummary(id))
+        val slot = CardKey(key, id)
+        if (!force && cards[slot]?.loaded == true) return
+        // Counted before the first suspend. A second load of this card moves the
+        // counter, and every write below checks it still matches.
+        val epoch = (cardEpoch[slot] ?: 0) + 1
+        cardEpoch[slot] = epoch
+        fun live() = cardEpoch[slot] == epoch
+        val remote = showRemoteFor(findSummary(key, id))
         val dark = darkMail
         val known = knownDomains()
         val kept = withContext(Dispatchers.IO) { runCatching { session(key).store?.kept(id) }.getOrNull() }
-        val showing = cards[id]
+        if (!live()) return
+        val showing = cards[slot]
         if (
             kept != null && showing?.reading != null && showing.pageRemote == remote &&
             showing.body == kept.body && cacheStillGood(key, id, kept)
         ) {
+            if (!live()) return
             Diagnostics.count(Metric.MESSAGE_OPEN_CACHE_HIT)
-            updateCard(id) { copy(loaded = true, calendar = kept.calendar, emailBlobId = kept.emailBlobId) }
-            if (id == selected?.id) invitation = kept.calendar?.let { invitationIn(it) }
+            updateCard(key, id, epoch) { copy(loaded = true, calendar = kept.calendar, emailBlobId = kept.emailBlobId) }
+            if (selected?.sameMail(key, id) == true) invitation = kept.calendar?.let { invitationIn(it) }
             return
         }
         if (kept != null) {
             val reading = withContext(Dispatchers.Default) {
                 prepareReading(
-                    findSummary(id)?.fromEmail.orEmpty(),
-                    findSummary(id)?.from.orEmpty(),
+                    findSummary(key, id)?.fromEmail.orEmpty(),
+                    findSummary(key, id)?.from.orEmpty(),
                     kept.body,
                     kept.attachments,
                     kept.pictures,
@@ -1562,16 +1602,19 @@ private fun Reader(
                     known,
                 )
             }
-            publishCard(id, kept.body, kept.attachments, kept.pictures, reading, remote, kept.calendar, kept.emailBlobId, loaded = false)
-            if (id == selected?.id) invitation = kept.calendar?.let { invitationIn(it) }
+            if (!live()) return
+            publishCard(key, id, epoch, kept.body, kept.attachments, kept.pictures, reading, remote, kept.calendar, kept.emailBlobId, loaded = false)
+            if (selected?.sameMail(key, id) == true) invitation = kept.calendar?.let { invitationIn(it) }
             if (cacheStillGood(key, id, kept)) {
+                if (!live()) return
                 Diagnostics.count(Metric.MESSAGE_OPEN_CACHE_HIT)
-                updateCard(id) { copy(loaded = true) }
+                updateCard(key, id, epoch) { copy(loaded = true) }
                 return
             }
         }
         Diagnostics.time(Metric.MESSAGE_OPEN_FETCH) {
             val opened = withContext(Dispatchers.IO) { tried { session(key).jmap.open(id) } }
+            if (!live()) return@time
             val fresh = opened.getOrNull()
             if (fresh == null) {
                 // Only a failure when there was nothing kept. Offline, with a copy on
@@ -1579,16 +1622,16 @@ private fun Reader(
                 // A fetch that failed with nothing on disk is not marked loaded, or the
                 // next open would keep showing the error after the network came back.
                 if (kept == null) {
-                    updateCard(id) {
+                    updateCard(key, id, epoch) {
                         copy(bodyError = whyFailed(opened.exceptionOrNull() ?: Exception("That message would not open.")))
                     }
                 } else {
-                    updateCard(id) { copy(loaded = true) }
+                    updateCard(key, id, epoch) { copy(loaded = true) }
                 }
                 return@time
             }
             val pictures = withContext(Dispatchers.IO) { cidBytes(session(key).jmap, fresh.body, fresh.attachments) }
-            val person = findSummary(id)
+            val person = findSummary(key, id)
             val reading = withContext(Dispatchers.Default) {
                 prepareReading(
                     person?.fromEmail.orEmpty(),
@@ -1601,7 +1644,9 @@ private fun Reader(
                     known,
                 )
             }
+            if (!live()) return@time
             val state = withContext(Dispatchers.IO) { runCatching { session(key).jmap.mailState() }.getOrNull() }
+            if (!live()) return@time
             withContext(Dispatchers.IO) {
                 runCatching {
                     session(key).store?.putKept(
@@ -1610,10 +1655,11 @@ private fun Reader(
                     )
                 }
             }
+            if (!live()) return@time
             // The same document is not handed over again. A second load is the jump.
-            val same = cards[id]?.reading?.page == reading.page && reading.page != null
+            val same = cards[slot]?.reading?.page == reading.page && reading.page != null
             if (same) {
-                updateCard(id) {
+                updateCard(key, id, epoch) {
                     copy(
                         body = fresh.body,
                         attachments = fresh.attachments,
@@ -1627,11 +1673,11 @@ private fun Reader(
                 }
             } else {
                 publishCard(
-                    id, fresh.body, fresh.attachments, pictures, reading, remote,
+                    key, id, epoch, fresh.body, fresh.attachments, pictures, reading, remote,
                     fresh.calendar, fresh.emailBlobId, loaded = true,
                 )
             }
-            if (id == selected?.id) invitation = fresh.calendar?.let { invitationIn(it) }
+            if (selected?.sameMail(key, id) == true) invitation = fresh.calendar?.let { invitationIn(it) }
         }
     }
 
@@ -1847,12 +1893,17 @@ private fun Reader(
         // Read whenever this is a plain folder view, not only when there is something
         // cached: a first read has to leave a cursor behind or the second one cannot skip.
         val state = if (plain) io { session(key).jmap.mailState() } else null
-        if (state != null && cached.isNotEmpty() && state == io { session(key).store?.cursor(mailbox.id) }) {
+        val savedCursor = if (state != null) io { session(key).store?.cursor(mailbox.id) } else null
+        // An empty cache with a matching cursor is a folder the server has already
+        // told us is empty. Skipping only when the cache holds rows would fetch that
+        // folder again on every refresh.
+        if (state != null && state == savedCursor) {
             loading = false
-            exhausted = false
+            exhausted = cached.size < 100
             return
         }
         val tagging = viewingTag
+        var freshPage: List<Summary>? = null
         emails = if (tagging != null) {
             /*
              * A tag is asked of every account that has it, and the answers are put together.
@@ -1874,10 +1925,15 @@ private fun Reader(
             // rather than out here: the others still show.
             withContext(Dispatchers.IO) { everyInbox(memory, asked) }
         } else {
-            io {
-                if (showingResults && query.isNotBlank()) session(key).jmap.search(query, mailbox.id)
-                else quickPage(session(key).jmap, session(key).store, mailbox.id, asked, known)
+            val fetched = io {
+                if (showingResults && query.isNotBlank()) {
+                    session(key).jmap.search(query, null, except = searchExcept(key))
+                } else {
+                    quickPage(session(key).jmap, session(key).store, mailbox.id, asked, known)
+                }
             }
+            if (!showingResults) freshPage = fetched
+            fetched
                 // The server is still the authority on search, because it can see mail we
                 // have never fetched. The local copy is the answer when it cannot be
                 // reached, which is the difference between "no results" and "no network".
@@ -1888,9 +1944,20 @@ private fun Reader(
         exhausted = false
         learnFrom(emails)
         // Written back after the server has answered, so the copy is what the server
-        // last said rather than what we guessed it would say.
-        if (plain && emails.isNotEmpty()) {
-            io { session(key).store?.put(mailbox.id, emails) }
+        // last said rather than what we guessed it would say. A failed fetch leaves
+        // the copy alone: wiping it because the network dropped would hide mail we
+        // already have.
+        val page = freshPage
+        if (plain && page != null) {
+            io {
+                val store = session(key).store ?: return@io
+                if (page.isEmpty()) {
+                    store.clear(mailbox.id)
+                } else {
+                    store.pruneToPage(mailbox.id, page)
+                    store.put(mailbox.id, page)
+                }
+            }
             // The cursor is set from the state read before the fetch, never after it: mail
             // arriving between the two would otherwise be marked as already seen and the
             // next open would skip it.
@@ -1968,7 +2035,7 @@ private fun Reader(
             }
         }
         val gone = ids.toSet()
-        emails = emails.filterNot { it.id in gone }
+        emails = emails.filterNot { it.sameMail(key, gone) }
     }
 
     /**
@@ -2009,7 +2076,7 @@ private fun Reader(
         // connection to themselves rather than queueing behind a fetch nobody asked for.
         delay(600)
         for (row in emails.take(READ_AHEAD)) {
-            if (row.id == selected?.id) continue
+            if (selected?.sameMail(row) == true) continue
             // The unified inbox is rows from several accounts, so the account comes from the
             // row rather than from the folder. It used to return early here, which switched
             // the read ahead off entirely in the view most likely to be left open.
@@ -2034,6 +2101,66 @@ private fun Reader(
     }
 
     val pushes = remember { Channel<Unit>(Channel.CONFLATED) }
+    /**
+     * The mail state our own last change produced, per account.
+     *
+     * A push of that same state is the echo of the change already on screen.
+     * Re-reading the folder for it is what made marking a message read flash
+     * the whole list.
+     */
+    val ownState = remember { mutableMapOf<String, String>() }
+
+    fun noteState(key: String, applied: Applied?) {
+        applied?.newState?.let { ownState[key] = it }
+    }
+
+    /**
+     * Runs a change on the server and remembers the state it produced.
+     *
+     * Null means it was refused. The sentence is already on the error bar.
+     */
+    suspend fun changed(key: String, block: () -> Applied): Applied? {
+        val outcome = tried { withContext(Dispatchers.IO) { block() } }
+        val applied = outcome.getOrNull()
+        if (applied == null) {
+            outcome.exceptionOrNull()?.let { error = whyFailed(it) }
+            return null
+        }
+        noteState(key, applied)
+        return applied
+    }
+
+    /**
+     * Flips seen on the rows this account owns.
+     *
+     * [onlyIf] set means a later edit has already moved the row, and this one
+     * leaves it. That is how a failed mark-read puts the row back without
+     * undoing a click the reader made while the request was in flight.
+     */
+    fun paintSeen(account: String, ids: Set<String>, read: Boolean, onlyIf: Boolean? = null) {
+        fun paint(row: Summary) =
+            if (!row.sameMail(account, ids) || (onlyIf != null && row.seen != onlyIf)) row else row.copy(seen = read)
+        emails = emails.map(::paint)
+        thread = thread.map(::paint)
+        selected?.let { if (it.sameMail(account, ids) && (onlyIf == null || it.seen == onlyIf)) selected = it.copy(seen = read) }
+    }
+
+    /** Writes the rows just marked back to each account's own folder. */
+    suspend fun rememberSeen(account: String, ids: Set<String>) {
+        val changedRows = emails.filter { it.sameMail(account, ids) }
+        val writes = seenCacheWrites(
+            unified = unified(),
+            account = account,
+            folderId = here?.second?.id?.takeIf { it != ALL_ACCOUNTS },
+            changed = changedRows,
+            inboxId = { who -> folderFor("inbox", mailboxes[who].orEmpty())?.id },
+        )
+        writes.forEach { write ->
+            val rows = changedRows.filter { it.sameMail(write.account, write.ids.toSet()) }
+            if (rows.isEmpty()) return@forEach
+            withContext(Dispatchers.IO) { runCatching { session(write.account).store?.put(write.mailbox, rows) } }
+        }
+    }
     LaunchedEffect(sessions) {
         val states = mutableMapOf<String, String>()
         val seen = mutableMapOf<String, Set<String>>()
@@ -2057,7 +2184,10 @@ private fun Reader(
                     ?.let { mailboxes = mailboxes + (open.key to it) }
                 // Anything this account changed can be in the folder on screen, not only in
                 // its inbox: mail read or filed in another client moves the open folder too.
-                if ((here?.first == open.key || unified()) && !showingResults) reload()
+                // A state we just produced ourselves, with nothing new in the inbox, is
+                // the echo of that action. The list already shows it.
+                val echoed = found.fresh.isEmpty() && found.state == ownState[open.key]
+                if ((here?.first == open.key || unified()) && !showingResults && !echoed) reload()
                 /*
                  * A muted conversation is quietened here, on the way in.
                  *
@@ -2075,7 +2205,14 @@ private fun Reader(
             // Until every account has been looked at once there is nothing to compare
             // against, so those first rounds come quickly rather than half a minute apart.
             val quiet = if (states.size == sessions.size) 30_000L else 5_000L
-            withTimeoutOrNull(quiet) { pushes.receive() }
+            val woke = withTimeoutOrNull(quiet) { pushes.receive() }
+            if (woke != null) {
+                // A burst of pushes, including the echo of something just done here,
+                // is one pass. The pass reads the current state, so waiting does not
+                // drop a change, it only stops reading the folder once per push.
+                delay(400)
+                while (pushes.tryReceive().isSuccess) Unit
+            }
         }
     }
 
@@ -2224,11 +2361,11 @@ private fun Reader(
         scope.launch {
             if (keyword in message.keywords) return@launch
             val keywords = message.keywords + keyword
-            emails = emails.map { if (it.id == message.id) it.copy(keywords = keywords) else it }
-            if (selected?.id == message.id) selected = selected?.copy(keywords = keywords)
-            if (io { session(key).jmap.setKeyword(listOf(message.id), keyword, true) } == null) {
-                emails = emails.map { if (it.id == message.id) it.copy(keywords = message.keywords) else it }
-                if (selected?.id == message.id) selected = selected?.copy(keywords = message.keywords)
+            emails = emails.map { if (it.sameMail(message)) it.copy(keywords = keywords) else it }
+            if (selected?.sameMail(message) == true) selected = selected?.copy(keywords = keywords)
+            if (changed(key) { session(key).jmap.setKeyword(listOf(message.id), keyword, true) } == null) {
+                emails = emails.map { if (it.sameMail(message)) it.copy(keywords = message.keywords) else it }
+                if (selected?.sameMail(message) == true) selected = selected?.copy(keywords = message.keywords)
             }
         }
     }
@@ -2267,10 +2404,11 @@ private fun Reader(
                     } finally {
                         Files.deleteIfExists(file)
                     }
-                }.isSuccess
+                }
             }
             answering = null
-            if (sent) {
+            if (sent.isSuccess) {
+                sent.getOrNull()?.let { if (error.isBlank()) error = it }
                 // Shown as answered straight away. The organiser's copy is what counts and
                 // it has gone; re-reading our own part would say nothing new.
                 invitation = meeting.copy(
@@ -2439,8 +2577,18 @@ private fun Reader(
             // before the delay, not after, or "never" would be "after a pause".
             if (wait < 0) return@LaunchedEffect
             if (wait > 0) delay(wait)
-            io { session(key).jmap.markSeen(message.id) }
-            emails = emails.map { if (it.id == message.id) it.copy(seen = true) else it }
+            // The row changes now. The server is told after, and a refusal puts the
+            // row back. Waiting for the server first is what left it bold for the
+            // whole round trip.
+            if (selected?.sameMail(message) != true) return@LaunchedEffect
+            paintSeen(key, setOf(message.id), true)
+            scope.launch {
+                if (changed(key) { session(key).jmap.markSeen(message.id) } == null) {
+                    paintSeen(key, setOf(message.id), false, onlyIf = true)
+                } else {
+                    rememberSeen(key, setOf(message.id))
+                }
+            }
         }
     }
 
@@ -2460,13 +2608,18 @@ private fun Reader(
         val waiting = thread.filter { it.id in openedByHand && it.id in expanded && !it.seen }
         if (waiting.isEmpty()) return@LaunchedEffect
         if (wait > 0) delay(wait)
-        waiting.groupBy { accountOf(it) }.forEach { (key, rows) ->
+        val still = thread.filter { it.id in openedByHand && it.id in expanded && !it.seen }
+        still.groupBy { accountOf(it) }.forEach { (key, rows) ->
             if (key == null) return@forEach
-            val ids = rows.map { it.id }
-            io { session(key).jmap.setKeyword(ids, "\$seen", true) }
-            val marked = ids.toSet()
-            thread = thread.map { if (it.id in marked) it.copy(seen = true) else it }
-            emails = emails.map { if (it.id in marked) it.copy(seen = true) else it }
+            val ids = rows.map { it.id }.toSet()
+            paintSeen(key, ids, true)
+            scope.launch {
+                if (changed(key) { session(key).jmap.setKeyword(ids.toList(), "\$seen", true) } == null) {
+                    paintSeen(key, ids, false, onlyIf = true)
+                } else {
+                    rememberSeen(key, ids)
+                }
+            }
         }
     }
 
@@ -2482,7 +2635,7 @@ private fun Reader(
     LaunchedEffect(expanded, selected) {
         val key = accountOf(selected) ?: return@LaunchedEffect
         for (id in expanded) {
-            if (id == selected?.id || cards[id]?.body != null) continue
+            if (id == selected?.id || cards[CardKey(key, id)]?.body != null) continue
             loadCard(key, id)
             yield()
         }
@@ -2567,22 +2720,25 @@ private fun Reader(
 
     suspend fun carryOut(key: String, message: Summary, into: String, from: String?, verb: String) {
         sayJunk(key, listOf(message.id), from, into)
-        if (io { session(key).jmap.move(listOf(message.id), into) } == null) return
+        // The row stays until the server accepts the move. A refusal used to take
+        // it off the list and offer Undo, and the message came back on the next
+        // refresh because the server had never moved it.
+        if (changed(key) { session(key).jmap.move(listOf(message.id), into) } == null) return
         // Out of the local copy as well, or the folder it left would show it
         // again the next time that folder is opened from disk.
         io { session(key).store?.forget(listOf(message.id)) }
-        emails = emails.filterNot { it.id == message.id }
+        emails = emails.filterNot { it.sameMail(message) }
         // And out of the conversation on screen. A card archived from inside the stack used
         // to stay there, fully interactive, as though the button had not worked, until the
         // reader opened something else.
         thread = thread.filterNot { it.id == message.id }
         expanded = expanded - message.id
         openedByHand = openedByHand - message.id
-        cards = cards - message.id
+        cards = cards - CardKey(key, message.id)
         // Remembered, because the thread request for this conversation may still be in
         // flight and its answer was assembled before this move.
         filed = filed + message.id
-        if (selected?.id == message.id) selected = null
+        if (selected?.sameMail(message) == true) selected = null
         // One message can be taken back the same way a batch can. Filing the
         // wrong thing is a click, and having to go and find it again is the
         // part that makes people slow and careful about a button.
@@ -2635,11 +2791,11 @@ private fun Reader(
                 ?: run { error = "This account would not make a $SNOOZE_FOLDER folder."; return@launch }
             val due = until.dueAt(ZonedDateTime.now()).toInstant()
             val from = sourceFolder(key)
-            if (io { session(key).jmap.setKeyword(listOf(message.id), snoozeKeyword(due), true) } == null) return@launch
-            if (io { session(key).jmap.move(listOf(message.id), folder) } == null) return@launch
+            if (changed(key) { session(key).jmap.setKeyword(listOf(message.id), snoozeKeyword(due), true) } == null) return@launch
+            if (changed(key) { session(key).jmap.move(listOf(message.id), folder) } == null) return@launch
             io { session(key).store?.forget(listOf(message.id)) }
-            emails = emails.filterNot { it.id == message.id }
-            if (selected?.id == message.id) selected = null
+            emails = emails.filterNot { it.sameMail(message) }
+            if (selected?.sameMail(message) == true) selected = null
             undo = from?.let { Undoable(listOf(Move(key, listOf(message.id), it)), "Snoozed") }
         }
     }
@@ -2753,7 +2909,7 @@ private fun Reader(
         sentId: String?,
         draftId: String?,
         key: String,
-    ): Result<Unit> = tried {
+    ): Result<String?> = tried {
         val trackingBase = Settings.trackingServer()
         var tracked: Tracked? = null
         val outgoing = if (!draft.tracked || trackingBase.isBlank()) {
@@ -2777,9 +2933,9 @@ private fun Reader(
         // Measured from here, not from an undo wait the caller may have done first:
         // that pause is deliberate, not server latency, and counting it would make
         // every send look exactly [Settings.undoSeconds] slower than it was.
-        Diagnostics.time(Metric.SEND_COMPOSE_TO_SENT) {
+        val notice = Diagnostics.time(Metric.SEND_COMPOSE_TO_SENT) {
             withContext(Dispatchers.IO) {
-                account.jmap.send(outgoing, identity, draftsId, sentId)
+                val filed = account.jmap.send(outgoing, identity, draftsId, sentId)
                 // Written down only once it has actually gone. A tracked id for a
                 // message that failed to send would sit in the list forever waiting
                 // for an open that cannot come.
@@ -2787,6 +2943,7 @@ private fun Reader(
                 // The sent message is its own copy in Sent, so the working copy in
                 // Drafts is now a duplicate of mail already gone.
                 draftId?.let { runCatching { account.jmap.destroy(listOf(it)) } }
+                filed
             }
         }
         // Who you write to counts for more than who writes to you, so a sent
@@ -2800,7 +2957,7 @@ private fun Reader(
         draft.recipients.forEach { book = noted(book, it) }
         books = books + (key to book)
         runCatching { AddressBook.write(book, AddressBook.file(key)) }
-        Unit
+        notice
     }.also { result ->
         result.onFailure { thrown ->
             Diagnostics.event(Metric.SEND_FAILURE, sendFailureCategoryOf(thrown))
@@ -2833,8 +2990,12 @@ private fun Reader(
             )
             // Dropped before this function returns, so a second pass cannot
             // start another send of a message that has already gone.
-            if (result.isSuccess) ScheduledSends.cancel(item.id)
-            return result
+            if (result.isSuccess) {
+                result.getOrNull()?.let { notice -> if (error.isBlank()) error = notice }
+                ScheduledSends.cancel(item.id)
+                return Result.success(Unit)
+            }
+            return Result.failure(result.exceptionOrNull() ?: Exception("That message could not be sent."))
         } finally {
             firing.remove(item.id)
         }
@@ -2951,12 +3112,12 @@ private fun Reader(
         // The star turns over at once and is put back if the server says no. A star that
         // waits for a round trip feels broken at the speed people click.
         fun show(value: Boolean) {
-            emails = emails.map { if (it.id == message.id) it.copy(flagged = value) else it }
-            if (selected?.id == message.id) selected = selected?.copy(flagged = value)
+            emails = emails.map { if (it.sameMail(message)) it.copy(flagged = value) else it }
+            if (selected?.sameMail(message) == true) selected = selected?.copy(flagged = value)
         }
         show(wanted)
         scope.launch {
-            if (io { session(key).jmap.setKeyword(listOf(message.id), "\$flagged", wanted) } == null) {
+            if (changed(key) { session(key).jmap.setKeyword(listOf(message.id), "\$flagged", wanted) } == null) {
                 show(!wanted)
             }
         }
@@ -2972,15 +3133,18 @@ private fun Reader(
      */
     fun setSeen(key: String, ids: Set<String>, read: Boolean) {
         if (ids.isEmpty()) return
-        emails = emails.map { if (it.id in ids) it.copy(seen = read) else it }
-        thread = thread.map { if (it.id in ids) it.copy(seen = read) else it }
-        if (selected?.id in ids) selected = selected?.copy(seen = read)
+        paintSeen(key, ids, read)
         scope.launch {
-            io { session(key).jmap.setKeyword(ids.toList(), "\$seen", read) }
+            if (changed(key) { session(key).jmap.setKeyword(ids.toList(), "\$seen", read) } == null) {
+                paintSeen(key, ids, !read, onlyIf = read)
+                return@launch
+            }
             // The copy on disk learns it too. Without this a reload served from the local
             // store shows the row unread again for the moment before the server answers,
-            // which is the same flash by a different route.
-            here?.second?.id?.let { box -> io { session(key).store?.put(box, emails) } }
+            // which is the same flash by a different route. In the merged list each row
+            // goes to its own account, under that account's inbox: writing the whole
+            // list under "*all*" moved real inbox rows onto a folder that is not one.
+            rememberSeen(key, ids)
         }
     }
 
@@ -3000,7 +3164,9 @@ private fun Reader(
      */
     fun toolsFor(key: String): MailTools = object : MailTools {
         override fun search(text: String, limit: Int): List<Summary> =
-            runCatching { session(key).jmap.search(text, null, limit) }.getOrDefault(emptyList())
+            runCatching {
+                session(key).jmap.search(text, null, limit, searchExcept(key))
+            }.getOrDefault(emptyList())
 
         override fun read(id: String): String? =
             runCatching { plainTextOf(session(key).jmap.body(id)) }.getOrNull()?.ifBlank { null }
@@ -3009,14 +3175,16 @@ private fun Reader(
             if (ids.isEmpty()) return 0
             val target = folderFor(role, mailboxes[key].orEmpty())?.id ?: return 0
             val from = sourceFolder(key)
-            if (runCatching { session(key).jmap.move(ids, target) }.isFailure) return 0
+            val moved = runCatching { session(key).jmap.move(ids, target) }
+            if (moved.isFailure) return 0
+            noteState(key, moved.getOrNull())
             runCatching { session(key).store?.forget(ids) }
             // Undoable like every other move. An action nobody typed is the one that most
             // needs taking back.
             scope.launch {
                 val gone = ids.toSet()
-                emails = emails.filterNot { it.id in gone }
-                if (selected?.id in gone) selected = null
+                emails = emails.filterNot { it.sameMail(key, gone) }
+                if (selected?.sameMail(key, gone) == true) selected = null
                 undo = from?.let { Undoable(listOf(Move(key, ids, it)), pastTense(role)) }
             }
             return ids.size
@@ -3108,7 +3276,7 @@ private fun Reader(
     suspend fun summariseTurns(key: String, message: Summary): List<Turn> = coroutineScope {
         thread.ifEmpty { listOf(message) }.map { m ->
             async(Dispatchers.IO) {
-                val text = cards[m.id]?.body?.let(::plainTextOf)
+                val text = cards[CardKey(key, m.id)]?.body?.let(::plainTextOf)
                     ?: runCatching { plainTextOf(session(key).jmap.body(m.id)) }.getOrDefault("")
                 Turn(m.from, m.receivedAt, text)
             }
@@ -3197,10 +3365,10 @@ private fun Reader(
         val from = sourceFolder(key)
         scope.launch {
             sayJunk(key, ids, from, target)
-            if (io { session(key).jmap.move(ids, target) } == null) return@launch
+            if (changed(key) { session(key).jmap.move(ids, target) } == null) return@launch
             io { session(key).store?.forget(ids) }
             val gone = ids.toSet()
-            emails = emails.filterNot { it.id in gone }
+            emails = emails.filterNot { it.sameMail(key, gone) }
             selected = null
             thread = emptyList()
             // Twelve messages filed by one click is exactly the act that has to be
@@ -3531,14 +3699,14 @@ private fun Reader(
     fun toggleSource(message: Summary) {
         val key = accountOf(message) ?: return
         if (cardFor(message).source != null) {
-            updateCard(message.id) { copy(source = null) }
+            updateCard(key, message.id) { copy(source = null) }
             return
         }
-        updateCard(message.id) { copy(source = "Fetching the original...") }
+        updateCard(key, message.id) { copy(source = "Fetching the original...") }
         scope.launch {
             val raw = io { session(key).jmap.raw(message.id) }
                 ?: "The server would not hand over the original of this message."
-            updateCard(message.id) { copy(source = raw) }
+            updateCard(key, message.id) { copy(source = raw) }
         }
     }
 
@@ -3590,7 +3758,7 @@ private fun Reader(
                 tnefName = attachment.name
                 tnefSaved = null
             } else if (saved != null) {
-                updateCard(messageId) { copy(saved = saved.toString()) }
+                updateCard(key, messageId) { copy(saved = saved.toString()) }
                 error = TNEF_UNREADABLE
             }
         }
@@ -3617,11 +3785,12 @@ private fun Reader(
         val card = cardFor(cardSummary)
         val key = accountOf(cardSummary)
         val ours = identities[key].orEmpty().map { it.email }.toSet()
-        val isPrimary = cardSummary.id == selected?.id
+        val isPrimary = selected?.sameMail(cardSummary) == true
         val remote = showRemoteFor(cardSummary)
         // Show images rebuilds the page off this thread. The first build happened in
-        // loadCard, with whatever the reader had already allowed.
-        LaunchedEffect(cardSummary.id, remote) {
+        // loadCard, with whatever the reader had already allowed. The account is part
+        // of the key so two messages that share an id do not reuse each other's page.
+        LaunchedEffect(key, cardSummary.id, remote) {
             val current = cardFor(cardSummary)
             val body = current.body ?: return@LaunchedEffect
             if (current.reading != null && current.pageRemote == remote) return@LaunchedEffect
@@ -3637,7 +3806,7 @@ private fun Reader(
                     knownDomains(),
                 )
             }
-            updateCard(cardSummary.id) {
+            if (key != null) updateCard(key, cardSummary.id) {
                 copy(reading = reading, pageRemote = remote, images = reading.images.ifEmpty { images })
             }
         }
@@ -3729,10 +3898,10 @@ private fun Reader(
                     // One-click is the only route that finishes without leaving Rampart,
                     // and it is the only one the sender promised would work that way.
                     off.oneClick && off.url != null -> {
-                        updateCard(cardSummary.id) { copy(unsubscribed = "Asking to be taken off the list.") }
+                        if (key != null) updateCard(key, cardSummary.id) { copy(unsubscribed = "Asking to be taken off the list.") }
                         scope.launch {
                             val done = withContext(Dispatchers.IO) { oneClickPost(off.url) }
-                            updateCard(cardSummary.id) {
+                            if (key != null) updateCard(key, cardSummary.id) {
                                 copy(
                                     unsubscribed = if (done) {
                                         "Asked to be taken off the list. It can take a few days."
@@ -3767,7 +3936,7 @@ private fun Reader(
                     Settings.allowImagesFrom(senderKey)
                     allowedSenders = allowedSenders + senderKey
                 }
-                shownOnce = shownOnce + cardSummary.id
+                shownOnce = shownOnce + rowToken(cardSummary)
             },
             bodyError = card.bodyError,
             images = card.images,
@@ -3795,7 +3964,7 @@ private fun Reader(
                             java.nio.file.Files.writeString(at, text)
                             at
                         }
-                        if (path != null) updateCard(cardSummary.id) { copy(saved = path.toString()) }
+                        if (path != null && key != null) updateCard(key, cardSummary.id) { copy(saved = path.toString()) }
                     }
                 }
             },
@@ -3805,13 +3974,13 @@ private fun Reader(
                     // server says no. Nobody waits on a round trip to see a label.
                     fun put(value: Boolean) {
                         val keywords = if (value) cardSummary.keywords + keyword else cardSummary.keywords - keyword
-                        emails = emails.map { if (it.id == cardSummary.id) it.copy(keywords = keywords) else it }
+                        emails = emails.map { if (it.sameMail(cardSummary)) it.copy(keywords = keywords) else it }
                         thread = thread.map { if (it.id == cardSummary.id) it.copy(keywords = keywords) else it }
-                        if (selected?.id == cardSummary.id) selected = selected?.copy(keywords = keywords)
+                        if (selected?.sameMail(cardSummary) == true) selected = selected?.copy(keywords = keywords)
                     }
                     put(on)
                     scope.launch {
-                        if (io { session(key).jmap.setKeyword(listOf(cardSummary.id), keyword, on) } == null) put(!on)
+                        if (changed(key) { session(key).jmap.setKeyword(listOf(cardSummary.id), keyword, on) } == null) put(!on)
                     }
                 }
             },
@@ -3823,7 +3992,7 @@ private fun Reader(
                             val folder = downloadsFolder()
                             session(key).jmap.download(attachment, folder)
                         }
-                        if (landed != null) updateCard(cardSummary.id) { copy(saved = landed.toString()) }
+                        if (landed != null) updateCard(key, cardSummary.id) { copy(saved = landed.toString()) }
                     }
                 }
             },
@@ -3884,20 +4053,13 @@ private fun Reader(
             // same key both files spam and rescues it depending on where you are.
             "junk" -> (actions.junk ?: actions.notJunk)?.invoke()
             "star" -> actions.star?.invoke()
-            "read" -> {
-                val message = selected
-                val key = accountOf(message)
-                if (message != null && key != null && !message.seen) {
-                    emails = emails.map { if (it.id == message.id) it.copy(seen = true) else it }
-                    scope.launch { io { session(key).jmap.setKeyword(listOf(message.id), "\$seen", true) } }
-                }
-            }
+            "read" -> selected?.let { if (!it.seen) markRead(it, true) }
             "source" -> selected?.let { toggleSource(it) }
             "search" -> searchField.requestFocus()
             "refresh" -> scope.launch { refreshNow() }
-            "next" -> emails.indexOfFirst { it.id == selected?.id }
+            "next" -> emails.indexOfFirst { selected?.sameMail(it) == true }
                 .let { if (emails.isNotEmpty()) selected = emails[nextIndex(it, emails.size, 1)] }
-            "previous" -> emails.indexOfFirst { it.id == selected?.id }
+            "previous" -> emails.indexOfFirst { selected?.sameMail(it) == true }
                 .let { if (emails.isNotEmpty()) selected = emails[nextIndex(it, emails.size, -1)] }
             "go-unified" -> if (sessions.size > 1) here = ALL_ACCOUNTS to allInboxes(0)
             "go-inbox" -> goTo("inbox")
@@ -3971,7 +4133,8 @@ private fun Reader(
         // Ctrl+F from select-all and find, is how a keyboard stops being trustworthy. One
         // guard rather than a check on each: every letter down there had the same fault.
         if (event.isCtrlPressed || event.isAltPressed || event.isMetaPressed) return false
-        val at = emails.indexOfFirst { it.id == selected?.id }
+        val current = selected
+        val at = emails.indexOfFirst { current != null && it.sameMail(current) }
         fun step(delta: Int): Boolean {
             if (emails.isEmpty()) return true
             selected = emails[nextIndex(at, emails.size, delta)]
@@ -4170,6 +4333,7 @@ private fun Reader(
                             )
                             if (result.isSuccess) {
                                 composing = null
+                                result.getOrNull()?.let { error = it }
                             } else {
                                 result.exceptionOrNull()?.let { sendError = whyFailed(it) }
                             }
@@ -4686,8 +4850,9 @@ private fun Reader(
                 loadingMore = loadingMore,
                 onNeedMore = ::loadMore,
                 onSelect = { message, ctrl, shift ->
-                    picked = pickedAfter(emails.map { it.id }, picked, anchor, message.id, ctrl, shift)
-                    if (!shift) anchor = message.id
+                    val token = rowToken(message)
+                    picked = pickedAfter(emails.map { rowToken(it) }, picked, anchor, token, ctrl, shift)
+                    if (!shift) anchor = token
                     if (!ctrl && !shift) selected = message
                 },
             )
@@ -4706,7 +4871,7 @@ private fun Reader(
                     onFile = { role, what ->
                         // Grouped by account, because in the merged inbox the picked
                         // messages can come from several, and each has its own Archive.
-                        val byAccount = emails.filter { it.id in picked }
+                        val byAccount = emails.filter { rowToken(it) in picked }
                             .groupBy { accountOf(it) }
                             .mapNotNull { (key, group) ->
                                 key ?: return@mapNotNull null
@@ -4720,40 +4885,38 @@ private fun Reader(
                                 byAccount.forEach { (key, move, target) ->
                                     sayJunk(key, move.ids, move.fromMailboxId, target)
                                 }
-                                val done = withContext(Dispatchers.IO) {
-                                    byAccount.filter { (key, move, target) ->
-                                        runCatching { session(key).jmap.move(move.ids, target) }.isSuccess
+                                val results = withContext(Dispatchers.IO) {
+                                    byAccount.map { (key, move, target) ->
+                                        Triple(key, move, runCatching { session(key).jmap.move(move.ids, target) })
                                     }
                                 }
+                                val failed = results.mapNotNull { it.third.exceptionOrNull() }
+                                if (failed.isNotEmpty()) error = whyFailed(failed.first())
+                                val done = results.filter { it.third.isSuccess }
+                                done.forEach { (key, _, result) -> noteState(key, result.getOrNull()) }
                                 if (done.isNotEmpty()) {
-                                    val moved = done.flatMap { it.second.ids }.toSet()
                                     done.forEach { (key, move, _) ->
                                         runCatching { session(key).store?.forget(move.ids) }
                                     }
-                                    emails = emails.filterNot { it.id in moved }
+                                    emails = emails.filterNot { row ->
+                                        done.any { (key, move, _) -> row.sameMail(key, move.ids.toSet()) }
+                                    }
                                     picked = emptySet()
                                     selected = null
-                                    undo = Undoable(done.map { it.second }, what)
+                                    // A refusal is an error, not an undo. Undo is only for
+                                    // a move the server actually made.
+                                    if (failed.isEmpty()) undo = Undoable(done.map { it.second }, what)
                                 }
                             }
                         }
                     },
                     onRead = {
-                        val byAccount = emails.filter { it.id in picked && !it.seen }
+                        emails.filter { rowToken(it) in picked && !it.seen }
                             .groupBy { accountOf(it) }
-                        if (byAccount.isNotEmpty()) {
-                            scope.launch {
-                                val read = withContext(Dispatchers.IO) {
-                                    byAccount.mapNotNull { (key, group) ->
-                                        key ?: return@mapNotNull null
-                                        val ids = group.map { it.id }
-                                        runCatching { session(key).jmap.setKeyword(ids, "\$seen", true) }
-                                            .map { ids }.getOrNull()
-                                    }.flatten().toSet()
-                                }
-                                emails = emails.map { if (it.id in read) it.copy(seen = true) else it }
+                            .forEach { (key, group) ->
+                                if (key != null) setSeen(key, group.map { it.id }.toSet(), true)
                             }
-                        }
+                        picked = emptySet()
                     },
                 )
                 return@Row
@@ -6406,10 +6569,10 @@ internal fun MessageList(
                     // LazyColumn only builds the rows on screen, so a folder with thirty
                     // thousand messages in it costs the same as one with twenty. What that
                     // folder still needs is the next page, which is what `onNeedMore` is.
-                    items(sorted(emails, order), key = { it.id }) { message ->
+                    items(sorted(emails, order), key = { rowToken(it) }) { message ->
                         MessageRow(
                             message = message,
-                            selected = message.id == selected?.id || message.id in picked,
+                            selected = rowToken(message) == selected?.let(::rowToken) || rowToken(message) in picked,
                             accountLabel = accountLabels[message.account],
                             actions = rowActions,
                             showHover = showHover,

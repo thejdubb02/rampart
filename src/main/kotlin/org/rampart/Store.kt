@@ -12,6 +12,30 @@ import kotlin.io.path.createDirectories
 /** How many picture bytes one message may keep. Past this the text is kept and the pictures are not. */
 internal const val PICTURE_CACHE_CAP = 5 * 1024 * 1024
 
+/** How many picture bytes one account may keep in total. Past this the least recently opened go. */
+internal const val PICTURE_ACCOUNT_CAP = 200L * 1024 * 1024
+
+/** One cached picture, for deciding which to drop when the account is over its cap. */
+internal data class PictureUse(val id: String, val blob: String, val bytes: Int, val used: Long)
+
+/**
+ * Pictures to drop so the rest fit in [cap], least recently used first.
+ *
+ * A picture that was opened again is newer than one that was only stored, so
+ * opening a message is what keeps its pictures. Under the cap, nothing goes.
+ */
+internal fun picturesToEvict(rows: List<PictureUse>, cap: Long): List<Pair<String, String>> {
+    var total = rows.sumOf { it.bytes.toLong() }
+    if (total <= cap) return emptyList()
+    val drop = ArrayList<Pair<String, String>>()
+    for (row in rows.sortedWith(compareBy({ it.used }, { it.id }, { it.blob }))) {
+        if (total <= cap) break
+        drop += row.id to row.blob
+        total -= row.bytes
+    }
+    return drop
+}
+
 /**
  * Pictures that fit in [cap], in the order they were given.
  *
@@ -167,10 +191,24 @@ internal class Store(private val connection: Connection) : AutoCloseable {
                 id TEXT NOT NULL,
                 blob TEXT NOT NULL,
                 bytes BLOB NOT NULL,
+                used INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (id, blob)
             )
             """,
         )
+        // A cache file from before the cap has no used column. CREATE does not add
+        // one to a table that already exists, and without it there is no order to
+        // evict in. The bytes are disposable, so a missing column is just added.
+        val columns = connection.prepareStatement("PRAGMA table_info(kept_picture)").use { s ->
+            s.executeQuery().use { rows ->
+                buildList { while (rows.next()) add(rows.getString("name")) }
+            }
+        }
+        if ("used" !in columns) {
+            connection.createStatement().use {
+                it.execute("ALTER TABLE kept_picture ADD COLUMN used INTEGER NOT NULL DEFAULT 0")
+            }
+        }
     }
 
     /** Remembers that a message went out tracked. */
@@ -699,6 +737,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         mailState: String?,
         calendar: String?,
         pictureCap: Int = PICTURE_CACHE_CAP,
+        usedAt: Long = System.currentTimeMillis(),
     ) {
         val fitting = picturesWithin(pictures, pictureCap)
         connection.prepareStatement(
@@ -727,17 +766,20 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             s.setString(1, id)
             s.executeUpdate()
         }
-        if (fitting.isEmpty()) return
-        connection.prepareStatement(
-            "INSERT INTO kept_picture (id, blob, bytes) VALUES (?,?,?)",
-        ).use { s ->
-            fitting.forEach { (blob, bytes) ->
-                s.setString(1, id)
-                s.setString(2, blob)
-                s.setBytes(3, bytes)
-                s.executeUpdate()
+        if (fitting.isNotEmpty()) {
+            connection.prepareStatement(
+                "INSERT INTO kept_picture (id, blob, bytes, used) VALUES (?,?,?,?)",
+            ).use { s ->
+                fitting.forEach { (blob, bytes) ->
+                    s.setString(1, id)
+                    s.setString(2, blob)
+                    s.setBytes(3, bytes)
+                    s.setLong(4, usedAt)
+                    s.executeUpdate()
+                }
             }
         }
+        evictPictures()
     }
 
     fun kept(id: String): Kept? = connection.prepareStatement(
@@ -771,8 +813,8 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         }
     }
 
-    private fun picturesOf(id: String): Map<String, ByteArray> =
-        connection.prepareStatement("SELECT blob, bytes FROM kept_picture WHERE id = ?").use { s ->
+    private fun picturesOf(id: String): Map<String, ByteArray> {
+        val found = connection.prepareStatement("SELECT blob, bytes FROM kept_picture WHERE id = ?").use { s ->
             s.setString(1, id)
             s.executeQuery().use { rows ->
                 buildMap {
@@ -783,6 +825,69 @@ internal class Store(private val connection: Connection) : AutoCloseable {
                 }
             }
         }
+        // Opening the message is what makes these the recently used ones. A later
+        // eviction then drops somebody else's pictures, not the ones on screen.
+        if (found.isNotEmpty()) {
+            connection.prepareStatement("UPDATE kept_picture SET used = ? WHERE id = ?").use { s ->
+                s.setLong(1, System.currentTimeMillis())
+                s.setString(2, id)
+                s.executeUpdate()
+            }
+        }
+        return found
+    }
+
+    /**
+     * Drops the least recently used pictures until the account is under [cap].
+     *
+     * The per-message cap stops one letter filling the file. This stops a year of
+     * letters doing it. The text of a message is kept either way.
+     */
+    fun evictPictures(cap: Long = PICTURE_ACCOUNT_CAP) {
+        val rows = connection.prepareStatement(
+            "SELECT id, blob, LENGTH(bytes) AS n, used FROM kept_picture",
+        ).use { s ->
+            s.executeQuery().use { found ->
+                buildList {
+                    while (found.next()) {
+                        add(PictureUse(found.getString("id"), found.getString("blob"), found.getInt("n"), found.getLong("used")))
+                    }
+                }
+            }
+        }
+        val drop = picturesToEvict(rows, cap)
+        if (drop.isEmpty()) return
+        connection.prepareStatement("DELETE FROM kept_picture WHERE id = ? AND blob = ?").use { s ->
+            drop.forEach { (id, blob) ->
+                s.setString(1, id)
+                s.setString(2, blob)
+                s.addBatch()
+            }
+            s.executeBatch()
+        }
+    }
+
+    /**
+     * Forgets cached rows in [mailbox] that a fresh first page no longer contains,
+     * when their date falls inside that page.
+     *
+     * Rows older than the page stay. They were not fetched, so their absence from
+     * this answer says nothing about whether the server still has them.
+     */
+    fun pruneToPage(mailbox: String, page: List<Summary>) {
+        if (page.isEmpty()) return
+        val cached = connection.prepareStatement(
+            "SELECT id, receivedAt FROM message WHERE mailbox = ?",
+        ).use { s ->
+            s.setString(1, mailbox)
+            s.executeQuery().use { rows ->
+                buildList {
+                    while (rows.next()) add(DatedId(rows.getString("id"), rows.getString("receivedAt")))
+                }
+            }
+        }
+        forget(idsMissingFromPage(cached, page.map { DatedId(it.id, it.receivedAt) }))
+    }
 
     /** What the server's state was when this folder was last read, so a refresh can skip. */
     fun cursor(mailbox: String): String? =

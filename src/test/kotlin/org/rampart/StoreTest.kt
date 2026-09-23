@@ -185,6 +185,42 @@ class StoreTest {
     }
 
     @Test
+    fun `a fresh page drops rows inside its dates and keeps the ones outside`() = withStore { store ->
+        store.put(
+            "inbox",
+            listOf(
+                mail("old", "Old", "old", "2026-01-01T00:00:00Z"),
+                mail("gone", "Gone", "gone", "2026-09-16T12:00:00Z"),
+                mail("kept", "Kept", "kept", "2026-09-16T00:00:00Z"),
+                mail("newer", "New", "newer", "2026-09-18T00:00:00Z"),
+            ),
+        )
+        store.put("archive", listOf(mail("other", "Other", "other", "2026-09-16T12:00:00Z")))
+        store.pruneToPage(
+            "inbox",
+            listOf(
+                mail("kept", "Kept", "kept", "2026-09-16T00:00:00Z"),
+                mail("edge", "Edge", "edge", "2026-09-17T00:00:00Z"),
+            ),
+        )
+        assertEquals(setOf("old", "kept", "newer"), store.messages("inbox", limit = 20).map { it.id }.toSet())
+        assertEquals(listOf("other"), store.messages("archive").map { it.id })
+    }
+
+    @Test
+    fun `opening a picture keeps it when the account is over its cap`() = withStore { store ->
+        val body = Body("<p>x</p>", "x")
+        val four = byteArrayOf(1, 2, 3, 4)
+        store.putKept("a", body, emptyList(), mapOf("p" to four), null, null, null, usedAt = 1_000)
+        store.putKept("b", body, emptyList(), mapOf("p" to byteArrayOf(5, 6, 7, 8)), null, null, null, usedAt = 2_000)
+        // Reading a marks it used just now, which is newer than b.
+        assertContentEquals(four, store.kept("a")?.pictures?.get("p"))
+        store.evictPictures(4)
+        assertContentEquals(four, store.kept("a")?.pictures?.get("p"))
+        assertNull(store.kept("b")?.pictures?.get("p"))
+    }
+
+    @Test
     fun `clearing a folder leaves the others alone`() = withStore { store ->
         store.put("inbox", listOf(messages[0]))
         store.put("archive", listOf(messages[1]))

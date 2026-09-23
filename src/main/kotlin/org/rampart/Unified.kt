@@ -29,3 +29,31 @@ internal fun merged(byAccount: Map<String, List<Summary>>, limit: Int = 100): Li
     byAccount.flatMap { (key, list) -> list.map { it.copy(account = key) } }
         .sortedByDescending { it.receivedAt }
         .take(limit)
+
+/**
+ * Which account a card, a selection or a removal belongs to, plus the message.
+ *
+ * Stalwart ids are short and start again for each account, so the id on its own
+ * is not an identity. Two accounts, even on two servers, can share one.
+ */
+internal data class CardKey(val account: String, val id: String)
+
+/**
+ * A stable token for a row in a list that may mix accounts.
+ *
+ * A folder that belongs to one account leaves the id as it was, so a selection
+ * made there still matches. A merged row carries the account, because the same
+ * id in two accounts is two messages.
+ */
+internal fun rowToken(message: Summary): String =
+    if (message.account.isBlank()) message.id else message.account + "\u0000" + message.id
+
+/** Same message. A blank account matches, because a folder row does not carry one. */
+internal fun Summary.sameMail(other: Summary): Boolean =
+    id == other.id && (account.isBlank() || other.account.isBlank() || account == other.account)
+
+internal fun Summary.sameMail(account: String, id: String): Boolean =
+    this.id == id && (this.account.isBlank() || this.account == account)
+
+internal fun Summary.sameMail(account: String, ids: Set<String>): Boolean =
+    this.id in ids && (this.account.isBlank() || this.account == account)

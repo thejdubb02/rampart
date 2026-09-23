@@ -475,9 +475,9 @@ internal class Jmap private constructor(
      */
     override fun open(id: String): OpenedMail {
         val first = emailRecord(id, 1024 * 1024)
-        val parsed = openedFrom(first, downloadCut = true)
+        val parsed = openedFrom(first)
         if (!parsed.cutLeft) return parsed.mail
-        return openedFrom(emailRecord(id, 32 * 1024 * 1024), downloadCut = true).mail
+        return openedFrom(emailRecord(id, 32 * 1024 * 1024)).mail
     }
 
     private fun emailRecord(id: String, maxBytes: Int): JsonObject = call(
@@ -509,22 +509,14 @@ internal class Jmap private constructor(
     )[0].list().firstOrNull()?.jsonObject
         ?: throw JmapError("That message is not on the server any more.")
 
-    private fun openedFrom(email: JsonObject, downloadCut: Boolean): ParsedOpen {
+    private fun openedFrom(email: JsonObject): ParsedOpen {
         val values = email["bodyValues"]?.jsonObject ?: JsonObject(emptyMap())
         var cutLeft = false
         fun join(part: String, wantedType: String? = null): String? =
             resolveBody(email[part] as? JsonArray, values, wantedType) { blobId, type, size ->
-                if (!downloadCut) {
-                    cutLeft = true
-                    return@resolveBody null
-                }
                 val bytes = blob(Attachment(blobId, "part", type, size), limit = 32L * 1024 * 1024)
                 if (bytes == null) cutLeft = true
                 bytes
-            }.also {
-                // A part that was cut and could not be completed still counts, even when
-                // resolveBody handed back the short text so the message is not blank.
-                if (bodyCut(email[part] as? JsonArray, values, wantedType) && !downloadCut) cutLeft = true
             }
         /*
          * `as? JsonArray` rather than `.jsonArray`, and the difference is not stylistic. A
@@ -1211,7 +1203,7 @@ internal class Jmap private constructor(
         return id
     }
 
-    override fun send(draft: Draft, identity: Identity, draftsMailboxId: String, sentMailboxId: String?) {
+    override fun send(draft: Draft, identity: Identity, draftsMailboxId: String, sentMailboxId: String?): String? {
         // Only on the way out. A draft keeps the base64 in it, which is what makes the
         // picture still visible when the draft is reopened.
         val ready = withInlineSignature(draft)
@@ -1245,6 +1237,7 @@ internal class Jmap private constructor(
         if (ready.trackingPixel.isNotEmpty() && sentMailboxId != null) {
             replaceSentCopy(ready, identity, sentMailboxId, created.jsonObject["id"].require("id"))
         }
+        return null
     }
 
     /**
@@ -1359,9 +1352,7 @@ internal class Jmap private constructor(
         if (!gone) throw JmapError(refusal(response, "notDestroyed", "That folder could not be deleted"))
     }
 
-    override fun markSeen(id: String) {
-        setKeyword(listOf(id), "\$seen", true)
-    }
+    override fun markSeen(id: String): Applied = setKeyword(listOf(id), "\$seen", true)
 
     /** Splits what someone typed, and omits the header entirely if empty. */
     private fun JsonObjectBuilder.addresses(field: String, typed: String) {
@@ -1426,9 +1417,9 @@ internal class Jmap private constructor(
         return responses.map { it.jsonArray }
     }
 
-    override fun move(ids: List<String>, toMailboxId: String) {
-        if (ids.isEmpty()) return
-        call(invoke("Email/set", "m") {
+    override fun move(ids: List<String>, toMailboxId: String): Applied {
+        if (ids.isEmpty()) return Applied(null)
+        val response = call(invoke("Email/set", "m") {
             putJsonObject("update") {
                 ids.forEach { id ->
                     putJsonObject(id) {
@@ -1436,12 +1427,13 @@ internal class Jmap private constructor(
                     }
                 }
             }
-        })
+        })[0][1].jsonObject
+        return Applied(requireApplied(response, ids, "updated", "notUpdated", "move"))
     }
 
-    override fun setKeyword(ids: List<String>, keyword: String, on: Boolean) {
-        if (ids.isEmpty()) return
-        call(invoke("Email/set", "k") {
+    override fun setKeyword(ids: List<String>, keyword: String, on: Boolean): Applied {
+        if (ids.isEmpty()) return Applied(null)
+        val response = call(invoke("Email/set", "k") {
             putJsonObject("update") {
                 ids.forEach { id ->
                     putJsonObject(id) {
@@ -1449,14 +1441,16 @@ internal class Jmap private constructor(
                     }
                 }
             }
-        })
+        })[0][1].jsonObject
+        return Applied(requireApplied(response, ids, "updated", "notUpdated", "update"))
     }
 
-    override fun destroy(ids: List<String>) {
-        if (ids.isEmpty()) return
-        call(invoke("Email/set", "d") {
+    override fun destroy(ids: List<String>): Applied {
+        if (ids.isEmpty()) return Applied(null)
+        val response = call(invoke("Email/set", "d") {
             putJsonArray("destroy") { ids.forEach { add(it) } }
-        })
+        })[0][1].jsonObject
+        return Applied(requireApplied(response, ids, "destroyed", "notDestroyed", "delete"))
     }
 
     override fun withKeyword(keyword: String, limit: Int): List<Summary> {
@@ -1478,21 +1472,10 @@ internal class Jmap private constructor(
         return responses[1].list().map { jsonToSummary(it.jsonObject) }
     }
 
-    override fun search(text: String, mailboxId: String?, limit: Int): List<Summary> {
+    override fun search(text: String, mailboxId: String?, limit: Int, except: Collection<String>): List<Summary> {
         val responses = call(
             invoke("Email/query", "q") {
-                val filter = buildJsonObject {
-                    if (mailboxId == null) {
-                        put("text", text)
-                    } else {
-                        put("operator", "AND")
-                        putJsonArray("conditions") {
-                            add(buildJsonObject { put("inMailbox", mailboxId) })
-                            add(buildJsonObject { put("text", text) })
-                        }
-                    }
-                }
-                put("filter", filter)
+                put("filter", searchFilter(text, mailboxId, except))
                 putJsonArray("sort") {
                     add(buildJsonObject { put("property", "receivedAt"); put("isAscending", false) })
                 }
@@ -1507,6 +1490,66 @@ internal class Jmap private constructor(
         )
         return responses[1].list().map { jsonToSummary(it.jsonObject) }
     }
+}
+
+/**
+ * The Email/query filter for a search.
+ *
+ * One folder when [mailboxId] is set. Otherwise the whole account, minus
+ * [except], which is how Junk and Deleted stay out without searching those
+ * folders and throwing the hits away after the limit has already been filled
+ * with them.
+ */
+internal fun searchFilter(text: String, mailboxId: String?, except: Collection<String>): JsonObject {
+    val skip = except.filter { it.isNotBlank() }.distinct()
+    if (mailboxId == null && skip.isEmpty()) return buildJsonObject { put("text", text) }
+    return buildJsonObject {
+        put("operator", "AND")
+        putJsonArray("conditions") {
+            mailboxId?.let { add(buildJsonObject { put("inMailbox", it) }) }
+            if (skip.isNotEmpty()) {
+                add(buildJsonObject {
+                    putJsonArray("inMailboxOtherThan") { skip.forEach { add(it) } }
+                })
+            }
+            add(buildJsonObject { put("text", text) })
+        }
+    }
+}
+
+/** Ids a set result lists as done. `updated` is an object, `destroyed` is an array. */
+internal fun appliedIds(node: JsonElement?): Set<String> = when (node) {
+    is JsonObject -> node.keys
+    is JsonArray -> node.mapNotNull { it.str() }.toSet()
+    else -> emptySet()
+}
+
+/**
+ * Refuses the call unless every id landed.
+ *
+ * Email/set reports success per id. The HTTP status stays 200 when the server
+ * refused the messages, and the only place that is written is notUpdated or
+ * notDestroyed. The sentence says how many, because "the server refused" with
+ * no count is how a partial failure gets undone as if none of it happened.
+ *
+ * Returns the account state the set produced, so a push of that same state can
+ * be recognised as the echo of this call.
+ */
+internal fun requireApplied(
+    response: JsonObject,
+    ids: List<String>,
+    doneField: String,
+    refusedField: String,
+    action: String,
+): String? {
+    val done = appliedIds(response[doneField])
+    val refused = response[refusedField]?.jsonObject?.keys ?: emptySet()
+    val failed = ids.count { it in refused || it !in done }
+    if (failed > 0) {
+        val noun = if (failed == 1) "message" else "messages"
+        throw JmapError("The server would not $action $failed $noun.")
+    }
+    return response["newState"]?.str()
 }
 
 private const val PUSH_ENABLE =
