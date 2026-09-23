@@ -195,6 +195,10 @@ internal fun WebBody(
     // the block renderer under a message the reader is looking at.
     bridge.onBlank = { if (!drew.get()) onBlank() }
     bridge.dark = dark
+    // The page is drawn on the window's own colours, so a plain message in a dark theme
+    // matches the pane around it instead of a colour of our choosing.
+    bridge.paper = cssColour(androidx.compose.material3.MaterialTheme.colorScheme.surface)
+    bridge.ink = cssColour(androidx.compose.material3.MaterialTheme.colorScheme.onSurface)
     val panel = remember { JFXPanel() }
     /*
      * The measuring of the message before this one, so it can be stopped.
@@ -245,9 +249,7 @@ internal fun WebBody(
                         // On the document that just loaded. Doing this from outside, in the
                         // moment after load() is asked for, hits whatever document is still
                         // showing, which is the previous message.
-                        fresh.engine.executeScript(
-                            "document.documentElement.toggleAttribute('data-dark', ${bridge.dark})",
-                        )
+                        fresh.engine.executeScript(darkSwitch(bridge.dark, bridge.paper, bridge.ink))
                         fresh.engine.executeScript(WIRING)
                     }
                 }
@@ -268,9 +270,7 @@ internal fun WebBody(
         Platform.runLater {
             runCatching {
                 val view = panel.scene?.root as? WebView ?: return@runCatching
-                view.engine.executeScript(
-                    "document.documentElement.toggleAttribute('data-dark', $dark)",
-                )
+                view.engine.executeScript(darkSwitch(dark, bridge.paper, bridge.ink))
             }
         }
     }
@@ -557,6 +557,8 @@ class WebBridge {
     /** The page the message should be on, read when a document finishes loading. */
     @Volatile
     internal var dark: Boolean = false
+    internal var paper: String = "#16181d"
+    internal var ink: String = "#e6e6e6"
 
     /**
      * Page pixels to window pixels. Height reports are in the page's own pixels, and
@@ -590,6 +592,55 @@ class WebBridge {
  * being drawn. Well over nine tenths of messages are shorter than this and never notice.
  */
 private const val TALLEST = 3_000
+
+/**
+ * Puts the page in or out of dark, and lightens text that was written dark.
+ *
+ * The stylesheet catches `color:black` written the common ways, and Outlook writes it a
+ * dozen others: `windowtext`, a class in its own `<style>`, `#1F1F1F`, a `<font>` tag. So
+ * the page itself is asked what colour each piece of text actually came out, and anything
+ * too dark to read on the dark page is lifted. Text sitting on a light background the
+ * sender painted is left alone, because there it is still readable. Only a plain message is
+ * touched; a designed one has its own page and keeps it. Undone when the page goes light.
+ */
+private fun darkSwitch(dark: Boolean, paper: String, ink: String) = """
+(function () {
+  var root = document.documentElement;
+  root.style.setProperty('--rampart-paper', '$paper');
+  root.style.setProperty('--rampart-ink', '$ink');
+  root.toggleAttribute('data-dark', $dark);
+  var lifted = document.querySelectorAll('[data-rampart-lifted]');
+  for (var i = 0; i < lifted.length; i++) {
+    lifted[i].style.removeProperty('color');
+    lifted[i].removeAttribute('data-rampart-lifted');
+  }
+  if (!$dark || !root.hasAttribute('data-plain') || !document.body) return;
+  function parts(c) { var m = c.match(/[\d.]+/g); return m ? m.map(Number) : null; }
+  function light(c) {
+    var p = parts(c); if (!p) return true;
+    return (0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]) / 255 > 0.45;
+  }
+  function onLight(el) {
+    for (var e = el; e && e !== root; e = e.parentElement) {
+      var b = getComputedStyle(e).backgroundColor, p = parts(b);
+      if (p && (p.length < 4 || p[3] > 0)) return light(b);
+    }
+    return false;
+  }
+  var all = document.body.getElementsByTagName('*');
+  for (var j = 0; j < all.length; j++) {
+    var el = all[j];
+    if (light(getComputedStyle(el).color) || onLight(el)) continue;
+    // A link keeps looking like a link, just one that can be read.
+    el.style.setProperty('color', el.closest('a') ? '#8ab4f8' : '$ink', 'important');
+    el.setAttribute('data-rampart-lifted', '');
+  }
+})();
+"""
+
+/** A Compose colour as CSS, opaque. */
+internal fun cssColour(c: androidx.compose.ui.graphics.Color): String =
+    "rgb(${(c.red * 255).toInt()}, ${(c.green * 255).toInt()}, ${(c.blue * 255).toInt()})"
 
 private val WIRING = """
 (function () {

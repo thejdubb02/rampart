@@ -46,7 +46,7 @@ internal fun emailDocument(
      */
     dark: Boolean = false,
 ): EmailPage {
-    val source = Jsoup.parse(withoutTofu(html))
+    val source = Jsoup.parse(withoutTofu(html)).also(::scrubTofu)
     val clean = Cleaner(EMAIL_SAFELIST).clean(source)
     clean.outputSettings().prettyPrint(false)
     val held = resolveImages(clean, carried, remoteImages)
@@ -77,7 +77,7 @@ internal fun emailDocument(
     val plain = if (designed) DESIGNED_CSS else PLAIN_LIGHT + PLAIN_DARK
     return EmailPage(
         """<!DOCTYPE html>
-<html${if (dark) " data-dark" else ""}><head>
+<html${if (dark) " data-dark" else ""}${if (designed) "" else " data-plain"}><head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="$policy">
 <meta name="color-scheme" content="light">
@@ -401,18 +401,18 @@ html { background: #ffffff; color: #1a1a1a; }
  * for: one click puts the message back the way the sender built it.
  */
 private const val PLAIN_DARK = """
-html[data-dark] { background: #191417; color: #e8e2e5; }
-html[data-dark] a, html[data-dark] a * { color: #ff8fa8; }
+html[data-dark] { background: var(--rampart-paper, #16181d); color: var(--rampart-ink, #e6e6e6); }
+html[data-dark] a, html[data-dark] a * { color: #8ab4f8; }
 html[data-dark] [style*="color:black"], html[data-dark] [style*="color: black"],
 html[data-dark] [style*="color:#000"], html[data-dark] [style*="color: #000"],
 html[data-dark] [style*="color:#111"], html[data-dark] [style*="color:#222"],
 html[data-dark] [style*="color:#333"],
 html[data-dark] [style*="color:rgb(0,0,0)"], html[data-dark] [style*="color:rgb(0, 0, 0)"],
 html[data-dark] font[color="black"], html[data-dark] font[color="#000000"] {
-  color: #e8e2e5 !important;
+  color: var(--rampart-ink, #e6e6e6) !important;
 }
 /* A quoted reply's rule is drawn for a white page and disappears on a dark one. */
-html[data-dark] blockquote { border-color: #4a3f44 !important; }
+html[data-dark] blockquote { border-color: #4a4f57 !important; }
 """
 
 /**

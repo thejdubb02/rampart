@@ -102,6 +102,42 @@ internal fun withoutTofu(html: String): String =
     html.replace(INVISIBLE_SPACE, " ").replace(NOTHING_AT_ALL, "")
 
 /**
+ * The same, on the text of a parsed page, plus line breaks.
+ *
+ * Outlook writes these characters as entities, `&#8203;` and friends, which the pass over
+ * the raw HTML cannot see. Parsed, they are ordinary characters in a text node.
+ *
+ * Outlook also wraps its HTML source at about seventy columns, so a line break lands in
+ * the middle of a sentence. A browser shows that as a space. The engine here draws it as a
+ * box whenever the sender's font is one it had to substitute, which for Outlook's Calibri is
+ * every machine without Office. So outside preformatted text a break becomes the space it
+ * was always meant to be.
+ */
+internal fun scrubTofu(document: org.jsoup.nodes.Document) {
+    org.jsoup.select.NodeTraversor.traverse({ node, _ ->
+        if (node is org.jsoup.nodes.TextNode) {
+            var clean = withoutTofu(node.wholeText)
+            if (!keepsBreaks(node)) clean = clean.replace(LINE_BREAK, " ")
+            if (clean != node.wholeText) node.text(clean)
+        }
+    }, document)
+}
+
+private val LINE_BREAK = Regex("[\\r\\n\\t]+")
+
+/** Inside `pre`, a `textarea`, or anything styled to keep its white space. */
+private fun keepsBreaks(node: org.jsoup.nodes.Node): Boolean {
+    var at = node.parent()
+    while (at is org.jsoup.nodes.Element) {
+        val tag = at.normalName()
+        if (tag == "pre" || tag == "textarea") return true
+        if (at.attr("style").contains("white-space", ignoreCase = true)) return true
+        at = at.parent()
+    }
+    return false
+}
+
+/**
  * The carried pictures a body actually shows, and only those.
  *
  * Outlook gives a Content-ID to files that are not drawn. Fetching every image part
@@ -181,7 +217,7 @@ internal fun prepareReading(
 }
 
 /** Figure, punctuation, thin and hair spaces, and the narrow no-break space. */
-private val INVISIBLE_SPACE = Regex("[\u2007-\u200A\u202F]")
+private val INVISIBLE_SPACE = Regex("[\u2000-\u200A\u202F\u205F]")
 
 /**
  * The zero-width ones, and a byte order mark that arrived as a character.
@@ -189,4 +225,4 @@ private val INVISIBLE_SPACE = Regex("[\u2007-\u200A\u202F]")
  * Nothing rather than a space: these sit inside words, so replacing them would break the
  * word in half instead of joining it back up.
  */
-private val NOTHING_AT_ALL = Regex("[\u200B-\u200D\uFEFF]")
+private val NOTHING_AT_ALL = Regex("[\u200B-\u200F\u2060-\u2064\uFEFF]")

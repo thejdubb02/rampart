@@ -81,3 +81,14 @@ class PicturesTest {
         return -1
     }
 }
+
+class ScrubTofuTest {
+    @Test
+    fun `an Outlook line break and an entity zero width space become nothing drawable`() {
+        val doc = org.jsoup.Jsoup.parse("<p>our new\n<b>Made</b> reser&#8203;vation</p><pre>a\nb</pre>")
+        scrubTofu(doc)
+        kotlin.test.assertEquals("our new Made reservation", doc.selectFirst("p")!!.text())
+        kotlin.test.assertEquals("our new ", doc.selectFirst("p")!!.textNodes().first().wholeText)
+        kotlin.test.assertEquals("a\nb", doc.selectFirst("pre")!!.wholeText())
+    }
+}

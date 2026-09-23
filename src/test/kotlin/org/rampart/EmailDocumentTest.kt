@@ -204,7 +204,7 @@ class EmailDocumentTest {
         // Both pages are written into every undesigned message and an attribute picks one,
         // so that the toolbar's switch is an attribute rather than a second whole load.
         fun canGoDark(html: String) =
-            emailDocument(html).document.contains("html[data-dark] { background: #191417")
+            emailDocument(html).document.contains("html[data-dark] { background: var(--rampart-paper")
         // A reply with nothing in it: the ordinary case, and the one this is for.
         assertTrue(canGoDark("""<div dir="ltr">Mark,</div>"""))
         assertTrue(canGoDark("<p>Tuesday works.</p>"))
@@ -212,8 +212,8 @@ class EmailDocumentTest {
         assertFalse(canGoDark("""<table width="100%" bgcolor="#F4F1EC"><tr><td>Hello</td></tr></table>"""))
         assertFalse(canGoDark("""<body bgcolor="#102030"><p>Hello</p></body>"""))
         // Which of the two is showing is the attribute, and nothing else.
-        assertTrue(emailDocument("<p>Tuesday works.</p>", dark = true).document.contains("<html data-dark>"))
-        assertFalse(emailDocument("<p>Tuesday works.</p>").document.contains("<html data-dark>"))
+        assertTrue(emailDocument("<p>Tuesday works.</p>", dark = true).document.contains("<html data-dark data-plain>"))
+        assertFalse(emailDocument("<p>Tuesday works.</p>").document.contains("<html data-dark"))
     }
 
     @Test
@@ -274,7 +274,7 @@ class EmailDocumentTest {
         ).forEach { (html, dark) ->
             assertTrue(emailDocument(html, dark = dark).document.contains("background: #ffffff"), html)
         }
-        assertTrue(emailDocument("<p>plain</p>", dark = true).document.contains("background: #191417"))
+        assertTrue(emailDocument("<p>plain</p>", dark = true).document.contains("background: var(--rampart-paper"))
     }
 
     /**
