@@ -151,3 +151,13 @@ compose.desktop {
         }
     }
 }
+
+// Runs the app on this Linux box, with the JavaFX engine that `run` leaves out because it
+// is compileOnly for the Windows package. Used to see and test the real UI under Xvfb.
+tasks.register<JavaExec>("runLinux") {
+    dependsOn("classes")
+    mainClass.set("org.rampart.MainKt")
+    classpath = sourceSets.main.get().runtimeClasspath + configurations["linuxAmd64"]
+    // A throwaway profile, so a test run never touches the real one: -Drampart.config.dir=...
+    System.getProperty("rampart.config.dir")?.let { systemProperty("rampart.config.dir", it) }
+}
