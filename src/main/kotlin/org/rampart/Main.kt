@@ -173,6 +173,20 @@ import kotlinx.coroutines.CancellationException
 private val WHEN = DateTimeFormatter.ofPattern("d MMM  HH:mm").withZone(ZoneId.systemDefault())
 
 /**
+ * One message being written, and the account it was opened from.
+ *
+ * Captured when composing starts. The account, the starting draft and the server draft
+ * id stay with this session, so clicking another message, or the one being answered
+ * leaving the list, does not retarget the composer or replace a draft that belonged
+ * to the previous message.
+ */
+private data class ComposeSession(
+    val account: String?,
+    val draft: Draft,
+    val saves: DraftSaves,
+)
+
+/**
  * The update, as a line in the window's own bottom bar rather than a card over the mail.
  *
  * It used to float over the bottom right of the reading pane, which is exactly where a
@@ -1017,10 +1031,7 @@ private fun Reader(
     var identities by remember { mutableStateOf<Map<String, List<Identity>>>(emptyMap()) }
     var vacation by remember { mutableStateOf<Vacation?>(null) }
     var vacationError by remember { mutableStateOf<String?>(null) }
-    var composing by remember { mutableStateOf<Draft?>(null) }
-    // Where the autosaved copy of what is being written currently lives, so the next save
-    // replaces it rather than adding another, and sending or discarding can clear it away.
-    var draftId by remember { mutableStateOf<String?>(null) }
+    var composing by remember { mutableStateOf<ComposeSession?>(null) }
     var sending by remember { mutableStateOf(false) }
     var sendError by remember { mutableStateOf<String?>(null) }
     var update by remember { mutableStateOf<String?>(null) }
@@ -1329,11 +1340,24 @@ private fun Reader(
      * The address to write as, given the message being answered.
      *
      * The account's first identity for a new message, and for a reply or a forward the one
-     * the message was actually addressed to. See [identityFor].
+     * the message was actually addressed to. See [identityFor]. [account] is the mailbox
+     * this message is being written from, captured by the caller: the default is whoever
+     * is selected right now, which is only right at the moment writing starts.
      */
-    fun writingIdentity(body: Body?): String {
-        val mine = identities[writingAccount()].orEmpty().map { it.email }
+    fun writingIdentity(body: Body?, account: String? = writingAccount()): String {
+        val mine = identities[account].orEmpty().map { it.email }
         return identityFor(body, mine, mine.firstOrNull().orEmpty())
+    }
+
+    /**
+     * Opens the composer on [account], which stays fixed for as long as this message is open.
+     *
+     * [savedId] is the server draft this continues, or null for a message that has not been
+     * saved yet. A new message must start at null. Reusing the previous message's id makes
+     * the first autosave replace that draft, and the earlier message is gone.
+     */
+    fun write(account: String?, draft: Draft, savedId: String? = null) {
+        composing = ComposeSession(account, draft, DraftSaves(savedId))
     }
 
     /**
@@ -2224,11 +2248,15 @@ private fun Reader(
 
         // A draft is not something to read. Clicking one puts it back in the composer,
         // under the id it is already saved at, so carrying on writing replaces that copy
-        // instead of leaving the old one behind.
+        // instead of leaving the old one behind. The from address is the one the draft
+        // was saved with. The account's first identity is only the stand-in when the
+        // draft itself names nobody.
         if (here?.second?.role == "drafts" && !showingResults) {
-            draftId = message.id
             sendError = null
-            composing = draftOf(message, cardFor(message).body, identities[key].orEmpty().firstOrNull()?.email.orEmpty())
+            val from = message.fromEmail.ifBlank {
+                identities[key].orEmpty().firstOrNull()?.email.orEmpty()
+            }
+            write(key, draftOf(message, cardFor(message).body, from), message.id)
             return@LaunchedEffect
         }
 
@@ -2627,10 +2655,7 @@ private fun Reader(
         if (!firing.add(item.id)) return null
         try {
             val account = sessions.firstOrNull { it.key == item.account } ?: return null
-            val identity = identities[item.account].orEmpty()
-                .firstOrNull { it.email.equals(item.identityEmail, ignoreCase = true) }
-                ?: identities[item.account].orEmpty().firstOrNull()
-                ?: return null
+            val identity = identityForDraft(identities[item.account].orEmpty(), item.identityEmail) ?: return null
             val boxes = mailboxes[item.account].orEmpty()
             val drafts = folderFor("drafts", boxes) ?: return null
             val result = deliverNow(
@@ -2856,7 +2881,7 @@ private fun Reader(
                 sendError = null
                 // The model's words go above the quoted original, where a person's would.
                 val reply = replyTo(message, letter, identities[key].orEmpty().firstOrNull()?.email.orEmpty(), false, ours)
-                composing = reply.copy(body = text.trim() + "\n\n" + reply.body)
+                write(key, reply.copy(body = text.trim() + "\n\n" + reply.body))
             }
             return true
         }
@@ -3198,7 +3223,7 @@ private fun Reader(
                     runCatching { dir.toFile().deleteRecursively() }
                 }
             }
-            if (draft != null) composing = draft
+            if (draft != null) write(key, draft)
         }
     }
 
@@ -3210,7 +3235,7 @@ private fun Reader(
                 scope.launch {
                     val ours = identities[key].orEmpty().map { it.email }
                     val text = io { session(key).jmap.body(message.id) }
-                    composing = replyTo(message, text, writingIdentity(text), all, ours.toSet())
+                    write(key, replyTo(message, text, writingIdentity(text, key), all, ours.toSet()))
                 }
             }
         },
@@ -3223,7 +3248,7 @@ private fun Reader(
                     // the identity the other message was addressed to.
                     val forwarded = io { session(key).jmap.body(message.id) }
                     val mine = identities[key].orEmpty().map { it.email }
-                    composing = forwardOf(message, forwarded, identityFor(forwarded, mine, mine.firstOrNull().orEmpty()))
+                    write(key, forwardOf(message, forwarded, identityFor(forwarded, mine, mine.firstOrNull().orEmpty())))
                 }
             }
         },
@@ -3434,12 +3459,15 @@ private fun Reader(
             body = card.body,
             onReply = { all ->
                 sendError = null
-                composing = replyTo(cardSummary, card.body, writingIdentity(card.body), all, ours)
+                val account = key ?: writingAccount()
+                val mine = identities[account].orEmpty().map { it.email }.toSet()
+                write(account, replyTo(cardSummary, card.body, writingIdentity(card.body, account), all, mine))
             },
             replyAll = hasOtherRecipients(cardSummary, card.body, ours),
             onForward = {
                 sendError = null
-                composing = forwardOf(cardSummary, card.body, writingIdentity(card.body))
+                val account = key ?: writingAccount()
+                write(account, forwardOf(cardSummary, card.body, writingIdentity(card.body, account)))
             },
             onForwardFile = { forwardAsFile(cardSummary) },
             onLink = { confirm = it },
@@ -3490,18 +3518,23 @@ private fun Reader(
             },
             onReceipt = { to ->
                 sendError = null
-                composing = Draft(
-                    from = identities[key].orEmpty().firstOrNull()?.email.orEmpty(),
-                    to = to,
-                    subject = receiptSubject(cardSummary.subject),
-                    body = receiptBody(
-                        cardSummary.subject,
-                        java.time.ZonedDateTime.now().format(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME),
-                        identities[key].orEmpty().firstOrNull()?.email.orEmpty(),
+                val account = key ?: writingAccount()
+                val from = identities[account].orEmpty().firstOrNull()?.email.orEmpty()
+                write(
+                    account,
+                    Draft(
+                        from = from,
+                        to = to,
+                        subject = receiptSubject(cardSummary.subject),
+                        body = receiptBody(
+                            cardSummary.subject,
+                            java.time.ZonedDateTime.now().format(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME),
+                            from,
+                        ),
+                        inReplyTo = card.body?.messageId?.firstOrNull(),
+                        references = card.body?.references.orEmpty() + card.body?.messageId.orEmpty(),
+                        replying = true,
                     ),
-                    inReplyTo = card.body?.messageId?.firstOrNull(),
-                    references = card.body?.references.orEmpty() + card.body?.messageId.orEmpty(),
-                    replying = true,
                 )
             },
             onUnsubscribe = { off ->
@@ -3529,10 +3562,14 @@ private fun Reader(
                     off.url != null -> confirm = off.url
                     off.mailto != null -> {
                         sendError = null
-                        composing = Draft(
-                            from = identities[key].orEmpty().firstOrNull()?.email.orEmpty(),
-                            to = off.mailto,
-                            subject = off.mailtoSubject ?: "unsubscribe",
+                        val account = key ?: writingAccount()
+                        write(
+                            account,
+                            Draft(
+                                from = identities[account].orEmpty().firstOrNull()?.email.orEmpty(),
+                                to = off.mailto,
+                                subject = off.mailtoSubject ?: "unsubscribe",
+                            ),
                         )
                     }
                 }
@@ -3635,19 +3672,22 @@ private fun Reader(
      * so the two cannot drift into meaning different things by the same name.
      */
     fun run(id: String) {
-        val ours = identities[writingAccount()].orEmpty().map { it.email }.toSet()
+        val account = writingAccount()
+        val ours = identities[account].orEmpty().map { it.email }.toSet()
         val from = ours.firstOrNull().orEmpty()
         when (id) {
-            "compose" -> { sendError = null; composing = Draft(from = from) }
+            "compose" -> { sendError = null; write(account, Draft(from = from)) }
             "reply" -> selected?.let {
                 val body = cardFor(it).body
                 val all = bareReplyAll(Settings.defaultReplyAll(), hasOtherRecipients(it, body, ours))
-                composing = replyTo(it, body, writingIdentity(body), all, ours)
+                write(account, replyTo(it, body, writingIdentity(body, account), all, ours))
             }
             "reply-all" -> selected?.let {
-                composing = replyTo(it, cardFor(it).body, writingIdentity(cardFor(it).body), true, ours)
+                write(account, replyTo(it, cardFor(it).body, writingIdentity(cardFor(it).body, account), true, ours))
             }
-            "forward" -> selected?.let { composing = forwardOf(it, cardFor(it).body, writingIdentity(cardFor(it).body)) }
+            "forward" -> selected?.let {
+                write(account, forwardOf(it, cardFor(it).body, writingIdentity(cardFor(it).body, account)))
+            }
             "forward-file" -> selected?.let { forwardAsFile(it) }
             "archive" -> actions.archive?.invoke()
             "trash" -> actions.trash?.invoke()
@@ -3752,27 +3792,37 @@ private fun Reader(
             Key.J, Key.DirectionDown -> step(1)
             Key.K, Key.DirectionUp -> step(-1)
             Key.F5 -> { scope.launch { refreshNow() }; true }
-            Key.C -> { sendError = null; composing = Draft(from = identities[writingAccount()].orEmpty().firstOrNull()?.email.orEmpty()); true }
+            Key.C -> {
+                sendError = null
+                val account = writingAccount()
+                write(account, Draft(from = identities[account].orEmpty().firstOrNull()?.email.orEmpty()))
+                true
+            }
             Key.U -> { run("unread-only"); true }
             Key.R -> {
                 selected?.let { m ->
+                    val account = writingAccount()
                     val body = cardFor(m).body
-                    val ours = identities[writingAccount()].orEmpty().map { it.email }.toSet()
+                    val ours = identities[account].orEmpty().map { it.email }.toSet()
                     val all = bareReplyAll(Settings.defaultReplyAll(), hasOtherRecipients(m, body, ours))
-                    composing = replyTo(m, body, writingIdentity(body), all, ours)
+                    write(account, replyTo(m, body, writingIdentity(body, account), all, ours))
                 }
                 true
             }
             Key.F -> {
-                selected?.let { m -> composing = forwardOf(m, cardFor(m).body, writingIdentity(cardFor(m).body)) }
+                selected?.let { m ->
+                    val account = writingAccount()
+                    write(account, forwardOf(m, cardFor(m).body, writingIdentity(cardFor(m).body, account)))
+                }
                 true
             }
             Key.A -> {
                 selected?.let { m ->
-                    val ours = identities[writingAccount()].orEmpty().map { it.email }.toSet()
+                    val account = writingAccount()
+                    val ours = identities[account].orEmpty().map { it.email }.toSet()
                     val body = cardFor(m).body
                     if (hasOtherRecipients(m, body, ours)) {
-                        composing = replyTo(m, body, writingIdentity(body), true, ours)
+                        write(account, replyTo(m, body, writingIdentity(body, account), true, ours))
                     }
                 }
                 true
@@ -3798,24 +3848,28 @@ private fun Reader(
      * indentation.
      */
     @Composable
-    fun ComposerPanel(composer: Draft) {
-        val key = writingAccount()
-        val currentSelected = selected
+    fun ComposerPanel(writing: ComposeSession) {
+        // The account this message was opened on. Not [writingAccount]: that follows
+        // whichever row is selected, and selecting another account while writing would
+        // retarget the save and wipe what has been typed.
+        val key = writing.account
+        val openedOn = remember(writing) { selected }
         var replyContext by remember { mutableStateOf<List<Turn>>(emptyList()) }
-        LaunchedEffect(composer.replying, key, currentSelected) {
-            if (composer.replying && key != null && currentSelected != null) {
-                replyContext = runCatching { summariseTurns(key, currentSelected) }.getOrDefault(emptyList())
+        LaunchedEffect(writing.draft.replying, key, openedOn?.id) {
+            val message = openedOn
+            if (writing.draft.replying && key != null && message != null) {
+                replyContext = runCatching { summariseTurns(key, message) }.getOrDefault(emptyList())
             }
         }
+        val accountIdentities = identities[key].orEmpty()
 
         Composer(
-            identities = identities[writingAccount()]?.map { it.email }.orEmpty(),
+            identities = accountIdentities.map { it.email },
             // The sign-off comes off the identity on the server, so one written in Bulwark
             // is the one used here without anything having to be imported or kept in step.
-            initial = identities[writingAccount()].orEmpty()
-                .firstOrNull { it.email.equals(composer.from, ignoreCase = true) }
-                ?.let { signed(composer, it.textSignature, it.htmlSignature, Settings.signatureAboveQuote()) }
-                ?: composer,
+            // Computed from the account captured when writing started, so a later change
+            // of selection does not hand the composer a new initial draft.
+            initial = draftOpening(writing.draft, accountIdentities, Settings.signatureAboveQuote()),
             sending = sending,
             error = sendError,
             replyContext = replyContext,
@@ -3823,18 +3877,22 @@ private fun Reader(
             folder = key?.let { currentFolderName(it) },
             onDiscard = {
                 // What was autosaved goes with it. Discard has to mean discarded, or the
-                // Drafts folder fills with messages somebody decided against.
-                val key = writingAccount()
-                val going = draftId
-                if (key != null && going != null) {
-                    scope.launch { io { session(key).jmap.destroy(listOf(going)) } }
-                }
+                // Drafts folder fills with messages somebody decided against. Any save
+                // already in flight is waited out first, because the id it comes back
+                // with is the copy that now exists.
+                val accountKey = key
+                val saves = writing.saves
                 composing = null
-                draftId = null
                 sendError = null
+                scope.launch {
+                    yield()
+                    val going = saves.awaitIdle()
+                    if (accountKey != null && going != null) {
+                        io { session(accountKey).jmap.destroy(listOf(going)) }
+                    }
+                }
             },
             onAttach = { files ->
-                val key = writingAccount()
                 val account = key?.let(::session)
                     ?: throw JmapError("Pick an account before attaching anything.")
                 // One at a time rather than in parallel: a mail server is not a CDN, and
@@ -3842,35 +3900,31 @@ private fun Reader(
                 withContext(Dispatchers.IO) { files.map { account.jmap.upload(it) } }
             },
             onDragFile = { attachment ->
-                val accountKey = writingAccount()
+                val accountKey = key
                     ?: throw JmapError("Pick an account before dragging a file out.")
                 materializeAttachment { dir -> session(accountKey).jmap.download(attachment, dir) }
             },
             onSave = { draft ->
-                val key = writingAccount()
                 val account = key?.let(::session)
                 val drafts = folderFor("drafts", mailboxes[key].orEmpty())
-                val identity = identities[key].orEmpty().firstOrNull { it.email.equals(draft.from, true) }
-                    ?: identities[key].orEmpty().firstOrNull()
+                val identity = identityForDraft(accountIdentities, draft.from)
                 if (account == null || drafts == null || identity == null) {
                     throw JmapError("There is nowhere to save this: the account has no Drafts folder.")
                 }
-                draftId = withContext(Dispatchers.IO) {
-                    account.jmap.saveDraft(draft, identity, drafts.id, draftId)
+                writing.saves.save { replacing ->
+                    account.jmap.saveDraft(draft, identity, drafts.id, replacing)
                 }
             },
-            book = withContacts(books[writingAccount()].orEmpty(), contacts.map { it.first }),
+            book = withContacts(books[key].orEmpty(), contacts.map { it.first }),
             full = composeFull,
             onFull = { composeFull = it },
             trackingReady = trackingServer.isNotBlank(),
             trackedBefore = { domain -> domain in Settings.trackedDomains() },
             onSend = { draft ->
-                val key = writingAccount()
                 val account = key?.let(::session)
                 val boxes = mailboxes[key].orEmpty()
                 val drafts = folderFor("drafts", boxes)
-                val identity = identities[key].orEmpty().firstOrNull { it.email.equals(draft.from, true) }
-                    ?: identities[key].orEmpty().firstOrNull()
+                val identity = identityForDraft(identities[key].orEmpty(), draft.from)
                 when {
                     account == null -> sendError = "Pick an account first."
                     identity == null -> sendError = "This account has no identity to send from."
@@ -3878,6 +3932,9 @@ private fun Reader(
                     else -> scope.launch {
                         sending = true
                         sendError = null
+                        // The autosave effect keys on this flag. Yield so that recomposition
+                        // cancels a debounce that has not started, before anything here sends.
+                        yield()
                         /*
                          * The pause before it goes, held here rather than asked of the
                          * server.
@@ -3908,18 +3965,20 @@ private fun Reader(
                             }
                         }
                         try {
+                            // After any save that started before Send, so the id destroyed
+                            // below is the copy the server actually has.
+                            val latest = writing.saves.awaitIdle()
                             val result = deliverNow(
                                 account,
                                 draft,
                                 identity,
                                 drafts.id,
                                 folderFor("sent", boxes)?.id,
-                                draftId,
+                                latest,
                                 key,
                             )
                             if (result.isSuccess) {
                                 composing = null
-                                draftId = null
                             } else {
                                 result.exceptionOrNull()?.let { sendError = whyFailed(it) }
                             }
@@ -3930,12 +3989,10 @@ private fun Reader(
                 }
             },
             onSchedule = { draft, sendAt ->
-                val key = writingAccount()
                 val account = key?.let(::session)
                 val boxes = mailboxes[key].orEmpty()
                 val drafts = folderFor("drafts", boxes)
-                val identity = identities[key].orEmpty().firstOrNull { it.email.equals(draft.from, true) }
-                    ?: identities[key].orEmpty().firstOrNull()
+                val identity = identityForDraft(identities[key].orEmpty(), draft.from)
                 when {
                     account == null -> sendError = "Pick an account first."
                     identity == null -> sendError = "This account has no identity to send from."
@@ -3946,14 +4003,11 @@ private fun Reader(
                         // has been put away for later.
                         sending = true
                         sendError = null
+                        yield()
                         try {
-                            val id = withContext(Dispatchers.IO) {
-                                account.jmap.saveDraft(draft, identity, drafts.id, draftId)
+                            val id = writing.saves.save { replacing ->
+                                account.jmap.saveDraft(draft, identity, drafts.id, replacing)
                             }
-                            // Point the next save at the copy that now exists, even if
-                            // recording the schedule fails. The old id was destroyed
-                            // as part of the save.
-                            draftId = id
                             ScheduledSends.schedule(
                                 ScheduledSend(
                                     id = java.util.UUID.randomUUID().toString(),
@@ -3966,7 +4020,6 @@ private fun Reader(
                             )
                             scheduledSends = ScheduledSends.pending()
                             composing = null
-                            draftId = null
                         } catch (e: Exception) {
                             sendError = whyFailed(e)
                         } finally {
@@ -4129,10 +4182,11 @@ private fun Reader(
                 folderMenu = { key, box, job -> folderAsk = FolderAsk(key, box, job) },
                 onSelect = { key, mailbox -> here = key to mailbox },
                 onWrite = {
-                    val from = identities[writingAccount()].orEmpty().firstOrNull()?.email
-                        ?: sessions.firstOrNull { it.key == writingAccount() }?.account?.email.orEmpty()
+                    val account = writingAccount()
+                    val from = identities[account].orEmpty().firstOrNull()?.email
+                        ?: sessions.firstOrNull { it.key == account }?.account?.email.orEmpty()
                     sendError = null
-                    composing = Draft(from = from)
+                    write(account, Draft(from = from))
                 },
             )
             folderAsk?.let { ask ->
@@ -4238,9 +4292,13 @@ private fun Reader(
                     onWrite = { address ->
                         contactsOpen = false
                         sendError = null
-                        composing = Draft(
-                            from = identities[writingAccount()].orEmpty().firstOrNull()?.email.orEmpty(),
-                            to = address,
+                        val account = writingAccount()
+                        write(
+                            account,
+                            Draft(
+                                from = identities[account].orEmpty().firstOrNull()?.email.orEmpty(),
+                                to = address,
+                            ),
                         )
                     },
                 )
@@ -4635,7 +4693,7 @@ private fun Reader(
          * Full screen is one button away for a long message, because a panel is the wrong
          * shape for anything with a table in it.
          */
-        composing?.let { draft ->
+        composing?.let { writing ->
             // Clamped against the live window on every draw, not only while a drag is in
             // progress: a window shrunk since the size was chosen (or since a previous run)
             // should not reopen a panel that no longer fits, without needing the drag itself
@@ -4650,7 +4708,7 @@ private fun Reader(
                     ),
             ) {
                 ComposerFrame(full = composeFull) {
-                    ComposerPanel(draft)
+                    ComposerPanel(writing)
                 }
                 /*
                  * The corner that moves. The panel is anchored bottom right, so the top

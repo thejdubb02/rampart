@@ -462,6 +462,8 @@ internal fun Composer(
     // debounce delay when Send is clicked keeps running underneath the send in flight,
     // and lands after the message is gone, autosaving a draft of a message already sent.
     // Restarting this effect the moment sending flips true cancels that delay outright.
+    // A save that has already been handed to onSave is not this effect's to abandon.
+    // The caller finishes it and keeps the id, or the next save orphans a copy.
     LaunchedEffect(draft, sending) {
         if (onSave == null || draft == initial || sending) return@LaunchedEffect
         delay(1200)
@@ -1707,6 +1709,41 @@ internal fun identityFor(
         return mine.firstOrNull { domainOf(it) == domainOf(hit) }
     }
     return onDomain(body?.to.orEmpty()) ?: onDomain(body?.cc.orEmpty()) ?: fallback
+}
+
+/**
+ * The identity a draft is saved and sent as.
+ *
+ * An address that is one of [available] uses that identity, so the message goes out as
+ * the address the draft already shows. An address that is not one of them is kept as
+ * written: substituting the account's first identity would send the message as somebody
+ * else and never say so. That first identity is only used when the draft has not named
+ * an address at all.
+ *
+ * A kept address still needs an id the server will accept a submission for, and the only
+ * one available is the account's own. The address on the message stays the draft's. The
+ * sign-off is not borrowed: it belongs to the identity whose address was replaced.
+ */
+internal fun identityForDraft(available: List<Identity>, from: String): Identity? {
+    if (available.isEmpty()) return null
+    available.firstOrNull { it.email.equals(from, ignoreCase = true) }?.let { return it }
+    if (from.isBlank()) return available.first()
+    return available.first().copy(name = "", email = from, textSignature = "", htmlSignature = "")
+}
+
+/**
+ * The draft the composer opens on, with the account's sign-off when the address is its own.
+ *
+ * A from address this account does not have is left exactly as it was. Applying the first
+ * identity's sign-off there would be the same silent swap as sending as that identity.
+ * A draft with no from at all takes the first identity, which is the only honest default.
+ */
+internal fun draftOpening(draft: Draft, available: List<Identity>, aboveQuote: Boolean): Draft {
+    val chosen = identityForDraft(available, draft.from) ?: return draft
+    val kept = draft.from.isNotBlank() && available.none { it.email.equals(draft.from, ignoreCase = true) }
+    val base = if (draft.from.equals(chosen.email, ignoreCase = true)) draft else draft.copy(from = chosen.email)
+    if (kept) return base
+    return signed(base, chosen.textSignature, chosen.htmlSignature, aboveQuote)
 }
 
 /**
