@@ -66,6 +66,9 @@ addresses, the admin surface and the credentials are not in this repo and are no
 going in it. They live in the operator's own notes and password manager. A real
 server to test against goes in a git-ignored local file, never in a commit.
 
+Check a UI change by looking at it, not only by its tests: skill `see-the-app` runs the
+app under Xvfb on this box and screenshots it.
+
 ## This repo is public
 
 Host names, tailnet addresses, account details and credentials stay out of the
