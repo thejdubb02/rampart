@@ -3,6 +3,7 @@ package org.rampart
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -71,6 +72,26 @@ class WebBodyTest {
         // correcting first: "larger" is larger than matching, not larger than 100 percent.
         assertEquals(1.725, zoomFor(density = 1.5f, scale = 1.15f, engineScale = 1f), 0.001)
         assertEquals(1.15, zoomFor(density = 1.5f, scale = 1.15f, engineScale = 1.5f), 0.001)
+    }
+
+    @Test
+    fun `a remembered height is reused and the memory stays bounded`() {
+        val memory = HeightMemory(3)
+        memory.remember("a", 100)
+        memory.remember("b", 200)
+        memory.remember("c", 300)
+        memory.remember("d", 400)
+        assertEquals(3, memory.size())
+        assertNull(memory.of("a"))
+        assertEquals(400, memory.of("d"))
+        assertEquals(200, memory.of("b"))
+        // The remembered height wins over the pane, and a first open uses the pane.
+        assertEquals(400, openingHeight(memory.of("d"), 900))
+        assertEquals(900, openingHeight(null, 900))
+        assertEquals(320, openingHeight(null, 10))
+        assertEquals(480, openingHeight(null, 0))
+        assertEquals(3000, openingHeight(null, 9000, cap = 3000))
+        assertEquals(3000, openingHeight(5000, 900, cap = 3000))
     }
 
     @Test

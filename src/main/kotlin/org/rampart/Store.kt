@@ -1,11 +1,50 @@
 package org.rampart
 
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.sql.Connection
 import java.sql.DriverManager
 import kotlin.io.path.createDirectories
+
+/** How many picture bytes one message may keep. Past this the text is kept and the pictures are not. */
+internal const val PICTURE_CACHE_CAP = 5 * 1024 * 1024
+
+/**
+ * Pictures that fit in [cap], in the order they were given.
+ *
+ * One that does not fit is skipped rather than stopping the rest, so a huge file
+ * beside a logo does not push the logo out.
+ */
+internal fun picturesWithin(pictures: Map<String, ByteArray>, cap: Int = PICTURE_CACHE_CAP): Map<String, ByteArray> {
+    if (cap <= 0) return emptyMap()
+    var used = 0
+    val kept = LinkedHashMap<String, ByteArray>()
+    for ((id, bytes) in pictures) {
+        if (bytes.size > cap || used + bytes.size > cap) continue
+        kept[id] = bytes
+        used += bytes.size
+    }
+    return kept
+}
+
+/**
+ * A message kept whole: the body with its headers, the files, and the pictures it draws.
+ *
+ * The old body table stored only the html and the text, so a cached copy was never equal
+ * to the one just fetched and the page was built twice. This is the copy that can be shown
+ * as it is.
+ */
+internal data class Kept(
+    val body: Body,
+    val attachments: List<Attachment>,
+    val pictures: Map<String, ByteArray>,
+    val emailBlobId: String?,
+    val mailState: String?,
+    val calendar: String? = null,
+)
 
 /**
  * The local copy of a mailbox.
@@ -110,6 +149,27 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             )
             """,
             "CREATE INDEX IF NOT EXISTS tracked_message ON tracked (messageId)",
+            // The whole opened message, separate from the list row. A new table rather than
+            // new columns on body: a cache file that already exists never re-runs the old
+            // CREATE, so a column added there would not be there.
+            """
+            CREATE TABLE IF NOT EXISTS kept (
+                id TEXT PRIMARY KEY,
+                body TEXT NOT NULL,
+                attachments TEXT NOT NULL,
+                blobId TEXT,
+                mailState TEXT,
+                calendar TEXT
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS kept_picture (
+                id TEXT NOT NULL,
+                blob TEXT NOT NULL,
+                bytes BLOB NOT NULL,
+                PRIMARY KEY (id, blob)
+            )
+            """,
         )
     }
 
@@ -611,6 +671,36 @@ internal class Store(private val connection: Connection) : AutoCloseable {
     private fun holders(n: Int) = List(n) { "?" }.joinToString(",")
 
     fun putBody(id: String, body: Body) {
+        putKept(id, body, emptyList(), emptyMap(), null, null, null)
+    }
+
+    /**
+     * The body, with its headers when this file has them.
+     *
+     * A row written by an older build has only the html and the text. That copy is still
+     * readable. It is not treated as a finished cache: [kept] is null for it, so the next
+     * open fetches the message once and stores it whole.
+     */
+    fun body(id: String): Body? = kept(id)?.body ?: connection.prepareStatement(
+        "SELECT html, text FROM body WHERE id = ?",
+    ).use { s ->
+        s.setString(1, id)
+        s.executeQuery().use { rows ->
+            if (!rows.next()) null else Body(rows.getString("html"), rows.getString("text"))
+        }
+    }
+
+    fun putKept(
+        id: String,
+        body: Body,
+        attachments: List<Attachment>,
+        pictures: Map<String, ByteArray>,
+        emailBlobId: String?,
+        mailState: String?,
+        calendar: String?,
+        pictureCap: Int = PICTURE_CACHE_CAP,
+    ) {
+        val fitting = picturesWithin(pictures, pictureCap)
         connection.prepareStatement(
             "INSERT INTO body (id, html, text) VALUES (?,?,?) " +
                 "ON CONFLICT(id) DO UPDATE SET html=excluded.html, text=excluded.text",
@@ -620,14 +710,79 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             s.setString(3, body.text)
             s.executeUpdate()
         }
-    }
-
-    fun body(id: String): Body? = connection.prepareStatement("SELECT html, text FROM body WHERE id = ?").use { s ->
-        s.setString(1, id)
-        s.executeQuery().use { rows ->
-            if (!rows.next()) null else Body(rows.getString("html"), rows.getString("text"))
+        connection.prepareStatement(
+            "INSERT INTO kept (id, body, attachments, blobId, mailState, calendar) VALUES (?,?,?,?,?,?) " +
+                "ON CONFLICT(id) DO UPDATE SET body=excluded.body, attachments=excluded.attachments, " +
+                "blobId=excluded.blobId, mailState=excluded.mailState, calendar=excluded.calendar",
+        ).use { s ->
+            s.setString(1, id)
+            s.setString(2, keptJson.encodeToString(Body.serializer(), body))
+            s.setString(3, keptJson.encodeToString(ListSerializer(Attachment.serializer()), attachments))
+            s.setString(4, emailBlobId)
+            s.setString(5, mailState)
+            s.setString(6, calendar)
+            s.executeUpdate()
+        }
+        connection.prepareStatement("DELETE FROM kept_picture WHERE id = ?").use { s ->
+            s.setString(1, id)
+            s.executeUpdate()
+        }
+        if (fitting.isEmpty()) return
+        connection.prepareStatement(
+            "INSERT INTO kept_picture (id, blob, bytes) VALUES (?,?,?)",
+        ).use { s ->
+            fitting.forEach { (blob, bytes) ->
+                s.setString(1, id)
+                s.setString(2, blob)
+                s.setBytes(3, bytes)
+                s.executeUpdate()
+            }
         }
     }
+
+    fun kept(id: String): Kept? = connection.prepareStatement(
+        "SELECT body, attachments, blobId, mailState, calendar FROM kept WHERE id = ?",
+    ).use { s ->
+        s.setString(1, id)
+        s.executeQuery().use { rows ->
+            if (!rows.next()) return null
+            val body = runCatching { keptJson.decodeFromString(Body.serializer(), rows.getString("body")) }
+                .getOrNull() ?: return null
+            val attachments = runCatching {
+                keptJson.decodeFromString(ListSerializer(Attachment.serializer()), rows.getString("attachments"))
+            }.getOrDefault(emptyList())
+            Kept(
+                body = body,
+                attachments = attachments,
+                pictures = picturesOf(id),
+                emailBlobId = rows.getString("blobId"),
+                mailState = rows.getString("mailState"),
+                calendar = rows.getString("calendar"),
+            )
+        }
+    }
+
+    /** The account state this copy was saved under, so a later open can see that nothing moved. */
+    fun setKeptState(id: String, state: String) {
+        connection.prepareStatement("UPDATE kept SET mailState = ? WHERE id = ?").use { s ->
+            s.setString(1, state)
+            s.setString(2, id)
+            s.executeUpdate()
+        }
+    }
+
+    private fun picturesOf(id: String): Map<String, ByteArray> =
+        connection.prepareStatement("SELECT blob, bytes FROM kept_picture WHERE id = ?").use { s ->
+            s.setString(1, id)
+            s.executeQuery().use { rows ->
+                buildMap {
+                    while (rows.next()) {
+                        val bytes = rows.getBytes("bytes") ?: continue
+                        put(rows.getString("blob"), bytes)
+                    }
+                }
+            }
+        }
 
     /** What the server's state was when this folder was last read, so a refresh can skip. */
     fun cursor(mailbox: String): String? =
@@ -650,8 +805,13 @@ internal class Store(private val connection: Connection) : AutoCloseable {
     fun forget(ids: List<String>) {
         if (ids.isEmpty()) return
         val marks = ids.joinToString(",") { "?" }
-        listOf("DELETE FROM message WHERE id IN ($marks)", "DELETE FROM body WHERE id IN ($marks)",
-               "DELETE FROM search WHERE id IN ($marks)").forEach { sql ->
+        listOf(
+            "DELETE FROM message WHERE id IN ($marks)",
+            "DELETE FROM body WHERE id IN ($marks)",
+            "DELETE FROM search WHERE id IN ($marks)",
+            "DELETE FROM kept WHERE id IN ($marks)",
+            "DELETE FROM kept_picture WHERE id IN ($marks)",
+        ).forEach { sql ->
             connection.prepareStatement(sql).use { s ->
                 ids.forEachIndexed { i, id -> s.setString(i + 1, id) }
                 s.executeUpdate()
@@ -670,6 +830,8 @@ internal class Store(private val connection: Connection) : AutoCloseable {
 
     override fun close() = connection.close()
 }
+
+private val keptJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
 private fun summaryOf(rows: java.sql.ResultSet) = Summary(
     id = rows.getString("id"),

@@ -4,6 +4,28 @@ import kotlinx.serialization.json.JsonObject
 import java.nio.file.Path
 
 /**
+ * One message, opened.
+ *
+ * [emailBlobId] is the message's own blob. It changes when the bytes change and not
+ * when a flag does, which is how a cached copy is told apart from a new one.
+ *
+ * [calendar] is the invitation text when the part was small enough to take with the
+ * open. Null when the message has none, or the part was too big to be worth it.
+ */
+internal data class OpenedMail(
+    val body: Body,
+    val attachments: List<Attachment> = emptyList(),
+    val emailBlobId: String? = null,
+    val calendar: String? = null,
+)
+
+/** The two fields that identify a message's bytes. See [MailBackend.contentStamp]. */
+internal data class ContentStamp(val blobId: String, val size: Long)
+
+/** A calendar part at most this big is fetched with the message. Larger ones are left. */
+internal const val CHEAP_CALENDAR = 256L * 1024
+
+/**
  * What Rampart needs a mail server to do, whichever protocol it speaks.
  *
  * Extracted from what the app already asked of [Jmap] rather than designed up front, so it
@@ -58,6 +80,26 @@ internal interface MailBackend {
     fun body(id: String): Body
 
     fun attachments(emailId: String): List<Attachment>
+
+    /**
+     * The body and the file list together.
+     *
+     * They used to be two requests that finished at different moments, so the page was
+     * built once for the text and again when the pictures arrived. One answer is what
+     * lets the first paint be the finished message.
+     *
+     * The default does the two calls, which is all IMAP can do. JMAP overrides it with
+     * a single Email/get.
+     */
+    fun open(id: String): OpenedMail = OpenedMail(body(id), attachments(id))
+
+    /**
+     * The message's own blob and size, and nothing else.
+     *
+     * Enough to tell a cached copy from one the server has replaced, without fetching
+     * the body again. Null where the server cannot say.
+     */
+    fun contentStamp(id: String): ContentStamp? = null
 
     fun blob(attachment: Attachment, limit: Long = 8L * 1024 * 1024): ByteArray?
 

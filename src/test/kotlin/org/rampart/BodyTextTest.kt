@@ -7,7 +7,9 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Taken from what the server actually answered for a DMARC report that would not read
@@ -70,5 +72,39 @@ class BodyTextTest {
     fun nothingToShowIsNullRatherThanAnEmptyBody() {
         assertNull(bodyText(null, values, null))
         assertNull(bodyText(parts("textBody"), JsonObject(emptyMap()), null), "a part with no value is nothing")
+    }
+
+    @Test
+    fun `a truncated part is replaced by the downloaded bytes`() {
+        val raw = Json.parseToJsonElement(
+            """{"htmlBody": [{"partId": "1", "type": "text/html", "blobId": "B", "size": 12}],
+               "bodyValues": {"1": {"value": "<p>hel", "isTruncated": true}}}""",
+        ).jsonObject
+        val parts = raw["htmlBody"] as JsonArray
+        val values = raw["bodyValues"]!!.jsonObject
+        assertTrue(bodyCut(parts, values, "text/html"))
+        assertEquals(
+            "<p>hello</p>",
+            resolveBody(parts, values, "text/html") { id, _, _ ->
+                if (id == "B") "<p>hello</p>".encodeToByteArray() else null
+            },
+        )
+    }
+
+    @Test
+    fun `a truncated part with no further bytes stays short and is still reported`() {
+        val raw = Json.parseToJsonElement(
+            """{"textBody": [{"partId": "1", "type": "text/plain", "blobId": "B", "size": 3}],
+               "bodyValues": {"1": {"value": "hel", "isTruncated": true}}}""",
+        ).jsonObject
+        val parts = raw["textBody"] as JsonArray
+        val values = raw["bodyValues"]!!.jsonObject
+        assertEquals("hel", resolveBody(parts, values, null) { _, _, _ -> null })
+        assertTrue(bodyCut(parts, values, null))
+    }
+
+    @Test
+    fun `a part that arrived whole is not cut`() {
+        assertFalse(bodyCut(parts("textBody"), values, null))
     }
 }

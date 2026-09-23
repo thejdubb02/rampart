@@ -545,6 +545,10 @@ private fun ApplicationScope.Rampart() {
             )
         }
         LaunchedEffect(Unit) {
+            // After the window is up, so the first message does not pay for starting WebKit.
+            warmWebBody()
+        }
+        LaunchedEffect(Unit) {
             SingleInstance.bringToFront {
                 javax.swing.SwingUtilities.invokeLater {
                     windowState.isMinimized = false
@@ -989,6 +993,19 @@ internal data class Card(
     val images: Map<String, ImageBitmap> = emptyMap(),
     /** The same parts undecoded, for the engine, which wants bytes rather than a bitmap. */
     val imageBytes: Map<String, ByteArray> = emptyMap(),
+    /**
+     * The finished page, built off the UI thread.
+     *
+     * Composition reads this and does not build it again. Building it here is what made
+     * opening a message parse the HTML on the thread that paints the window.
+     */
+    val reading: Reading? = null,
+    /** Whether [reading] was built with remote pictures allowed. */
+    val pageRemote: Boolean = false,
+    /** Invitation text fetched with the message, when there was a small one. */
+    val calendar: String? = null,
+    /** The message's own blob. Unchanged by a flag, so a cached copy can be trusted. */
+    val emailBlobId: String? = null,
     /** What happened after pressing Unsubscribe on this message, when it was pressed. */
     val unsubscribed: String? = null,
     /** This message's own raw source, once "View source" has asked for it. */
@@ -1432,70 +1449,189 @@ private fun Reader(
         null
     }
 
+    /** The message this id is, wherever the open conversation or the list has it. */
+    fun findSummary(id: String): Summary? =
+        selected?.takeIf { it.id == id }
+            ?: thread.firstOrNull { it.id == id }
+            ?: emails.firstOrNull { it.id == id }
+
     /**
-     * Fills in one message's body and attachments, the same round trip whether it is the
-     * one clicked from the list or one expanded afterwards inside its thread.
+     * Whether an undesigned message is drawn dark.
      *
-     * [force] re-fetches even when [cards] already has a body, which is right exactly once:
-     * the message a click just opened, because a body read before can gain a decoded part
-     * or lose a broken one between reads. Every other card is left alone when it is already
-     * here, which is the whole reason collapsing one and opening it again is free.
+     * Computed while composing. The loader runs later, off this thread, and a theme
+     * read from there is not a theme read.
+     */
+    val darkMail = when (messageMode) {
+        "dark" -> true
+        "light" -> false
+        else -> MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    } && !paper
+
+    fun knownDomains(): Set<String> =
+        books.values.flatten().map { domainOf(it.email) }.filter { it.isNotBlank() }.toSet()
+
+    fun publishCard(
+        id: String,
+        body: Body,
+        attachments: List<Attachment>,
+        pictures: Map<String, ByteArray>,
+        reading: Reading?,
+        remote: Boolean,
+        calendar: String?,
+        emailBlobId: String?,
+        loaded: Boolean,
+    ) {
+        updateCard(id) {
+            copy(
+                body = body,
+                bodyError = null,
+                attachments = attachments,
+                imageBytes = pictures,
+                images = reading?.images ?: images,
+                reading = reading,
+                pageRemote = remote,
+                calendar = calendar,
+                emailBlobId = emailBlobId,
+                loaded = loaded,
+            )
+        }
+    }
+
+    /**
+     * Whether [kept] is still the message the server has.
+     *
+     * The same check the list uses: the account's state string. Unchanged means nothing
+     * in the account moved, so this message cannot have. When the account did move, the
+     * message's own blob and size answer the narrower question, and a match is still not
+     * a reason to fetch the body or build the page again.
+     */
+    suspend fun cacheStillGood(key: String, id: String, kept: Kept): Boolean {
+        val state = withContext(Dispatchers.IO) { runCatching { session(key).jmap.mailState() }.getOrNull() }
+            ?: return false
+        if (kept.mailState != null && state == kept.mailState) return true
+        val folder = sourceFolder(key)
+        val cursor = folder?.let { withContext(Dispatchers.IO) { session(key).store?.cursor(it) } }
+        if (cursor != null && state == cursor) return true
+        val blobId = kept.emailBlobId ?: return false
+        val stamp = withContext(Dispatchers.IO) {
+            runCatching { session(key).jmap.contentStamp(id) }.getOrNull()
+        } ?: return false
+        if (stamp.blobId != blobId || stamp.size != kept.body.size) return false
+        withContext(Dispatchers.IO) { runCatching { session(key).store?.setKeptState(id, state) } }
+        return true
+    }
+
+    /**
+     * Fills one card in, page and all, before it is drawn.
+     *
+     * A copy already stored is the first paint when it is there. It is fetched again only
+     * when the account has moved and this message's own bytes have moved with it. Pictures
+     * the body cites come along before that paint, when they are small enough to be worth
+     * waiting for, so the engine is handed one document and loads it once.
+     *
+     * [force] is the click that just opened a message. A card expanded inside a thread
+     * that is already loaded is left alone, which is why closing it and opening it again
+     * does not fetch it a second time.
      */
     suspend fun loadCard(key: String, id: String, force: Boolean = false) {
         if (!force && cards[id]?.loaded == true) return
-        val kept = io { session(key).store?.body(id) }
-        if (kept != null) {
+        val remote = showRemoteFor(findSummary(id))
+        val dark = darkMail
+        val known = knownDomains()
+        val kept = withContext(Dispatchers.IO) { runCatching { session(key).store?.kept(id) }.getOrNull() }
+        val showing = cards[id]
+        if (
+            kept != null && showing?.reading != null && showing.pageRemote == remote &&
+            showing.body == kept.body && cacheStillGood(key, id, kept)
+        ) {
             Diagnostics.count(Metric.MESSAGE_OPEN_CACHE_HIT)
-            updateCard(id) { copy(body = kept) }
+            updateCard(id) { copy(loaded = true, calendar = kept.calendar, emailBlobId = kept.emailBlobId) }
+            if (id == selected?.id) invitation = kept.calendar?.let { invitationIn(it) }
+            return
         }
-        // Spans the round trip below, cache hit or not: the card always re-asks the server
-        // even when a kept copy is shown first, so this is the number that answers "why did
-        // opening this message feel slow just now."
-        Diagnostics.time(Metric.MESSAGE_OPEN_FETCH) {
-            coroutineScope {
-                // The body and the parts list do not depend on each other and each is a round
-                // trip, so they go out together rather than one after the other.
-                val fetchedBody = async(Dispatchers.IO) { tried { session(key).jmap.body(id) } }
-                val fetchedParts = async(Dispatchers.IO) { tried { session(key).jmap.attachments(id) } }
-                val fresh = fetchedBody.await().fold(
-                    onSuccess = { it.also { b -> io { session(key).store?.putBody(id, b) } } },
-                    onFailure = { e ->
-                        // Only a failure when there was nothing kept. Offline, with a copy on
-                        // disk, is a card that opens rather than an error where it should be.
-                        if (kept == null) updateCard(id) { copy(bodyError = whyFailed(e)) }
-                        kept
-                    },
+        if (kept != null) {
+            val reading = withContext(Dispatchers.Default) {
+                prepareReading(
+                    findSummary(id)?.fromEmail.orEmpty(),
+                    findSummary(id)?.from.orEmpty(),
+                    kept.body,
+                    kept.attachments,
+                    kept.pictures,
+                    remote,
+                    dark,
+                    known,
                 )
-                if (fresh != null) updateCard(id) { copy(body = fresh) }
-                val parts = fetchedParts.await().getOrNull() ?: emptyList()
-                /*
-                 * Finished only when there is actually a body, which is not the same as having
-                 * tried. A fetch that failed with nothing on disk leaves an error where the
-                 * message should be, and calling that loaded would mean the card never asked
-                 * again: opening it a second time would return early and show the same error
-                 * for as long as the conversation stayed open, with the network long since back.
-                 *
-                 * Marked here rather than after the pictures below, because a card with its body
-                 * and its parts list is complete enough not to be fetched from the top again.
-                 */
-                updateCard(id) { copy(attachments = parts, loaded = fresh != null) }
-                // Images the message carries with it are drawn. Fetching them asks the server
-                // this account is already signed in to, so it tells the sender nothing, which
-                // is the whole difference between these and the remote ones that stay blocked.
-                val embedded = parts.filter { it.inline && it.type.startsWith("image/") }
-                if (embedded.isEmpty()) return@coroutineScope
-                val blobs = embedded.map { part ->
-                    async(Dispatchers.IO) {
-                        tried { session(key).jmap.blob(part) }.getOrNull()?.let { part.blobId to it }
-                    }
-                }.awaitAll().filterNotNull().toMap()
-                val images = blobs.mapNotNull { (blobId, raw) ->
-                    // A part that claims to be an image and is not must not take the card down
-                    // with it.
-                    runCatching { Image.makeFromEncoded(raw).toComposeImageBitmap() }.getOrNull()?.let { blobId to it }
-                }.toMap()
-                updateCard(id) { copy(imageBytes = blobs, images = images) }
             }
+            publishCard(id, kept.body, kept.attachments, kept.pictures, reading, remote, kept.calendar, kept.emailBlobId, loaded = false)
+            if (id == selected?.id) invitation = kept.calendar?.let { invitationIn(it) }
+            if (cacheStillGood(key, id, kept)) {
+                Diagnostics.count(Metric.MESSAGE_OPEN_CACHE_HIT)
+                updateCard(id) { copy(loaded = true) }
+                return
+            }
+        }
+        Diagnostics.time(Metric.MESSAGE_OPEN_FETCH) {
+            val opened = withContext(Dispatchers.IO) { tried { session(key).jmap.open(id) } }
+            val fresh = opened.getOrNull()
+            if (fresh == null) {
+                // Only a failure when there was nothing kept. Offline, with a copy on
+                // disk, is a card that opens rather than an error where it should be.
+                // A fetch that failed with nothing on disk is not marked loaded, or the
+                // next open would keep showing the error after the network came back.
+                if (kept == null) {
+                    updateCard(id) {
+                        copy(bodyError = whyFailed(opened.exceptionOrNull() ?: Exception("That message would not open.")))
+                    }
+                } else {
+                    updateCard(id) { copy(loaded = true) }
+                }
+                return@time
+            }
+            val pictures = withContext(Dispatchers.IO) { cidBytes(session(key).jmap, fresh.body, fresh.attachments) }
+            val person = findSummary(id)
+            val reading = withContext(Dispatchers.Default) {
+                prepareReading(
+                    person?.fromEmail.orEmpty(),
+                    person?.from.orEmpty(),
+                    fresh.body,
+                    fresh.attachments,
+                    pictures,
+                    remote,
+                    dark,
+                    known,
+                )
+            }
+            val state = withContext(Dispatchers.IO) { runCatching { session(key).jmap.mailState() }.getOrNull() }
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    session(key).store?.putKept(
+                        id, fresh.body, fresh.attachments, pictures,
+                        fresh.emailBlobId, state, fresh.calendar,
+                    )
+                }
+            }
+            // The same document is not handed over again. A second load is the jump.
+            val same = cards[id]?.reading?.page == reading.page && reading.page != null
+            if (same) {
+                updateCard(id) {
+                    copy(
+                        body = fresh.body,
+                        attachments = fresh.attachments,
+                        imageBytes = pictures,
+                        images = reading.images,
+                        calendar = fresh.calendar,
+                        emailBlobId = fresh.emailBlobId,
+                        loaded = true,
+                        bodyError = null,
+                    )
+                }
+            } else {
+                publishCard(
+                    id, fresh.body, fresh.attachments, pictures, reading, remote,
+                    fresh.calendar, fresh.emailBlobId, loaded = true,
+                )
+            }
+            if (id == selected?.id) invitation = fresh.calendar?.let { invitationIn(it) }
         }
     }
 
@@ -1880,8 +2016,15 @@ private fun Reader(
             val key = if (account == ALL_ACCOUNTS) accountOf(row) ?: continue else account
             val store = session(key).store ?: continue
             withContext(Dispatchers.IO) {
-                if (store.body(row.id) == null) {
-                    runCatching { store.putBody(row.id, session(key).jmap.body(row.id)) }
+                if (store.kept(row.id) == null) {
+                    runCatching {
+                        val opened = session(key).jmap.open(row.id)
+                        val pictures = cidBytes(session(key).jmap, opened.body, opened.attachments)
+                        store.putKept(
+                            row.id, opened.body, opened.attachments, pictures,
+                            opened.emailBlobId, null, opened.calendar,
+                        )
+                    }
                 }
             }
             // Between messages rather than inside one, because a fetch in flight cannot be
@@ -2217,24 +2360,28 @@ private fun Reader(
                  */
                 fetchedThread = async(Dispatchers.IO) { tried { session(key).jmap.thread(message.threadId) } }
             }
-            // A message read once opens with no round trip at all, which is most of what
-            // "instant" means in a mail client. Still re-fetched underneath, because a body
-            // can gain a decoded part or lose a broken one between reads.
+            // A stored copy that still matches the server opens with no further fetch.
+            // loadCard is what decides, and it builds the page before the card is shown.
             loadCard(key, message.id, force = true)
 
             /*
-             * The meeting, when the message carries one.
+             * The meeting, when the open did not already bring it back.
              *
-             * Read here rather than from the body, because an invitation is a part of its own:
-             * Outlook and Google both send it as a third format inside multipart/alternative
-             * beside the text and the HTML, and it is small enough that fetching it to find out
-             * costs nothing worth saving.
+             * A small invitation is part of that open. This is the remainder: a backend
+             * that cannot put it on the same request, and only when the part is small.
              */
-            cardFor(message).attachments.firstOrNull { it.type.equals("text/calendar", ignoreCase = true) }?.let { part ->
-                invitation = withContext(Dispatchers.IO) {
-                    runCatching {
-                        session(key).jmap.blob(part)?.let { invitationIn(String(it, Charsets.UTF_8)) }
-                    }.getOrNull()
+            if (invitation == null) {
+                val card = cardFor(message)
+                val parsed = card.calendar?.let { invitationIn(it) }
+                invitation = parsed ?: card.attachments.firstOrNull {
+                    it.type.substringBefore(';').equals("text/calendar", ignoreCase = true) &&
+                        it.size in 1..CHEAP_CALENDAR
+                }?.let { part ->
+                    withContext(Dispatchers.IO) {
+                        runCatching {
+                            session(key).jmap.blob(part, CHEAP_CALENDAR)?.let { invitationIn(String(it, Charsets.UTF_8)) }
+                        }.getOrNull()
+                    }
                 }
             }
 
@@ -3471,6 +3618,29 @@ private fun Reader(
         val key = accountOf(cardSummary)
         val ours = identities[key].orEmpty().map { it.email }.toSet()
         val isPrimary = cardSummary.id == selected?.id
+        val remote = showRemoteFor(cardSummary)
+        // Show images rebuilds the page off this thread. The first build happened in
+        // loadCard, with whatever the reader had already allowed.
+        LaunchedEffect(cardSummary.id, remote) {
+            val current = cardFor(cardSummary)
+            val body = current.body ?: return@LaunchedEffect
+            if (current.reading != null && current.pageRemote == remote) return@LaunchedEffect
+            val reading = withContext(Dispatchers.Default) {
+                prepareReading(
+                    cardSummary.fromEmail,
+                    cardSummary.from,
+                    body,
+                    current.attachments,
+                    current.imageBytes,
+                    remote,
+                    darkMail,
+                    knownDomains(),
+                )
+            }
+            updateCard(cardSummary.id) {
+                copy(reading = reading, pageRemote = remote, images = reading.images.ifEmpty { images })
+            }
+        }
         Message(
             summary = cardSummary,
             body = card.body,
@@ -3602,6 +3772,8 @@ private fun Reader(
             bodyError = card.bodyError,
             images = card.images,
             imageBytes = card.imageBytes,
+            reading = card.reading,
+            paneHeight = windowSize().height.value.toInt(),
             actions = actionsFor(cardSummary),
             summarise = if (isPrimary) summariseState else null,
             attachments = card.attachments,
@@ -4587,26 +4759,36 @@ private fun Reader(
                 return@Row
             }
             val message = selected
-            when {
-                message == null -> Message(summary = null, body = null, onLink = { confirm = it })
-                // Rule 9: one message must look like a message, not a stack of one. No
-                // count line, no collapsed rows, no header of its own above it.
-                thread.size <= 1 -> renderCard(
-                    message,
-                    showSubject = true,
-                    onHeaderClick = null,
-                    externalScroll = null,
-                )
-                else -> {
-                    val stackScroll = rememberScrollState()
-                    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
-                        ThemeArt(Modifier.align(Alignment.BottomEnd))
-                        Column(
+            if (message == null) {
+                Message(summary = null, body = null, onLink = { confirm = it })
+            } else {
+                /*
+                 * One place for the card, whether or not the thread has arrived.
+                 *
+                 * A lone message and a stack used to be two branches, so the moment the
+                 * thread answered the card was thrown away and a new one built, and the
+                 * message loaded a second time. Keyed by id inside the one list, the card
+                 * that was already on screen stays the same card when the rows around it
+                 * appear. A lone message still has no count and no collapsed rows: the
+                 * stack's chrome is only added once there is more than one.
+                 */
+                val stacked = thread.size > 1
+                val stackScroll = rememberScrollState()
+                Box(
+                    Modifier.fillMaxSize().background(
+                        if (stacked) MaterialTheme.colorScheme.surface else Color.Transparent,
+                    ),
+                ) {
+                    if (stacked) ThemeArt(Modifier.align(Alignment.BottomEnd))
+                    Column(
+                        if (stacked) {
                             Modifier.fillMaxSize().verticalScroll(stackScroll)
-                                .padding(horizontal = 20.dp, vertical = 20.dp),
-                        ) {
-                            // The plain header: the subject once, the count, and the muted
-                            // marker, none of which belong to any one card below it.
+                                .padding(horizontal = 20.dp, vertical = 20.dp)
+                        } else {
+                            Modifier.fillMaxSize()
+                        },
+                    ) {
+                        if (stacked) {
                             Text(message.subject, style = MaterialTheme.typography.titleLarge)
                             Spacer(Modifier.height(6.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -4630,36 +4812,40 @@ private fun Reader(
                             Spacer(Modifier.height(14.dp))
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                             Spacer(Modifier.height(6.dp))
-
-                            thread.forEachIndexed { index, m ->
-                                if (m.id in expanded) {
-                                    // Brought into view once, the moment this is the card
-                                    // the conversation was opened on. Every later expand or
-                                    // collapse leaves the scroll exactly where it was: see
-                                    // rule 1, this is never a swap.
+                        }
+                        val rows = if (stacked) thread else listOf(message)
+                        rows.forEachIndexed { index, m ->
+                            key(m.id) {
+                                if (stacked && m.id !in expanded) {
+                                    ThreadRow(m) { toggleExpand(m.id) }
+                                } else {
                                     val requester = remember(m.id) { BringIntoViewRequester() }
-                                    LaunchedEffect(pendingScrollTo) {
-                                        if (pendingScrollTo == m.id) {
-                                            requester.bringIntoView()
-                                            pendingScrollTo = null
+                                    if (stacked) {
+                                        LaunchedEffect(pendingScrollTo) {
+                                            if (pendingScrollTo == m.id) {
+                                                requester.bringIntoView()
+                                                pendingScrollTo = null
+                                            }
                                         }
                                     }
-                                    Box(Modifier.bringIntoViewRequester(requester)) {
+                                    Box(if (stacked) Modifier.bringIntoViewRequester(requester) else Modifier) {
                                         renderCard(
                                             m,
-                                            showSubject = false,
-                                            onHeaderClick = { toggleExpand(m.id) },
-                                            externalScroll = stackScroll,
+                                            showSubject = !stacked,
+                                            onHeaderClick = if (stacked) {
+                                                { toggleExpand(m.id) }
+                                            } else {
+                                                null
+                                            },
+                                            externalScroll = if (stacked) stackScroll else null,
                                         )
                                     }
-                                } else {
-                                    ThreadRow(m) { toggleExpand(m.id) }
                                 }
-                                if (index < thread.lastIndex) {
-                                    Spacer(Modifier.height(6.dp))
-                                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                                    Spacer(Modifier.height(6.dp))
-                                }
+                            }
+                            if (stacked && index < rows.lastIndex) {
+                                Spacer(Modifier.height(6.dp))
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                Spacer(Modifier.height(6.dp))
                             }
                         }
                     }
@@ -6888,6 +7074,14 @@ internal fun Message(
      * the stack is that it reads as one page.
      */
     externalScroll: ScrollState? = null,
+    /**
+     * The page, already built. Passed in by the open path so this function does not
+     * parse the message while it is trying to draw it. Absent for a viewer that has
+     * the bytes already, which builds the same thing off to the side.
+     */
+    reading: Reading? = null,
+    /** How tall the pane is, for a message that has never been measured. */
+    paneHeight: Int = 0,
     onLink: (String) -> Unit,
     /** Bytes for an image that was not already fetched with the body, for a preview. */
     onLoadImage: (suspend (Attachment) -> ImageBitmap?)? = null,
@@ -6898,23 +7092,6 @@ internal fun Message(
     // it is used. Part of the remember key: the same message on a different theme is a
     // different answer about which of its colours can be read.
     val bodyPaper = MaterialTheme.colorScheme.surface
-    /*
-     * The same join, but as bytes rather than a decoded picture, because the engine wants
-     * a `data:` URI where the block renderer wanted a bitmap. The bytes are already here:
-     * these are parts of the message, fetched over the account's own connection, so putting
-     * one in the page tells nobody anything.
-     */
-    val carriedData = remember(attachments, imageBytes) {
-        attachments.mapNotNull { part ->
-            val cid = cidKey(part.cid) ?: return@mapNotNull null
-            imageBytes[part.blobId]?.let { raw ->
-                // Written out again in a format the engine will draw. See [drawable]: the
-                // one that broke this was a CMYK JPEG, which lays out and paints nothing.
-                val (type, bytes) = drawable(part.type, raw)
-                cid to dataUri(type, bytes)
-            }
-        }.toMap()
-    }
     /*
      * The message is drawn as the sender built it, on its own page, whatever the window
      * around it is doing.
@@ -6950,14 +7127,33 @@ internal fun Message(
         else -> MaterialTheme.colorScheme.surface.luminance() < 0.5f
     }
     /*
-     * Built once per message, not once per colour.
+     * The open path hands this in already built. A viewer that only has the bytes builds
+     * the same page off to the side, so neither path parses HTML while drawing.
      *
-     * Light and dark are the same document now, so neither the toolbar's switch nor the
-     * window changing theme rebuilds it or makes the engine load anything again.
+     * Light and dark are one document. The attribute is in it from the start, and the
+     * toolbar flips that attribute on the page that is already loaded.
      */
-    val page = remember(body, carriedData, showRemote) {
-        body?.html?.let { emailDocument(it, carriedData, showRemote) }
+    var built by remember { mutableStateOf<Reading?>(null) }
+    val who = summary
+    val letter = body
+    if (reading == null && letter != null && who != null) {
+        LaunchedEffect(letter, attachments, imageBytes, showRemote, darkWindow, paper) {
+            built = withContext(Dispatchers.Default) {
+                prepareReading(
+                    who.fromEmail,
+                    who.from,
+                    letter,
+                    attachments,
+                    imageBytes,
+                    showRemote,
+                    darkWindow && !paper,
+                    knownDomains,
+                )
+            }
+        }
     }
+    val active = reading ?: built
+    val page = active?.page
     /*
      * The engine had this message and drew nothing, so the block renderer gets it.
      *
@@ -6970,14 +7166,15 @@ internal fun Message(
      * between a message that looks plainer than the sender intended and a white rectangle,
      * and there is no version of this where the white rectangle is the better answer.
      */
-    var engineBlank by remember(page) { mutableStateOf(false) }
+    var engineBlank by remember(page?.document) { mutableStateOf(false) }
+    val waitingForPage = body?.html != null && page == null && webEngineWorks
     val engineDraws = page != null && webEngineWorks && !engineBlank
-    val rendered = remember(body, linkColor, bodyPaper, engineDraws) {
+    val rendered = remember(body, linkColor, bodyPaper, engineDraws, waitingForPage) {
         body?.let {
             when {
-                // Nothing to build: the engine is drawing this one. Still not null, because
-                // null here means the message has no body at all rather than no blocks.
-                engineDraws -> HtmlDoc(emptyList(), emptyList())
+                // Nothing to build: the engine is drawing this one, or it is about to.
+                // Still not null, because null here means the message has no body at all.
+                engineDraws || waitingForPage -> HtmlDoc(emptyList(), emptyList())
                 it.html != null -> htmlBlocks(it.html, linkColor, quoteColor, bodyPaper, onLink)
                 // Plain text has no structure to keep, so it is one block and the same
                 // drawing code handles both rather than there being two ways down.
@@ -6990,7 +7187,7 @@ internal fun Message(
         }
     }
     /** The pictures the body puts on screen itself. Everything else the message brought is a file. */
-    val shown = remember(body) { citedCids(body?.html) }
+    val shown = active?.cited ?: emptySet()
     // Files the body did not already draw. The invitation card is the .ics, so that
     // part is not listed again underneath it.
     val fileList = attachments
@@ -7335,16 +7532,7 @@ internal fun Message(
                      * the cleaner removes forms and password fields, which is right for
                      * drawing it and would hide exactly what this is looking for.
                      */
-                    val warnings = remember(body, summary, knownDomains) {
-                        warningsFor(
-                            fromEmail = summary.fromEmail,
-                            fromName = summary.from,
-                            html = body?.html,
-                            authenticationResults = body?.authenticationResults?.joinToString("\n"),
-                            replyTo = body?.replyTo.orEmpty(),
-                            known = knownDomains,
-                        )
-                    }
+                    val warnings = active?.warnings.orEmpty()
                     warnings.forEach { warning ->
                         Column(
                             Modifier.fillMaxWidth()
@@ -7744,13 +7932,18 @@ internal fun Message(
                      * drawing it in Compose keeps it selectable, themed and part of the
                      * same scroll as the rest of the pane, with no engine to start.
                      */
-                    if (engineDraws) WebBody(
+                    if (waitingForPage) {
+                        Spacer(Modifier.height(20.dp))
+                        Spinner()
+                    } else if (engineDraws) WebBody(
                         page.document,
                         onLink = onLink,
                         onScroll = { dy -> bodyScope.launch { bodyScroll.scrollBy(dy) } },
                         onBlank = { engineBlank = true },
                         dark = darkWindow && !paper,
                         scale = messageScale,
+                        messageId = summary.id,
+                        initialHeight = openingHeight(messageHeights.of(summary.id), paneHeight),
                     )
                     else {
                         /*

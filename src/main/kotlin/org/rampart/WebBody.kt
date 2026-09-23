@@ -67,6 +67,19 @@ internal fun WebBody(
      */
     dark: Boolean = false,
     /**
+     * Which message this page belongs to, so a later open can start at the height this
+     * one settled on instead of a short strip.
+     */
+    messageId: String = "",
+    /**
+     * How tall to be before the first measurement.
+     *
+     * A fixed short panel is what made every message appear as a strip and then jump.
+     * The caller passes the last height this message measured at, or the pane's height
+     * the first time.
+     */
+    initialHeight: Int = 480,
+    /**
      * How large the message is drawn, from [Settings.messageScale].
      *
      * Passed in rather than read here. Read here it was read once, when this panel happened
@@ -90,7 +103,7 @@ internal fun WebBody(
      * Past the cap the page scrolls itself. [WIRING] works out which of the two is
      * happening rather than being told, so there is one rule and nothing to keep in step.
      */
-    var height by remember(document) { mutableStateOf(160) }
+    var height by remember(document) { mutableStateOf(initialHeight.coerceIn(80, TALLEST)) }
     /*
      * How big a pixel is, according to the rest of the application.
      *
@@ -125,10 +138,15 @@ internal fun WebBody(
      * makes it shorter.
      */
     var measured by remember(document) { mutableStateOf(false) }
+    // Read from the engine's thread, which is not the one that writes [measured].
+    val drew = remember(document) { java.util.concurrent.atomic.AtomicBoolean(false) }
     bridge.onHeight = {
         if (it > 0) {
+            val next = minOf(it, TALLEST)
+            drew.set(true)
             measured = true
-            height = minOf(it, TALLEST)
+            height = next
+            if (messageId.isNotBlank()) messageHeights.remember(messageId, next)
         }
     }
     /*
@@ -155,7 +173,10 @@ internal fun WebBody(
         if (!measured) onBlank()
     }
     bridge.onScroll = onScroll
-    bridge.onBlank = onBlank
+    // A page that already produced a height did draw. Reporting it blank then swaps in
+    // the block renderer under a message the reader is looking at.
+    bridge.onBlank = { if (!drew.get()) onBlank() }
+    bridge.dark = dark
     val panel = remember { JFXPanel() }
     /*
      * The measuring of the message before this one, so it can be stopped.
@@ -201,6 +222,12 @@ internal fun WebBody(
                     fresh.engine.loadWorker.stateProperty().addListener { _, _, state ->
                         if (state != Worker.State.SUCCEEDED) return@addListener
                         (fresh.engine.executeScript("window") as JSObject).setMember("rampart", bridge)
+                        // On the document that just loaded. Doing this from outside, in the
+                        // moment after load() is asked for, hits whatever document is still
+                        // showing, which is the previous message.
+                        fresh.engine.executeScript(
+                            "document.documentElement.toggleAttribute('data-dark', ${bridge.dark})",
+                        )
                         fresh.engine.executeScript(WIRING)
                     }
                 }
@@ -483,6 +510,10 @@ class WebBridge {
     internal var onScroll: (Float) -> Unit = {}
     internal var onBlank: () -> Unit = {}
 
+    /** The page the message should be on, read when a document finishes loading. */
+    @Volatile
+    internal var dark: Boolean = false
+
     fun open(url: String) = onLink(url)
 
     fun height(px: Int) = onHeight(px)
@@ -600,4 +631,68 @@ internal fun enableWebBody() {
      * the first looked unformatted and took six seconds to appear.
      */
     Platform.setImplicitExit(false)
+}
+
+/**
+ * One engine, built before anybody opens a message.
+ *
+ * The first WebView is what starts WebKit, and that start is most of why the first
+ * message of a session sat blank and then jumped. Held here so nothing collects it.
+ */
+private var warmPanel: JFXPanel? = null
+
+internal fun warmWebBody() {
+    val task = Runnable {
+        if (warmPanel != null) return@Runnable
+        runCatching {
+            val panel = JFXPanel()
+            val view = WebView()
+            view.isContextMenuEnabled = false
+            panel.scene = Scene(view)
+            view.engine.loadContent("<html><body></body></html>")
+            warmPanel = panel
+        }
+    }
+    val started = runCatching {
+        Platform.startup(task)
+        true
+    }.getOrDefault(false)
+    if (!started) runCatching { Platform.runLater(task) }
+}
+
+/**
+ * The last height each message settled at.
+ *
+ * In memory only, and bounded: a session that opens thousands of messages must not
+ * keep a height for every one of them. The eldest is dropped.
+ */
+internal class HeightMemory(private val cap: Int = 200) {
+    private val heights = object : LinkedHashMap<String, Int>(cap.coerceAtLeast(1), 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Int>?) = size > cap
+    }
+
+    fun remember(id: String, height: Int) {
+        if (id.isBlank() || height <= 0) return
+        synchronized(heights) { heights[id] = height.coerceAtMost(TALLEST) }
+    }
+
+    fun of(id: String): Int? = synchronized(heights) { heights[id] }
+
+    fun size(): Int = synchronized(heights) { heights.size }
+}
+
+internal val messageHeights = HeightMemory()
+
+/**
+ * Where a WebView starts, before it has measured.
+ *
+ * The remembered height when this message has been opened before. Otherwise the pane,
+ * so a first open fills the reading area instead of a 160-pixel strip. A pane that has
+ * not been measured yet gets a middling guess rather than that strip.
+ */
+internal fun openingHeight(remembered: Int?, pane: Int, cap: Int = TALLEST): Int {
+    val known = remembered?.takeIf { it > 0 }
+    if (known != null) return known.coerceAtMost(cap)
+    if (pane <= 0) return 480
+    return pane.coerceIn(320, cap)
 }

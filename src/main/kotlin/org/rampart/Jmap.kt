@@ -11,6 +11,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
@@ -134,6 +135,7 @@ data class Attachment(
  * lists come along because a reply needs them: without them the answer starts a new
  * conversation in every client that threads.
  */
+@Serializable
 data class Body(
     val html: String?,
     val text: String?,
@@ -447,37 +449,83 @@ internal class Jmap private constructor(
         return ids.mapNotNull { found[it] }
     }
 
-    override fun body(id: String): Body {
-        val email = call(
-            invoke("Email/get", "b") {
-                putJsonArray("ids") { add(id) }
-                putJsonArray("properties") {
-                    add("htmlBody"); add("textBody"); add("bodyValues")
-                    add("messageId"); add("references"); add("header:In-Reply-To:asMessageIds")
-                    add("to"); add("cc"); add("replyTo")
-                    // Asked for by name. These are not JMAP properties, they are ordinary
-                    // headers, and a header nobody asks for is not sent.
-                    add("header:List-Unsubscribe:asText")
-                    add("header:List-Unsubscribe-Post:asText")
-                    add("header:Authentication-Results:asText:all")
-                    add("header:X-Spam-Status:asText")
-                    // For the details panel. size and sentAt are JMAP's own; Received is
-                    // the only place the hop that handed it over is written down, and all
-                    // of them are asked for because a header nobody asks for is not sent.
-                    add("size"); add("sentAt")
-                    add("header:Received:asText:all")
-                    add("header:" + MDN_HEADER + ":asText")
-                }
-                put("fetchHTMLBodyValues", true)
-                put("fetchTextBodyValues", true)
-                put("maxBodyValueBytes", 1024 * 1024)
-            },
-        )[0].list().firstOrNull()?.jsonObject
-            ?: throw JmapError("That message is not on the server any more.")
+    override fun body(id: String): Body = open(id).body
 
+    override fun attachments(emailId: String): List<Attachment> = open(emailId).attachments
+
+    override fun contentStamp(id: String): ContentStamp? {
+        val email = call(
+            invoke("Email/get", "stamp") {
+                putJsonArray("ids") { add(id) }
+                putJsonArray("properties") { add("blobId"); add("size") }
+            },
+        )[0].list().firstOrNull()?.jsonObject ?: return null
+        val blobId = email["blobId"]?.str()?.ifBlank { null } ?: return null
+        val size = email["size"]?.jsonPrimitive?.longOrNull ?: return null
+        return ContentStamp(blobId, size)
+    }
+
+    /**
+     * Body, files and a small invitation, from one Email/get.
+     *
+     * A part the server cut at [maxBodyValueBytes] is fetched whole, from its own blob
+     * when it named one and by asking again with a higher cap when it did not. The first
+     * answer is what almost every message is. The second exists so a long one is not
+     * shown with the end missing.
+     */
+    override fun open(id: String): OpenedMail {
+        val first = emailRecord(id, 1024 * 1024)
+        val parsed = openedFrom(first, downloadCut = true)
+        if (!parsed.cutLeft) return parsed.mail
+        return openedFrom(emailRecord(id, 32 * 1024 * 1024), downloadCut = true).mail
+    }
+
+    private fun emailRecord(id: String, maxBytes: Int): JsonObject = call(
+        invoke("Email/get", "b") {
+            putJsonArray("ids") { add(id) }
+            putJsonArray("properties") {
+                add("htmlBody"); add("textBody"); add("bodyValues")
+                add("messageId"); add("references"); add("header:In-Reply-To:asMessageIds")
+                add("to"); add("cc"); add("replyTo")
+                // Asked for by name. These are not JMAP properties, they are ordinary
+                // headers, and a header nobody asks for is not sent.
+                add("header:List-Unsubscribe:asText")
+                add("header:List-Unsubscribe-Post:asText")
+                add("header:Authentication-Results:asText:all")
+                add("header:X-Spam-Status:asText")
+                // For the details panel. size and sentAt are JMAP's own; Received is
+                // the only place the hop that handed it over is written down, and all
+                // of them are asked for because a header nobody asks for is not sent.
+                add("size"); add("sentAt")
+                add("header:Received:asText:all")
+                add("header:" + MDN_HEADER + ":asText")
+                add("attachments")
+                add("blobId")
+            }
+            put("fetchHTMLBodyValues", true)
+            put("fetchTextBodyValues", true)
+            put("maxBodyValueBytes", maxBytes)
+        },
+    )[0].list().firstOrNull()?.jsonObject
+        ?: throw JmapError("That message is not on the server any more.")
+
+    private fun openedFrom(email: JsonObject, downloadCut: Boolean): ParsedOpen {
         val values = email["bodyValues"]?.jsonObject ?: JsonObject(emptyMap())
+        var cutLeft = false
         fun join(part: String, wantedType: String? = null): String? =
-            bodyText(email[part] as? JsonArray, values, wantedType)
+            resolveBody(email[part] as? JsonArray, values, wantedType) { blobId, type, size ->
+                if (!downloadCut) {
+                    cutLeft = true
+                    return@resolveBody null
+                }
+                val bytes = blob(Attachment(blobId, "part", type, size), limit = 32L * 1024 * 1024)
+                if (bytes == null) cutLeft = true
+                bytes
+            }.also {
+                // A part that was cut and could not be completed still counts, even when
+                // resolveBody handed back the short text so the message is not blank.
+                if (bodyCut(email[part] as? JsonArray, values, wantedType) && !downloadCut) cutLeft = true
+            }
         /*
          * `as? JsonArray` rather than `.jsonArray`, and the difference is not stylistic. A
          * header a message does not have comes back as JSON null rather than being left
@@ -488,7 +536,7 @@ internal class Jmap private constructor(
          */
         fun ids(field: String) = stringsIn(email[field])
         fun addresses(field: String) = addressesIn(email[field])
-        return Body(
+        val body = Body(
             html = join("htmlBody", wantedType = "text/html"),
             text = join("textBody"),
             messageId = ids("messageId"),
@@ -506,7 +554,38 @@ internal class Jmap private constructor(
             sentAt = email["sentAt"]?.str(),
             received = stringsIn(email["header:Received:asText:all"]),
         )
+        val attachments = attachmentsIn(email)
+        val calendar = attachments.firstOrNull {
+            it.type.substringBefore(';').equals("text/calendar", ignoreCase = true) &&
+                it.size in 1..CHEAP_CALENDAR
+        }?.let { part ->
+            blob(part, CHEAP_CALENDAR)?.let { String(it, Charsets.UTF_8) }
+        }
+        // A cut part with no blob of its own cannot be repaired from this answer, so the
+        // caller asks again with a higher cap. One that named a blob is repaired above,
+        // and cutLeft is set only when that download came back empty.
+        val noBlob = listOf("htmlBody" to "text/html", "textBody" to null).any { (name, wanted) ->
+            val parts = email[name] as? JsonArray ?: return@any false
+            parts.any { element ->
+                val part = element.jsonObject
+                if (wanted != null && part["type"]?.str() != wanted) return@any false
+                val id = part["partId"]?.str() ?: return@any false
+                val cut = values[id]?.jsonObject?.get("isTruncated")?.jsonPrimitive?.booleanOrNull == true
+                cut && part["blobId"]?.str().isNullOrBlank()
+            }
+        }
+        return ParsedOpen(
+            OpenedMail(
+                body = body,
+                attachments = attachments,
+                emailBlobId = email["blobId"]?.str()?.ifBlank { null },
+                calendar = calendar,
+            ),
+            cutLeft = cutLeft || noBlob,
+        )
     }
+
+    private data class ParsedOpen(val mail: OpenedMail, val cutLeft: Boolean)
 
     /**
      * A part's bytes, held in memory.
@@ -608,15 +687,7 @@ internal class Jmap private constructor(
         )
     }
 
-    override fun attachments(emailId: String): List<Attachment> {
-        val email = call(
-            invoke("Email/get", "a") {
-                putJsonArray("ids") { add(emailId) }
-                putJsonArray("properties") { add("attachments") }
-            },
-        )[0].list().firstOrNull()?.jsonObject
-            ?: throw JmapError("That message is not on the server any more.")
-
+    private fun attachmentsIn(email: JsonObject): List<Attachment> {
         val parts = email["attachments"] as? JsonArray ?: return emptyList()
         return parts.mapNotNull { el ->
             val o = el.jsonObject
@@ -1567,11 +1638,50 @@ internal fun plainNetworkError(e: Throwable, server: String): String {
  * through the HTML parser, which quietly ate anything in angle brackets: a DMARC report's
  * "Report-ID: <secureserver.net!1789516800>" came out with the id missing.
  */
-internal fun bodyText(parts: JsonArray?, values: JsonObject, wantedType: String?): String? = parts
+internal fun bodyText(parts: JsonArray?, values: JsonObject, wantedType: String?): String? =
+    resolveBody(parts, values, wantedType) { _, _, _ -> null }
+
+/**
+ * Whether any part the reader would see was cut off at the server's byte cap.
+ *
+ * JMAP sets `isTruncated` on a body value it refused to send whole. Ignoring it shows
+ * the message with the end missing and nothing saying so.
+ */
+internal fun bodyCut(parts: JsonArray?, values: JsonObject, wantedType: String?): Boolean =
+    parts?.any { element ->
+        val part = element.jsonObject
+        if (wantedType != null && part["type"]?.str() != wantedType) return@any false
+        val id = part["partId"]?.str() ?: return@any false
+        values[id]?.jsonObject?.get("isTruncated")?.jsonPrimitive?.booleanOrNull == true
+    } == true
+
+/**
+ * The text of the parts, with a cut part replaced by [bytes] when that returns the rest.
+ *
+ * [bytes] is the part's own blob. Null keeps the short copy, so a download that failed
+ * still shows what the server did send.
+ */
+internal fun resolveBody(
+    parts: JsonArray?,
+    values: JsonObject,
+    wantedType: String?,
+    bytes: (blobId: String, type: String, size: Long) -> ByteArray?,
+): String? = parts
     ?.filter { wantedType == null || it.jsonObject["type"]?.str() == wantedType }
-    ?.mapNotNull { part ->
-        val id = part.jsonObject["partId"]?.str() ?: return@mapNotNull null
-        values[id]?.jsonObject?.get("value")?.str()
+    ?.mapNotNull { element ->
+        val part = element.jsonObject
+        val id = part["partId"]?.str() ?: return@mapNotNull null
+        val record = values[id]?.jsonObject
+        val cut = record?.get("isTruncated")?.jsonPrimitive?.booleanOrNull == true
+        if (cut) {
+            val blobId = part["blobId"]?.str()
+            val size = part["size"]?.jsonPrimitive?.longOrNull ?: 0L
+            val type = part["type"]?.str() ?: "application/octet-stream"
+            val full = blobId?.let { bytes(it, type, size) }?.let { String(it, Charsets.UTF_8) }
+            full ?: record?.get("value")?.str()
+        } else {
+            record?.get("value")?.str()
+        }
     }
     ?.joinToString("\n")
     ?.ifBlank { null }

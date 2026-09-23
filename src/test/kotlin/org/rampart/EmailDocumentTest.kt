@@ -117,6 +117,19 @@ class EmailDocumentTest {
     }
 
     @Test
+    fun `a missing cid picture keeps the size it was given`() {
+        val out = page("""<img src="cid:missing@x" width="320" height="180" alt="logo">""").document
+        assertFalse(out.contains("cid:"), out)
+        assertTrue(out.contains("<img"), out)
+        assertTrue(out.contains("width=\"320\""), out)
+        assertTrue(out.contains("height=\"180\""), out)
+        // height:auto on an unsized image would collapse a one-pixel stand-in, so the
+        // declared size has to be restated where that rule cannot override it.
+        assertTrue(out.contains("width:320px"), out)
+        assertTrue(out.contains("height:180px"), out)
+    }
+
+    @Test
     fun `bytes become a data URI the engine can draw`() {
         assertEquals("data:image/png;base64,AAAA", dataUri("image/png", byteArrayOf(0, 0, 0)))
         // A part that does not say what it is still has to be addressable.

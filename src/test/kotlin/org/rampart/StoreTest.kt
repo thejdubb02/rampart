@@ -9,6 +9,7 @@ import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertContentEquals
 import kotlin.test.assertTrue
 
 class StoreTest {
@@ -129,6 +130,38 @@ class StoreTest {
         store.putBody("a", Body("<p>hello</p>", "hello"))
         assertEquals(Body("<p>hello</p>", "hello"), store.body("a"))
         assertNull(store.body("nothing"))
+    }
+
+    @Test
+    fun `a cached message keeps its headers, files and pictures`() = withStore { store ->
+        val rich = Body(
+            html = "<p>hi</p>",
+            text = "hi",
+            messageId = listOf("<m@example>"),
+            to = listOf("a@example.com"),
+            cc = listOf("b@example.com"),
+            replyTo = listOf("c@example.com"),
+            size = 42,
+        )
+        val files = listOf(Attachment("b1", "a.png", "image/png", 3, cid = "logo@x", inline = true))
+        // The huge one is first, so a cap that stops at the first miss would drop the logo too.
+        val pictures = linkedMapOf(
+            "huge" to ByteArray(PICTURE_CACHE_CAP + 1) { 7 },
+            "b1" to byteArrayOf(1, 2, 3),
+        )
+        store.putKept("m", rich, files, pictures, "email-blob", "state-1", "BEGIN:VCALENDAR")
+        val back = store.kept("m")
+        assertEquals(rich, back?.body)
+        assertEquals(rich, store.body("m"))
+        assertEquals(files, back?.attachments)
+        assertNull(back?.pictures?.get("huge"))
+        assertContentEquals(byteArrayOf(1, 2, 3), back?.pictures?.get("b1"))
+        assertEquals("email-blob", back?.emailBlobId)
+        assertEquals("state-1", back?.mailState)
+        assertEquals("BEGIN:VCALENDAR", back?.calendar)
+        store.forget(listOf("m"))
+        assertNull(store.kept("m"))
+        assertNull(store.body("m"))
     }
 
     @Test

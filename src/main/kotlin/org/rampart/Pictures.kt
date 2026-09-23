@@ -101,6 +101,85 @@ internal fun scaledPreview(bytes: ByteArray, edge: Int = 112): ImageBitmap? = ru
 internal fun withoutTofu(html: String): String =
     html.replace(INVISIBLE_SPACE, " ").replace(NOTHING_AT_ALL, "")
 
+/**
+ * The carried pictures a body actually shows, and only those.
+ *
+ * Outlook gives a Content-ID to files that are not drawn. Fetching every image part
+ * would wait on those too, and the page would sit blank until they arrived.
+ */
+internal fun cidImages(html: String?, attachments: List<Attachment>): List<Attachment> {
+    val cited = citedCids(html)
+    if (cited.isEmpty()) return emptyList()
+    return attachments.filter { part ->
+        val cid = cidKey(part.cid) ?: return@filter false
+        cid in cited && part.type.substringBefore(';').startsWith("image/", ignoreCase = true)
+    }
+}
+
+/** Past this, the pictures are left as gaps of the right size instead of holding the open up. */
+internal const val CID_FETCH_CAP = 5L * 1024 * 1024
+
+/**
+ * The cited pictures, when they are small enough to wait for.
+ *
+ * Over the cap, nothing is fetched: the page keeps a gap of the size the sender
+ * declared instead of deleting the picture and jumping when it arrives later.
+ */
+internal fun cidBytes(backend: MailBackend, body: Body, attachments: List<Attachment>): Map<String, ByteArray> {
+    val parts = cidImages(body.html, attachments)
+    if (parts.isEmpty() || parts.sumOf { it.size } > CID_FETCH_CAP) return emptyMap()
+    return parts.mapNotNull { part ->
+        runCatching { backend.blob(part) }.getOrNull()?.let { part.blobId to it }
+    }.toMap()
+}
+
+/**
+ * The page, the warnings and the decoded pictures, ready to be drawn.
+ *
+ * Built off the UI thread. Composition only reads it. Building it during composition
+ * is a Jsoup parse of the whole message on the thread that is trying to paint.
+ */
+internal data class Reading(
+    val page: EmailPage?,
+    val cited: Set<String>,
+    val warnings: List<Warning>,
+    val images: Map<String, ImageBitmap>,
+)
+
+internal fun prepareReading(
+    fromEmail: String,
+    fromName: String,
+    body: Body,
+    attachments: List<Attachment>,
+    pictures: Map<String, ByteArray>,
+    showRemote: Boolean,
+    dark: Boolean,
+    known: Set<String>,
+): Reading {
+    val carried = attachments.mapNotNull { part ->
+        val cid = cidKey(part.cid) ?: return@mapNotNull null
+        val raw = pictures[part.blobId] ?: return@mapNotNull null
+        val (type, bytes) = drawable(part.type, raw)
+        cid to dataUri(type, bytes)
+    }.toMap()
+    val images = pictures.mapNotNull { (id, raw) ->
+        runCatching { Image.makeFromEncoded(raw).toComposeImageBitmap() }.getOrNull()?.let { id to it }
+    }.toMap()
+    return Reading(
+        page = body.html?.let { emailDocument(it, carried, showRemote, dark) },
+        cited = citedCids(body.html),
+        warnings = warningsFor(
+            fromEmail = fromEmail,
+            fromName = fromName,
+            html = body.html,
+            authenticationResults = body.authenticationResults.joinToString("\n"),
+            replyTo = body.replyTo,
+            known = known,
+        ),
+        images = images,
+    )
+}
+
 /** Figure, punctuation, thin and hair spaces, and the narrow no-break space. */
 private val INVISIBLE_SPACE = Regex("[\u2007-\u200A\u202F]")
 

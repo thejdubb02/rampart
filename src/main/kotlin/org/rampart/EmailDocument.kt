@@ -186,10 +186,10 @@ private fun cidOf(src: String): String? {
  * **Lower case, because a `cid:` URL is case insensitive and a Content-ID header is not
  * reliably either.** RFC 2392 says so, and Outlook does not care: a message can carry
  * `Content-ID: <image001.jpg@01DD4818.FA40AB20>` and refer to it as `cid:Image001.jpg@...`
- * in the body. Compared as written, the part is not found, the picture is deleted from the
- * message by [resolveImages], and the attachment list has already decided it is drawn in
- * the body, so it is in neither place. That is a picture the reader will never see and no
- * message anywhere saying why.
+ * in the body. Compared as written, the part is not found, [resolveImages] leaves an empty
+ * gap where the picture was, and the attachment list has already decided it is drawn in
+ * the body, so the picture is in neither place. That is a picture the reader will never
+ * see and no message anywhere saying why.
  */
 internal fun cidKey(raw: String?): String? =
     raw?.trim()?.trim('<', '>')?.trim()?.lowercase()?.ifBlank { null }
@@ -206,7 +206,7 @@ private fun resolveImages(
         when {
             src.startsWith("cid:", ignoreCase = true) -> {
                 val data = cidOf(src)?.let { carried[it] }
-                if (data != null) img.attr("src", data) else img.remove()
+                if (data != null) img.attr("src", data) else holdTheSpace(img)
             }
             src.startsWith("data:", ignoreCase = true) -> Unit
             remoteImages -> Unit
@@ -232,6 +232,33 @@ private fun resolveImages(
     }
     return picturesIn(held, sizes)
 }
+
+/**
+ * A carried picture that is not here yet, kept at the size the sender gave it.
+ *
+ * Deleting the tag pulled the layout up, and putting the picture in afterwards pushed
+ * it back down, which is the jump. An empty image of the same width and height holds
+ * the gap. The inline size is what actually holds it: the page's own rule sets
+ * `height: auto` on an image that does not name a max-width, and that collapses a
+ * one-pixel stand-in to a line no matter what the width and height attributes say.
+ */
+private fun holdTheSpace(img: org.jsoup.nodes.Element) {
+    val width = img.attr("width").trim()
+    val height = img.attr("height").trim()
+    img.attr("src", BLANK)
+    if (width.isEmpty() && height.isEmpty()) return
+    val sizing = buildString {
+        append("max-width:100%")
+        if (width.isNotEmpty()) append(";width:").append(cssSize(width))
+        if (height.isNotEmpty()) append(";height:").append(cssSize(height))
+    }
+    val had = img.attr("style").trim().trimEnd(';')
+    img.attr("style", if (had.isEmpty()) sizing else "$had;$sizing")
+}
+
+/** A bare number is pixels. Anything with a unit is already a length. */
+private fun cssSize(raw: String): String =
+    if (raw.any { it.isLetter() || it == '%' }) raw else raw + "px"
 
 private val URL_IN_CSS = Regex("""url\(\s*['"]?(?!data:)[^)]*\)""", RegexOption.IGNORE_CASE)
 
