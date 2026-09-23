@@ -27,7 +27,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -794,7 +793,7 @@ internal fun Composer(
                                         modifier = Modifier.size(16.dp).rotate(90f),
                                     )
                                 }
-                                DropdownMenu(scheduleMenu, onDismissRequest = { scheduleMenu = false }) {
+                                MenuLayer(scheduleMenu, onDismissRequest = { scheduleMenu = false }) {
                                     DropdownMenuItem(
                                         text = { Text("Schedule...") },
                                         onClick = {
@@ -855,7 +854,7 @@ internal fun Composer(
                 } else {
                     Box {
                         TextButton(onClick = { pickingIdentity = true }, enabled = !sending) { Text(draft.from) }
-                        DropdownMenu(pickingIdentity, onDismissRequest = { pickingIdentity = false }) {
+                        MenuLayer(pickingIdentity, onDismissRequest = { pickingIdentity = false }) {
                             identities.forEach { identity ->
                                 DropdownMenuItem(
                                     text = { Text(identity.email) },
@@ -1039,7 +1038,7 @@ internal fun Composer(
                     var emoji by remember { mutableStateOf(false) }
                     Box {
                         TextButton(onClick = { emoji = true }) { Text("Emoji") }
-                        DropdownMenu(expanded = emoji, onDismissRequest = { emoji = false }) {
+                        MenuLayer(expanded = emoji, onDismissRequest = { emoji = false }) {
                             Column(
                                 Modifier.width(320.dp).heightIn(max = 300.dp)
                                     .verticalScroll(rememberScrollState())
@@ -1081,7 +1080,7 @@ internal fun Composer(
                         var picking by remember { mutableStateOf(false) }
                         Box {
                             TextButton(onClick = { picking = true }) { Text("Template") }
-                            DropdownMenu(expanded = picking, onDismissRequest = { picking = false }) {
+                            MenuLayer(expanded = picking, onDismissRequest = { picking = false }) {
                                 templates.forEach { template ->
                                     DropdownMenuItem(
                                         text = { Text(template.name) },
@@ -1383,7 +1382,7 @@ private fun Entry(
                     }
                 },
         )
-        DropdownMenu(
+        MenuLayer(
             expanded = offers.isNotEmpty(),
             onDismissRequest = { dismissed = true },
             // Never takes the focus, or every keystroke would move it out of the field.

@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -227,7 +226,7 @@ private fun MoveButton(messageId: String, actions: MessageActions) {
     val enabled = move != null && actions.folders.isNotEmpty()
     Box {
         ToolIcon(RampartIcons.Move, "Move", enabled = enabled) { picking = true }
-        DropdownMenu(picking, onDismissRequest = { picking = false }) {
+        MenuLayer(picking, onDismissRequest = { picking = false }) {
             actions.folders.forEach { folder ->
                 DropdownMenuItem(
                     text = {
@@ -276,7 +275,7 @@ private fun MoreMenu(
     var more by remember(summary.id) { mutableStateOf(false) }
     Box {
         ToolIcon(RampartIcons.More, "More") { more = true }
-        DropdownMenu(more, onDismissRequest = { more = false }) {
+        MenuLayer(more, onDismissRequest = { more = false }) {
             if ("reply" !in kept) {
                 MenuItem("Reply", enabled = bodyReady) {
                     more = false

@@ -95,6 +95,21 @@ class WebBodyTest {
     }
 
     @Test
+    fun `a measurement replaces a shorter start and is only capped at the panel limit`() {
+        // The opening estimate, and a height remembered from last time, are not a ceiling.
+        assertEquals(2200, nextBodyHeight(current = 480, measured = 2200, cap = 3000))
+        assertEquals(900, nextBodyHeight(current = 1600, measured = 900, cap = 3000))
+        assertEquals(3000, nextBodyHeight(current = 480, measured = 8000, cap = 3000))
+        assertEquals(480, nextBodyHeight(current = 480, measured = 0, cap = 3000))
+        // Page pixels, scaled once. A later unscaled report must not be able to win
+        // by being mixed with an already scaled one.
+        assertEquals(1800, appliedHeight(1800, zoom = 1.0, cap = 3000))
+        assertEquals(2700, appliedHeight(1800, zoom = 1.5, cap = 5000))
+        assertEquals(3000, appliedHeight(4000, zoom = 1.0, cap = 3000))
+        assertEquals(0, appliedHeight(0, zoom = 1.0))
+    }
+
+    @Test
     fun `nothing can make a message unreadable in either direction`() {
         assertEquals(0.5, zoomFor(density = 0.1f, scale = 0.1f, engineScale = 4f))
         assertEquals(3.0, zoomFor(density = 4f, scale = 4f, engineScale = 1f))

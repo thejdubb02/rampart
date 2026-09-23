@@ -16,7 +16,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -690,7 +689,7 @@ private fun Picker(options: List<String>, current: String, onPick: (String) -> U
         color = MaterialTheme.colorScheme.primary,
         modifier = Modifier.clickable { open = true }.padding(horizontal = 4.dp, vertical = 2.dp),
     )
-    DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+    MenuLayer(expanded = open, onDismissRequest = { open = false }) {
         options.forEach { option ->
             DropdownMenuItem(
                 text = { Text(option) },

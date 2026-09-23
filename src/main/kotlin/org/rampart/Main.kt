@@ -62,7 +62,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.layout.offset
@@ -4309,7 +4308,18 @@ private fun Reader(
                     yield()
                     val going = saves.awaitIdle()
                     if (accountKey != null && going != null) {
-                        io { session(accountKey).jmap.destroy(listOf(going)) }
+                        val applied = io {
+                            runCatching { session(accountKey).jmap.destroy(listOf(going)) }.getOrNull()
+                        }
+                        if (applied != null) {
+                            noteState(accountKey, applied)
+                            // The sidebar count is the folder list, and nothing else re-reads
+                            // it when a draft is destroyed. The poll would, eventually.
+                            refreshFolders(accountKey)
+                            emails = emails.filterNot { it.sameMail(accountKey, setOf(going)) }
+                            thread = thread.filterNot { it.sameMail(accountKey, setOf(going)) }
+                            if (selected?.sameMail(accountKey, setOf(going)) == true) selected = null
+                        }
                     }
                 }
             },
@@ -4465,6 +4475,14 @@ private fun Reader(
     }
 
     LaunchedEffect(Unit) { runCatching { keyboard.requestFocus() } }
+    val bodyCover = remember { BodyCover() }
+    CompositionLocalProvider(LocalBodyCover provides bodyCover) {
+    // Any of these sits over the message. The live panel would paint through them.
+    CoverBody(
+        composing != null || undo != null || undoSend != null || showPalette || showShortcuts ||
+            confirm != null || summarisePacket != null || attached != null || folderAsk != null ||
+            filterFor != null || changelogDialog != null || tnef != null,
+    )
     Box(Modifier.fillMaxSize()) {
     Column(
         Modifier.fillMaxSize()
@@ -4472,47 +4490,6 @@ private fun Reader(
             .focusable()
             .onPreviewKeyEvent(::shortcut),
     ) {
-        // Offered in the same place as the other undo, because they are the same promise:
-        // the thing you just did can be taken back without going and finding it.
-        undoSend?.let { cancel ->
-            // The drain here is the real deadline rather than a display choice: the message
-            // is being held for exactly this long and then it goes. No Dismiss, because
-            // dismissing the offer would not stop the send, and a button that looks like it
-            // might is worse than no button.
-            UndoBar(
-                text = "Sending.",
-                seconds = Settings.undoSeconds(),
-                restartOn = cancel,
-                onUndo = cancel,
-            )
-        }
-        undo?.let { last ->
-            UndoBar(
-                text = movedNotice(last.count, last.what),
-                seconds = undoBarSeconds,
-                restartOn = last,
-                onUndo = {
-                    scope.launch {
-                        // Every account is put back, and the notice only clears if they all
-                        // did. One that failed leaves the offer up rather than pretending.
-                        val allBack = withContext(Dispatchers.IO) {
-                            last.moves.all { move ->
-                                runCatching { session(move.accountKey).jmap.move(move.ids, move.fromMailboxId) }
-                                    .isSuccess
-                            }
-                        }
-                        if (allBack) {
-                            undo = null
-                            refreshNow()
-                        }
-                    }
-                },
-                // Only this one expires. The move can still be undone by hand afterwards,
-                // so the offer running out costs nothing.
-                onExpire = { undo = null },
-                onDismiss = { undo = null },
-            )
-        }
         if (error.isNotBlank()) {
             // Dismissible, because an error that can only be cleared by succeeding at
             // something else sits there long after it stopped being true, and then it is
@@ -4870,8 +4847,12 @@ private fun Reader(
                 emails = emails,
                 selected = selected,
                 loading = loading,
-                title = viewingTag?.let { tagsOf(setOf(it)).firstOrNull()?.label ?: it }
-                    ?: here?.second?.name.orEmpty(),
+                title = listHeading(
+                    searching = showingResults,
+                    query = query,
+                    folder = viewingTag?.let { tagsOf(setOf(it)).firstOrNull()?.label ?: it }
+                        ?: here?.second?.name.orEmpty(),
+                ),
                 /*
                  * Dragging a message onto a tag in the sidebar.
                  *
@@ -5030,39 +5011,48 @@ private fun Reader(
                     ),
                 ) {
                     if (stacked) ThemeArt(Modifier.align(Alignment.BottomEnd))
-                    Column(
+                    Column(Modifier.fillMaxSize()) {
+                        // Outside the scroll, so opening a card further down cannot
+                        // carry the subject off the top, and it is here before the
+                        // cards finish loading.
                         if (stacked) {
-                            Modifier.fillMaxSize().verticalScroll(stackScroll)
-                                .padding(horizontal = 20.dp, vertical = 20.dp)
-                        } else {
-                            Modifier.fillMaxSize()
-                        },
-                    ) {
-                        if (stacked) {
-                            Text(message.subject, style = MaterialTheme.typography.titleLarge)
-                            Spacer(Modifier.height(6.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 8.dp)) {
                                 Text(
-                                    "${thread.size} messages",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.outline,
+                                    message.subject.ifBlank { "(no subject)" },
+                                    style = MaterialTheme.typography.titleLarge,
                                 )
-                                if (conversationMuted) {
-                                    Spacer(Modifier.width(8.dp))
+                                Spacer(Modifier.height(6.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
-                                        "Muted",
-                                        style = MaterialTheme.typography.labelSmall,
+                                        "${thread.size} messages",
+                                        style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.outline,
-                                        modifier = Modifier.clip(MaterialTheme.shapes.small)
-                                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                                            .padding(horizontal = 7.dp, vertical = 2.dp),
                                     )
+                                    if (conversationMuted) {
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            "Muted",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.outline,
+                                            modifier = Modifier.clip(MaterialTheme.shapes.small)
+                                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                                .padding(horizontal = 7.dp, vertical = 2.dp),
+                                        )
+                                    }
                                 }
                             }
-                            Spacer(Modifier.height(14.dp))
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                            Spacer(Modifier.height(6.dp))
                         }
+                        Column(
+                            Modifier.weight(1f).fillMaxWidth().then(
+                                if (stacked) {
+                                    Modifier.verticalScroll(stackScroll)
+                                        .padding(horizontal = 20.dp, vertical = 12.dp)
+                                } else {
+                                    Modifier
+                                },
+                            ),
+                        ) {
                         val rows = if (stacked) thread else listOf(message)
                         rows.forEachIndexed { index, m ->
                             key(m.id) {
@@ -5097,6 +5087,7 @@ private fun Reader(
                                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                                 Spacer(Modifier.height(6.dp))
                             }
+                        }
                         }
                     }
                 }
@@ -5140,6 +5131,52 @@ private fun Reader(
             if (from != null) scope.launch { installLatest(from) }
         }
     }
+
+        // Over the panes, not in the column above them. In the column it pushed every
+        // pane down for as long as it was up.
+        if (undoSend != null || undo != null) {
+            Column(Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
+                undoSend?.let { cancel ->
+                    // The drain here is the real deadline rather than a display choice: the message
+                    // is being held for exactly this long and then it goes. No Dismiss, because
+                    // dismissing the offer would not stop the send, and a button that looks like it
+                    // might is worse than no button.
+                    UndoBar(
+                        text = "Sending.",
+                        seconds = Settings.undoSeconds(),
+                        restartOn = cancel,
+                        onUndo = cancel,
+                    )
+                }
+                undo?.let { last ->
+                    UndoBar(
+                        text = movedNotice(last.count, last.what),
+                        seconds = undoBarSeconds,
+                        restartOn = last,
+                        onUndo = {
+                            scope.launch {
+                                // Every account is put back, and the notice only clears if they all
+                                // did. One that failed leaves the offer up rather than pretending.
+                                val allBack = withContext(Dispatchers.IO) {
+                                    last.moves.all { move ->
+                                        runCatching { session(move.accountKey).jmap.move(move.ids, move.fromMailboxId) }
+                                            .isSuccess
+                                    }
+                                }
+                                if (allBack) {
+                                    undo = null
+                                    refreshNow()
+                                }
+                            }
+                        },
+                        // Only this one expires. The move can still be undone by hand afterwards,
+                        // so the offer running out costs nothing.
+                        onExpire = { undo = null },
+                        onDismiss = { undo = null },
+                    )
+                }
+            }
+        }
 
         /*
          * Bottom right, over the mail, the way every webmail does it. Writing a reply and
@@ -5369,6 +5406,7 @@ private fun Reader(
             },
         )
     }
+    }
 }
 
 private const val TNEF_UNREADABLE = "This file could not be read, so it was saved as it is."
@@ -5479,6 +5517,7 @@ internal enum class FolderJob { CreateInside, Rename, ToTop, Delete }
 internal fun SidebarTooltip(text: String, content: @Composable () -> Unit) {
     TooltipArea(
         tooltip = {
+            CoverBody(true)
             Surface(
                 shape = MaterialTheme.shapes.small,
                 color = MaterialTheme.colorScheme.inverseSurface,
@@ -6126,7 +6165,7 @@ private fun TagLine(
             .padding(start = 10.dp + (row.depth * 12).dp, end = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+        MenuLayer(expanded = menu, onDismissRequest = { menu = false }) {
             Text(
                 "Colour",
                 style = MaterialTheme.typography.labelSmall,
@@ -6217,7 +6256,7 @@ private fun FolderRow(
         horizontalArrangement = if (collapsed) Arrangement.Center else Arrangement.Start,
     ) {
         onManage?.let { manage ->
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            MenuLayer(expanded = menu, onDismissRequest = { menu = false }) {
                 DropdownMenuItem(
                     text = { Text("New folder inside") },
                     onClick = { menu = false; manage(FolderJob.CreateInside) },
@@ -6470,6 +6509,15 @@ private fun FilterChip(
     }
 }
 
+/**
+ * The list title. A search replaces the folder name until the search is cleared.
+ */
+internal fun listHeading(searching: Boolean, query: String, folder: String): String {
+    val typed = query.trim()
+    if (searching && typed.isNotEmpty()) return "Results for $typed"
+    return folder
+}
+
 @Composable
 internal fun MessageList(
     emails: List<Summary>,
@@ -6545,7 +6593,7 @@ internal fun MessageList(
                             modifier = Modifier.size(14.dp),
                         )
                     }
-                    DropdownMenu(expanded = sorting, onDismissRequest = { sorting = false }) {
+                    MenuLayer(expanded = sorting, onDismissRequest = { sorting = false }) {
                         Order.entries.forEach { option ->
                             val chosen = option == order
                             DropdownMenuItem(
@@ -7124,7 +7172,7 @@ private fun RowMenu(
     scheduled: Boolean = false,
     onClose: () -> Unit,
 ) {
-    DropdownMenu(expanded = open, onDismissRequest = onClose) {
+    MenuLayer(expanded = open, onDismissRequest = onClose) {
         // Closing before acting, so the menu is gone by the time the list under it changes.
         @Composable
         fun entry(label: String, does: () -> Unit) = DropdownMenuItem(
@@ -7613,6 +7661,17 @@ internal fun Message(
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
+            // The pane's heading, under the toolbar and outside the scroll. In the
+            // scroll it left with the body when a card was brought into view, and it
+            // moved when the body below it finished loading.
+            if (showSubject) {
+                Text(
+                    summary.subject.ifBlank { "(no subject)" },
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 8.dp),
+                )
+            }
+
             // Hoisted above the source branch as well as the body below it, because both
             // want the one scroll: a card on its own scrolls itself, and a card in a stack
             // shares [externalScroll] with the header and every other card, so switching a
@@ -7622,7 +7681,13 @@ internal fun Message(
             // Filling the pane and scrolling itself is only right for a card on its own.
             // One inside a stack sizes to its own content and lets the stack's shared
             // Column, already scrolling, carry it.
-            val pageModifier = if (ownsPane) Modifier.fillMaxSize().verticalScroll(bodyScroll) else Modifier.fillMaxWidth()
+            // weight, not fillMaxSize: the heading above this has to keep its height,
+            // and a scroll area that also asks for the whole pane pushes the bottom off.
+            val pageModifier = if (ownsPane) {
+                Modifier.weight(1f).fillMaxWidth().verticalScroll(bodyScroll)
+            } else {
+                Modifier.fillMaxWidth()
+            }
 
             if (source != null) {
                 Row(
@@ -7661,22 +7726,20 @@ internal fun Message(
                 return@Column
             }
 
-            Column(pageModifier.padding(horizontal = 20.dp, vertical = 26.dp)) {
+            Column(
+                pageModifier.padding(
+                    start = 20.dp,
+                    end = 20.dp,
+                    top = if (showSubject) 8.dp else 26.dp,
+                    bottom = 26.dp,
+                ),
+            ) {
                 // The whole window, not a column down the middle of it. A capped measure is
                 // easier to read a paragraph in, and it was capped at 660 for that reason,
                 // but it wastes most of a wide window and a designed message brings its own
                 // width anyway.
                 Paper(paper) {
                 Column(Modifier.fillMaxWidth()) {
-                    // The subject heads the conversation rather than the message: in a
-                    // thread every message carries the same one with more Re: in front.
-                    // Off when a stack-level header is already showing it once, above every
-                    // card, rather than here on each of them in turn.
-                    if (showSubject) {
-                        Text(summary.subject, style = MaterialTheme.typography.titleLarge)
-                        Spacer(Modifier.height(14.dp))
-                    }
-
                     val proof = remember(body) {
                         authenticityOf(body?.authenticationResults?.joinToString("\n"), body?.spamStatus)
                     }
@@ -8139,6 +8202,7 @@ internal fun Message(
             }
         }
         preview?.let { (attachment, bitmap) ->
+            CoverBody(true)
             Box(
                 Modifier.matchParentSize()
                     .background(Color.Black.copy(alpha = 0.35f))

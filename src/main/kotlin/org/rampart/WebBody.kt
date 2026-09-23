@@ -1,27 +1,42 @@
 package org.rampart
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.delay
+import androidx.compose.ui.window.PopupProperties
 import javafx.application.Platform
 import javafx.concurrent.Worker
 import javafx.embed.swing.JFXPanel
+import javafx.embed.swing.SwingFXUtils
 import javafx.scene.Scene
+import javafx.scene.image.WritableImage
 import javafx.scene.web.WebView
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
 import netscape.javascript.JSObject
 import java.util.Base64
+import kotlin.coroutines.resume
 /**
  * A message drawn by a real engine, sitting in the Compose window like any other component.
  *
@@ -30,8 +45,9 @@ import java.util.Base64
  * carrying on drawing HTML by hand, which is what this replaces. See [emailDocument] for
  * what reaches it and what does not.
  *
- * It is a heavyweight component in a Compose scene, so interop blending has to be on or it
- * draws over everything above it when the pane scrolls: see [enableWebBody].
+ * It is a heavyweight component in a Compose scene. Interop blending is on (see
+ * [enableWebBody]) and still loses to this panel, so an open overlay hides the live
+ * panel and shows a snapshot taken once when the overlay opened.
  */
 @Composable
 internal fun WebBody(
@@ -140,14 +156,16 @@ internal fun WebBody(
     var measured by remember(document) { mutableStateOf(false) }
     // Read from the engine's thread, which is not the one that writes [measured].
     val drew = remember(document) { java.util.concurrent.atomic.AtomicBoolean(false) }
-    bridge.onHeight = {
-        if (it > 0) {
-            val next = minOf(it, TALLEST)
-            drew.set(true)
-            measured = true
-            height = next
-            if (messageId.isNotBlank()) messageHeights.remember(messageId, next)
-        }
+    bridge.onHeight = onHeight@{ css ->
+        val reported = appliedHeight(css, bridge.zoom)
+        if (reported <= 0) return@onHeight
+        // The opening height is only a first frame. A measurement replaces it, including
+        // one taller than the estimate or the height remembered from last time.
+        val next = nextBodyHeight(height, reported)
+        drew.set(true)
+        measured = true
+        height = next
+        if (messageId.isNotBlank()) messageHeights.remember(messageId, next)
     }
     /*
      * If nothing ever answers, hand the message back rather than showing a box.
@@ -209,6 +227,8 @@ internal fun WebBody(
              * renderer draws the message instead.
              */
             runCatching {
+                val zoom = zoomFor(density, scale, panelScale(panel))
+                bridge.zoom = zoom
                 val view = (panel.scene?.root as? WebView) ?: WebView().also { fresh ->
                     fresh.isContextMenuEnabled = false
                     // The page paints its own background; the panel behind it must not add a
@@ -231,10 +251,9 @@ internal fun WebBody(
                         fresh.engine.executeScript(WIRING)
                     }
                 }
-                val zoom = zoomFor(density, scale, panelScale(panel))
                 view.zoom = zoom
                 view.engine.load(asUrl(document))
-                ticker.getAndSet(measure(view, zoom, { bridge.onHeight(it) }, { bridge.onBlank() }))?.stop()
+                ticker.getAndSet(measure(view, { bridge.onHeight(it) }, { bridge.onBlank() }))?.stop()
             }.onFailure { bridge.onBlank() }
         }
     }
@@ -256,12 +275,37 @@ internal fun WebBody(
         }
     }
 
+    // Taken once, when an overlay opens, and dropped when the last one closes.
+    // A live panel paints over every Compose layer that shares this window.
+    val covered = LocalBodyCover.current.on
+    var shot by remember { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(covered) {
+        if (!covered) {
+            shot = null
+            return@LaunchedEffect
+        }
+        shot = snapshotWebView(panel)
+    }
+    val frozen = shot
+    val showShot = covered && frozen != null
+    val sized = modifier.fillMaxWidth().height(height.dp).onSizeChanged { if (it.width > 0) wide = it.width }
     SwingPanel(
         background = Color.Transparent,
         factory = { panel },
-        modifier = modifier.fillMaxWidth().height(height.dp)
-            .onSizeChanged { wide = it.width },
+        update = { it.isVisible = !showShot },
+        // Kept in the tree at no size so the page survives the overlay. Removing it
+        // drops the scene, and the message comes back blank when the overlay closes.
+        modifier = if (showShot) Modifier.size(0.dp) else sized,
     )
+    if (frozen != null && showShot) {
+        Image(
+            bitmap = frozen,
+            contentDescription = null,
+            contentScale = ContentScale.FillBounds,
+            alignment = Alignment.TopStart,
+            modifier = sized,
+        )
+    }
 }
 
 /**
@@ -278,12 +322,14 @@ internal fun WebBody(
  * is in the page's own pixels and the panel is measured in the window's, and those are
  * only the same thing when the zoom is 1. On a scaled display they are not, so a message
  * was asking for a panel a fraction of the size it was about to draw itself at.
+ * The number reported here stays in the page's pixels. The scale is applied once,
+ * in [appliedHeight], so a later report cannot arrive already scaled and shrink it.
  *
  * Asked repeatedly for a few seconds rather than once, because the answer changes: the
  * pane is laid out after the document loads, pictures decode later still, and the
  * measurement that counts is whichever one lands after all of that. Stops on its own.
  */
-private fun measure(view: WebView, zoom: Double, report: (Int) -> Unit, blank: () -> Unit): javafx.animation.Timeline {
+private fun measure(view: WebView, report: (Int) -> Unit, blank: () -> Unit): javafx.animation.Timeline {
     val timeline = javafx.animation.Timeline()
     // Fifteen seconds rather than six. A picture fetched from the sender's own server, which
     // is what agreeing to remote pictures means, can decode long after the document loads,
@@ -302,13 +348,11 @@ private fun measure(view: WebView, zoom: Double, report: (Int) -> Unit, blank: (
          * anybody reads mail in and well over the handful a collapsed one reports.
          */
         val tall = runCatching {
-            (
-                view.engine.executeScript(
-                    "document.documentElement.clientWidth > 50 ? document.documentElement.scrollHeight : 0",
-                ) as? Number
-                )?.toDouble()
+            (view.engine.executeScript(CONTENT_HEIGHT) as? Number)?.toDouble()
         }.getOrNull()
-        if (tall != null && tall > 0) report((tall * zoom).toInt())
+        // Raw page pixels. Zoom is applied once, where the height is stored, so a later
+        // report from the page cannot put back a shorter unscaled number.
+        if (tall != null && tall > 0) report(tall.toInt())
         // Three seconds in, and the engine either will not answer or is answering that it
         // has a document with nothing in it. Asked once rather than every tick, because a
         // page part way through loading is legitimately empty and this is not a race to
@@ -514,6 +558,14 @@ class WebBridge {
     @Volatile
     internal var dark: Boolean = false
 
+    /**
+     * Page pixels to window pixels. Height reports are in the page's own pixels, and
+     * both the injected script and the timeline come through here so the scale is
+     * applied once.
+     */
+    @Volatile
+    internal var zoom: Double = 1.0
+
     fun open(url: String) = onLink(url)
 
     fun height(px: Int) = onHeight(px)
@@ -551,7 +603,11 @@ private val WIRING = """
     // A message taller than the panel it was given scrolls itself, and the wheel is left
     // alone to do that. Everything else is exactly as tall as its content, so there is
     // nothing here to scroll and the wheel belongs to the pane outside.
-    if (document.documentElement.scrollHeight > window.innerHeight + 1) return;
+    // body, not the document element: once the root is the scroller it reports its own
+    // viewport, which is the panel, and the wheel would never stay here when it should.
+    var body = document.body;
+    var content = body ? Math.max(body.scrollHeight || 0, body.offsetHeight || 0) : 0;
+    if (content > window.innerHeight + 1) return;
     // A line at a time and a page at a time are both reported here, so they are turned
     // into pixels before they leave. Otherwise a mouse that reports lines moves three.
     var step = e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? 400 : 1);
@@ -563,14 +619,23 @@ private val WIRING = """
     // one of them is a few pixels wide, the cells report their padding and nothing else,
     // and the message comes out as a short strip of its own background colour with no
     // card, no heading and no text in it. Refused rather than reported, because the
-    // caller keeps the tallest answer and a wrong small one would be harmless but a
-    // wrong large one would not.
+    // caller keeps the latest answer and a wrong small one would pin the panel short.
     //
     // Except at the end. A pane really can be narrow, and a message that is permanently
     // 160 pixels tall because the guard never let go is a worse fault than the one the
     // guard is for.
     if (!force && window.innerWidth < 40) return;
-    window.rampart.height(document.documentElement.scrollHeight);
+    var body = document.body;
+    if (!body) return;
+    var doc = document.documentElement;
+    var saved = doc.style.overflowY;
+    var savedBody = body.style.overflowY;
+    doc.style.overflowY = 'visible';
+    body.style.overflowY = 'visible';
+    var h = Math.max(body.scrollHeight || 0, body.offsetHeight || 0);
+    doc.style.overflowY = saved;
+    body.style.overflowY = savedBody;
+    if (h > 0) window.rampart.height(h);
   }
   // Wrapped, every one of them: a listener is called with its event as the first
   // argument, so passing `tell` itself made `force` an Event, which is truthy, and the
@@ -622,6 +687,11 @@ internal val webEngineWorks: Boolean by lazy {
  * is read once when the scene is made.
  */
 internal fun enableWebBody() {
+    // Blending lets Compose draw over a Swing panel where the renderer supports it.
+    // It does not on the software pipeline, which is Linux here, and on Windows a
+    // JavaFX panel is its own DirectX surface, which blending will not cover.
+    // compose.swing.render.on.graphics only changes a ComposePanel, and this window
+    // is a Compose window, so it does not apply. Overlays snapshot the page instead.
     System.setProperty("compose.interop.blending", "true")
     /*
      * JavaFX shuts itself down when its last panel closes, and every message has its own
@@ -695,4 +765,123 @@ internal fun openingHeight(remembered: Int?, pane: Int, cap: Int = TALLEST): Int
     if (known != null) return known.coerceAtMost(cap)
     if (pane <= 0) return 480
     return pane.coerceIn(320, cap)
+}
+
+/**
+ * Page pixels, scaled into the same unit the panel is given.
+ *
+ * Zero is not a measurement. The caller keeps whatever height it already has.
+ */
+internal fun appliedHeight(cssPixels: Int, zoom: Double, cap: Int = TALLEST): Int {
+    if (cssPixels <= 0 || zoom <= 0.0) return 0
+    return (cssPixels * zoom).toInt().coerceIn(1, cap)
+}
+
+/**
+ * What the panel should be, once a measurement has arrived.
+ *
+ * [measured] replaces [current]. The opening estimate and a height remembered from
+ * an earlier visit are not a ceiling: a second open of a longer message was staying
+ * at that short start and scrolling inside itself.
+ */
+internal fun nextBodyHeight(current: Int, measured: Int, cap: Int = TALLEST): Int {
+    if (measured <= 0) return current.coerceIn(1, cap)
+    return measured.coerceIn(1, cap)
+}
+
+/**
+ * The page's own height, in its pixels, or 0 when it has no width yet.
+ *
+ * The document element is the wrong thing to ask. With overflow on the root it
+ * reports the viewport, which is the panel, so a short opening height was read
+ * back as the measurement and the panel never grew past it.
+ */
+private const val CONTENT_HEIGHT = """
+(function () {
+  var doc = document.documentElement;
+  var body = document.body;
+  if (!doc || !body || doc.clientWidth <= 50) return 0;
+  var saved = doc.style.overflowY;
+  var savedBody = body.style.overflowY;
+  doc.style.overflowY = 'visible';
+  body.style.overflowY = 'visible';
+  var h = Math.max(body.scrollHeight || 0, body.offsetHeight || 0);
+  doc.style.overflowY = saved;
+  body.style.overflowY = savedBody;
+  return h;
+})()
+"""
+
+/**
+ * How many overlays are covering the message.
+ *
+ * One shared counter, because a menu can open while the composer is already up and
+ * the snapshot should be taken once, not again for each of them.
+ */
+internal class BodyCover {
+    var depth by mutableStateOf(0)
+        private set
+
+    val on: Boolean get() = depth > 0
+
+    fun enter() { depth++ }
+
+    fun leave() { if (depth > 0) depth-- }
+}
+
+internal val LocalBodyCover = staticCompositionLocalOf { BodyCover() }
+
+/** Counted while [active], so the message can swap in its snapshot for the duration. */
+@Composable
+internal fun CoverBody(active: Boolean) {
+    val cover = LocalBodyCover.current
+    DisposableEffect(cover, active) {
+        if (active) cover.enter()
+        onDispose { if (active) cover.leave() }
+    }
+}
+
+/**
+ * A menu that tells the message it is open.
+ *
+ * The same shape as a dropdown, so call sites do not grow a second way of opening one.
+ * While it is expanded the message is a snapshot and the menu draws above that.
+ */
+@Composable
+internal fun MenuLayer(
+    expanded: Boolean,
+    onDismissRequest: () -> Unit,
+    modifier: Modifier = Modifier,
+    properties: PopupProperties = PopupProperties(focusable = true),
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    CoverBody(expanded)
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = onDismissRequest,
+        modifier = modifier,
+        properties = properties,
+        content = content,
+    )
+}
+
+/** The page as it looks right now, or null when there is nothing to copy yet. */
+private suspend fun snapshotWebView(panel: JFXPanel): ImageBitmap? = suspendCancellableCoroutine { cont ->
+    Platform.runLater {
+        if (!cont.isActive) return@runLater
+        val view = panel.scene?.root as? WebView
+        val w = view?.width?.toInt() ?: 0
+        val h = view?.height?.toInt() ?: 0
+        if (view == null || w < 2 || h < 2) {
+            cont.resume(null)
+            return@runLater
+        }
+        val bitmap = runCatching {
+            val params = javafx.scene.SnapshotParameters()
+            params.fill = javafx.scene.paint.Color.TRANSPARENT
+            val image = view.snapshot(params, WritableImage(w, h))
+            SwingFXUtils.fromFXImage(image, null)?.toComposeImageBitmap()
+        }.getOrNull()
+        if (cont.isActive) cont.resume(bitmap)
+    }
 }
