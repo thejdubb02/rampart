@@ -592,4 +592,12 @@ internal val webEngineWorks: Boolean by lazy {
  */
 internal fun enableWebBody() {
     System.setProperty("compose.interop.blending", "true")
+    /*
+     * JavaFX shuts itself down when its last panel closes, and every message has its own
+     * panel. So the first message opened was the only one ever drawn: closing it stopped
+     * the engine, the next message's load was queued on a thread that no longer ran, and
+     * six seconds later it was declared blank and shown as plain text. Every message after
+     * the first looked unformatted and took six seconds to appear.
+     */
+    Platform.setImplicitExit(false)
 }
