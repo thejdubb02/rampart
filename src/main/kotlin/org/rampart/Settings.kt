@@ -100,10 +100,11 @@ object Settings {
     /**
      * Whether the sign-off goes above the quoted original rather than under all of it.
      *
-     * Off by default, which is where every sign-off has been until now and where webmail
-     * has it set. See [signed] for what each of the two actually looks like.
+     * On by default, which is where Gmail and Outlook put it: a reply's sign-off sits under
+     * the reply, not under the whole quoted thread. Anyone who chose a placement keeps it.
+     * See [signed] for what each of the two actually looks like.
      */
-    fun signatureAboveQuote(): Boolean = read()["signatureAboveQuote"]?.jsonPrimitive?.booleanOrNull ?: false
+    fun signatureAboveQuote(): Boolean = read()["signatureAboveQuote"]?.jsonPrimitive?.booleanOrNull ?: true
 
     fun setSignatureAboveQuote(value: Boolean) =
         write { put("signatureAboveQuote", JsonPrimitive(value)) }
