@@ -57,12 +57,12 @@ internal fun initialExpanded(opened: Summary): Set<String> = setOf(opened.id)
  * does not raise a notification. Nothing is deleted, and opening the conversation still
  * shows all of it.
  *
- * **It needs Rampart running to apply**, because nothing on the server knows what a thread
- * is in the way this does. Sieve runs per message, at delivery, with no idea which
- * conversation a message joins; matching on a subject line would silently swallow mail
- * from a different thread that happened to share one. So a muted conversation quietens
- * when Rampart next sees it rather than the moment it lands, which is a wait rather than a
- * failure. Worth saying out loud on the screen, and it is.
+ * **This list is the fallback.** On an account whose server runs Sieve, a mute is a rule on
+ * the server instead, matching replies by the first message's Message-ID, so it holds with
+ * Rampart closed and in every other client: see [ServerMute]. This list is for accounts
+ * that cannot hold one, and for conversations muted here before that existed. It needs
+ * Rampart running to apply, so a conversation muted this way quietens when Rampart next
+ * sees it rather than the moment it lands, and the menu says so in one sentence.
  *
  * Kept per account as well as per thread: thread ids come from a server and two servers
  * have no reason to agree about them.

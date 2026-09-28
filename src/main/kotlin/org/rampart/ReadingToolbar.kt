@@ -367,9 +367,9 @@ private fun MoreMenu(
                     more = false
                     conv.onMute(!conv.muted)
                 }
-                if (conv.muted) {
+                conv.muteNote?.let { note ->
                     Text(
-                        "New messages in this conversation are marked read and archived while Rampart is running.",
+                        note,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline,
                         modifier = Modifier.widthIn(max = 260.dp).padding(horizontal = 12.dp, vertical = 6.dp),

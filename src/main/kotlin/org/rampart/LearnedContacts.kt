@@ -1,0 +1,121 @@
+package org.rampart
+
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
+
+/**
+ * Somebody written to for the first time, saved to the server's address book as well.
+ *
+ * The book in [AddressBook] is a file on this computer, which is the right source for
+ * autocomplete because every account has one. But a person you have started writing to is
+ * somebody your phone and Bulwark should know too, and on a server that keeps contacts that
+ * is where they belong. So on an account with JMAP contacts, the first send to an address
+ * also leaves a card for it on the server. IMAP accounts, and JMAP servers without
+ * contacts, keep only the local book, exactly as before.
+ *
+ * "First" is judged against every card already on the server, so somebody added from a
+ * phone, or already there under another of their addresses, is never given a second card.
+ * And each address is taken to the server once: whether it was saved or found already
+ * there, it is written down in [LearnedContacts] and never offered again. That is what
+ * lets somebody delete a card they did not want without it coming back on the next reply,
+ * and it is also what keeps an ordinary send from reading the whole address book first.
+ *
+ * Not the local book as the test of "new". That book learns from mail arriving as well as
+ * leaving, so the people who wrote first, which is most of the people anybody replies to,
+ * would never have been saved at all.
+ */
+
+/** An address in the one form two addresses are compared in. */
+internal fun addressKey(email: String): String = email.trim().lowercase()
+
+/**
+ * The recipients not yet taken to the server, each only once however many times the
+ * message named them.
+ *
+ * The display name typed with a mention is kept, because a card with a name is the useful
+ * kind, and a bare mention of the same address elsewhere in the message must not wipe it.
+ */
+internal fun newRecipients(recipients: List<MailboxAddress>, handled: Collection<String>): List<MailboxAddress> {
+    val done = handled.map(::addressKey).toSet()
+    val seen = LinkedHashMap<String, MailboxAddress>()
+    recipients.forEach { r ->
+        val key = addressKey(r.email)
+        if (!looksLikeAddress(key) || key in done) return@forEach
+        val had = seen[key]
+        if (had == null || (had.name.isBlank() && r.name.isNotBlank())) {
+            seen[key] = MailboxAddress(r.name.trim(), r.email.trim())
+        }
+    }
+    return seen.values.toList()
+}
+
+/** Of [candidates], the ones no card on the server has among its addresses. */
+internal fun notOnAnyCard(candidates: List<MailboxAddress>, cards: List<Contact>): List<MailboxAddress> {
+    val onCards = cards.flatMap { it.emails }.map(::addressKey).toSet()
+    return candidates.filter { addressKey(it.email) !in onCards }
+}
+
+/** The card to create for one new address, in the default address book. */
+internal fun learnedCard(who: MailboxAddress, books: List<ContactBook>): Contact {
+    val draft = Contact(name = who.name.trim(), emails = listOf(who.email.trim()))
+    return draft.copy(bookIds = booksFor(draft, books).toList())
+}
+
+internal object LearnedContacts {
+    /**
+     * Saves a card for each recipient of a sent message that no card has yet.
+     *
+     * Does nothing on an account without contacts, and asks the server nothing when every
+     * recipient has been handled before, which is almost every message. Every address is
+     * tried even when one fails, then a [JmapError] names the ones that did not go in, so a
+     * partial failure is visible rather than half hidden. A failed one is not written down,
+     * so the next message to them tries again.
+     */
+    fun save(backend: MailBackend, account: String, recipients: List<MailboxAddress>) {
+        if (!backend.hasContacts()) return
+        val fresh = newRecipients(recipients, handled(account))
+        if (fresh.isEmpty()) return
+        val missing = notOnAnyCard(fresh, backend.contacts().map { it.first })
+        val already = fresh - missing.toSet()
+        if (missing.isEmpty()) {
+            markHandled(account, already)
+            return
+        }
+        val books = backend.addressBooks()
+        if (books.isEmpty()) throw JmapError("The server has no address book to save new contacts into.")
+        val failed = missing.mapNotNull { who ->
+            runCatching { backend.saveContact(learnedCard(who, books)) }.exceptionOrNull()?.let { who to it }
+        }
+        markHandled(account, already + (missing - failed.map { it.first }.toSet()))
+        if (failed.isNotEmpty()) {
+            val reason = failed.first().second.message?.trim()?.removeSuffix(".").orEmpty()
+            throw JmapError(
+                "The server would not save " + failed.joinToString(", ") { it.first.email } + " as a contact" +
+                    (if (reason.isNotEmpty()) ": $reason." else "."),
+            )
+        }
+    }
+
+    /** Addresses already taken to this account's server, lowercased. */
+    fun handled(account: String): List<String> =
+        ((store.read()[account] as? JsonArray).orEmpty()).mapNotNull { it.jsonPrimitive.contentOrNull }
+
+    private fun markHandled(account: String, done: List<MailboxAddress>) {
+        if (done.isEmpty()) return
+        store.write {
+            val next = (handled(account) + done.map { addressKey(it.email) }).distinct().takeLast(KEEP)
+            put(account, buildJsonArray { next.forEach { add(JsonPrimitive(it)) } })
+        }
+    }
+
+    /**
+     * The oldest are dropped past this. Forgetting one only means the next message to that
+     * person checks the server again, and finds the card already there.
+     */
+    private const val KEEP = 5000
+
+    private val store = JsonStore("learned-contacts.json")
+}
