@@ -25,6 +25,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -64,6 +65,8 @@ internal fun FiltersPage(
     error: String?,
     supported: Boolean,
     onSave: (Script) -> Unit,
+    /** Told while the "describe a filter" box has a request of its own in flight. */
+    onBusy: (Boolean) -> Unit = {},
 ) {
     Section("Filters", "Rules run on the server, so they work with Rampart closed.")
     Where(accounts, chosen, onChoose)
@@ -81,10 +84,10 @@ internal fun FiltersPage(
     Spacer(Modifier.height(14.dp))
 
     if (chosen == null) {
-        Everywhere(globals, accounts, folders, saving, error, onGlobals)
+        Everywhere(globals, accounts, folders, saving, error, onGlobals, onBusy)
         return
     }
-    OneAccount(script, chosen, globals, folders, saving, error, supported, onSave)
+    OneAccount(script, chosen, globals, folders, saving, error, supported, onSave, onBusy)
 }
 
 /** Which set of rules is on the screen. Always shown, so the global set is one click away. */
@@ -120,8 +123,9 @@ private fun Everywhere(
     saving: Boolean,
     error: String?,
     onGlobals: (GlobalFilters) -> Unit,
+    onBusy: (Boolean) -> Unit = {},
 ) {
-    RuleList(globals.rules, folders, saving) { onGlobals(globals.copy(rules = it)) }
+    RuleList(globals.rules, folders, saving, onBusy = onBusy) { onGlobals(globals.copy(rules = it)) }
 
     if (accounts.size > 1) {
         Spacer(Modifier.height(18.dp))
@@ -161,6 +165,7 @@ private fun OneAccount(
     error: String?,
     supported: Boolean,
     onSave: (Script) -> Unit,
+    onBusy: (Boolean) -> Unit = {},
 ) {
     if (!supported) {
         Note("This server does not offer Sieve, so rules cannot be kept on it.")
@@ -201,6 +206,7 @@ private fun OneAccount(
                 onClick = { raw = sieveOf(scriptFor(script, inherited)) },
             ) { Text("Show the script") }
         },
+        onBusy = onBusy,
         onChange = { next -> onSave(scriptFor(script.copy(rules = next), inherited)) },
     )
 
@@ -238,11 +244,12 @@ private fun RuleList(
     saving: Boolean,
     inherited: List<Rule> = emptyList(),
     extra: @Composable RowScope.() -> Unit = {},
+    onBusy: (Boolean) -> Unit = {},
     onChange: (List<Rule>) -> Unit,
 ) {
     var editing by remember(rules, inherited) { mutableStateOf<Rule?>(null) }
 
-    DescribeRule(folders) { made -> onChange(rules + made) }
+    DescribeRule(folders, onBusy = onBusy) { made -> onChange(rules + made) }
     Spacer(Modifier.height(14.dp))
 
     inherited.forEach { rule ->
@@ -328,6 +335,7 @@ internal fun FilterFromMessageDialog(
     folders: List<String>,
     onClose: () -> Unit,
     onMade: (Rule) -> Unit,
+    onBusy: (Boolean) -> Unit = {},
 ) {
     AlertDialog(
         onDismissRequest = onClose,
@@ -339,7 +347,7 @@ internal fun FilterFromMessageDialog(
                     .heightIn(max = 480.dp)
                     .verticalScroll(rememberScrollState()),
             ) {
-                DescribeRule(folders, filterSeed(message)) { rule ->
+                DescribeRule(folders, filterSeed(message), onBusy = onBusy) { rule ->
                     onMade(rule)
                     onClose()
                 }
@@ -365,6 +373,8 @@ private fun DescribeRule(
      * the person only has to say what to do with mail like it.
      */
     seed: String = "",
+    /** Told while the request this box sends is in flight. */
+    onBusy: (Boolean) -> Unit = {},
     onMade: (Rule) -> Unit,
 ) {
     val config = remember { Assistant.config() }
@@ -376,6 +386,7 @@ private fun DescribeRule(
     val scope = rememberCoroutineScope()
     var words by remember(seed) { mutableStateOf(seed) }
     var thinking by remember { mutableStateOf(false) }
+    LaunchedEffect(thinking) { onBusy(thinking) }
     var trouble by remember { mutableStateOf<String?>(null) }
     var draft by remember { mutableStateOf<Rule?>(null) }
     // The exact packet, held while it is being shown. Being asked the first time is not a

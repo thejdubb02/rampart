@@ -1,5 +1,11 @@
 package org.rampart
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -9,13 +15,19 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.loadImageBitmap
+import androidx.compose.ui.res.useResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.platform.Font
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -102,6 +114,46 @@ internal fun Avatar(
     }
 }
 
+/** Frames in the working strips, and how fast they play. Both loop in exactly 4 seconds. */
+private const val ROOK_WORKING_FRAMES = 48
+private const val ROOK_WORKING_FPS = 12
+
+/**
+ * Which working strip to draw from, at the size Rook is actually being drawn.
+ *
+ * A pull request pulling in a 192px strip to draw a 16px sidebar icon would cost a decode
+ * for no visible gain, and going the other way, stretching the 96px strip to fill a large
+ * avatar, is what would actually show. [sizePx] is real device pixels, not dp, because a
+ * dp is only a pixel at 1x scale and the choice has to be right on a HiDPI screen too.
+ */
+internal fun rookWorkingStripFile(sizePx: Float): String =
+    if (sizePx > 96f) "rook-working-192.png" else "rook-working-96.png"
+
+/**
+ * The frame [progress] lands on, out of [ROOK_WORKING_FRAMES].
+ *
+ * Clamped rather than wrapped: the animation's own target value is exactly
+ * [ROOK_WORKING_FRAMES], reached for one instant before it loops back to 0, and reading
+ * that instant literally would index one frame past the end of the strip.
+ */
+internal fun rookWorkingFrame(progress: Float): Int =
+    progress.toInt().coerceIn(0, ROOK_WORKING_FRAMES - 1)
+
+/**
+ * The two working strips, decoded once and kept for the life of the process.
+ *
+ * A `remember` inside [RookAvatar] would decode a fresh copy for every place Rook is drawn
+ * at once, and the sidebar button, the chat header and a line in the transcript can all be
+ * on screen together. `lazy` decodes each strip the first time anything asks for it and
+ * every avatar after that reuses the same bitmap.
+ */
+private val rookWorking96: ImageBitmap? by lazy {
+    runCatching { useResource("art/rook-working-96.png") { loadImageBitmap(it) } }.getOrNull()
+}
+private val rookWorking192: ImageBitmap? by lazy {
+    runCatching { useResource("art/rook-working-192.png") { loadImageBitmap(it) } }.getOrNull()
+}
+
 /**
  * Rook's round face, bundled with the app rather than fetched, so it never has a
  * fallback to fall back to.
@@ -109,10 +161,13 @@ internal fun Avatar(
  * [ring] draws a thin border in the theme's primary colour, for the one place this
  * is also a toggle button: the sidebar shows it when the assistant panel is open, the
  * same way the other footer icons change colour to show which one is active.
+ *
+ * [working] swaps the static picture for the animated one: a request is actually in
+ * flight, so the same face that shows Rook is present also shows he is busy, rather than
+ * a spinner drawn next to a face that is not doing anything.
  */
 @Composable
-internal fun RookAvatar(size: Dp, file: String = "rook-avatar-96.png", ring: Boolean = false) {
-    val image = artImage(file)
+internal fun RookAvatar(size: Dp, file: String = "rook-avatar-96.png", ring: Boolean = false, working: Boolean = false) {
     Box(
         modifier = Modifier.size(size).clip(CircleShape)
             .then(
@@ -120,14 +175,48 @@ internal fun RookAvatar(size: Dp, file: String = "rook-avatar-96.png", ring: Boo
                 else Modifier,
             ),
     ) {
-        if (image != null) {
-            Image(
-                image,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
+        if (working) {
+            RookWorking(size)
+        } else {
+            val image = artImage(file)
+            if (image != null) {
+                Image(
+                    image,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
+    }
+}
+
+/** The animated face itself, drawn one frame at a time out of whichever strip fits [size]. */
+@Composable
+private fun RookWorking(size: Dp) {
+    val sizePx = with(LocalDensity.current) { size.toPx() }
+    val stripFile = rookWorkingStripFile(sizePx)
+    val strip = if (stripFile == "rook-working-192.png") rookWorking192 else rookWorking96
+    val frameSize = if (stripFile == "rook-working-192.png") 192 else 96
+    if (strip == null) return
+
+    val cycle = rememberInfiniteTransition(label = "rook-working")
+    val progress by cycle.animateFloat(
+        initialValue = 0f,
+        targetValue = ROOK_WORKING_FRAMES.toFloat(),
+        animationSpec = infiniteRepeatable(
+            tween(ROOK_WORKING_FRAMES * 1000 / ROOK_WORKING_FPS, easing = LinearEasing),
+        ),
+        label = "frame",
+    )
+    Canvas(Modifier.fillMaxSize()) {
+        val frame = rookWorkingFrame(progress)
+        drawImage(
+            image = strip,
+            srcOffset = IntOffset(frame * frameSize, 0),
+            srcSize = IntSize(frameSize, frameSize),
+            dstSize = IntSize(this.size.width.toInt(), this.size.height.toInt()),
+        )
     }
 }
 

@@ -31,7 +31,15 @@ in `rook/`, and the copy in Nextcloud lives in `Rampart/Rook`.
 | `Rook_Avatar_512.png` | round avatar, large, on a dark circle; source for the app's avatar art |
 | `Rook_Full_1024.png` | full body, transparent background |
 | `Rook_Original.jpg` | the source image the rest are cut from |
+| `Rook_Working.gif` | Rook animated while working: a blink and a head turn, looping seamlessly |
+| `Rook_Working_Original.mp4` | the source clip `Rook_Working.gif` and the app's sprite strips are cut from |
 
 The app's own copies, downscaled for use in the UI, are in
 `src/main/resources/art/`: `rook-avatar-96.png` and `rook-avatar-256.png` from the
-round avatar, `rook-full-512.png` from the full body.
+round avatar, `rook-full-512.png` from the full body, and `rook-working-96.png` and
+`rook-working-192.png`, each 48 frames at 12 fps laid out left to right in one strip,
+for the animated face shown while Rook has a request in flight. The GIF and the mp4
+are not loaded by the app; the strips are what it draws from.
+
+Nextcloud's `Rampart/Rook` also holds `Rook_Working.gif` and the mp4 it came from,
+alongside the rest of this folder.

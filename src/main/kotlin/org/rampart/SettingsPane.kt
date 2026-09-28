@@ -118,6 +118,8 @@ internal fun SettingsPane(
     globalFilters: GlobalFilters,
     onGlobalFilters: (GlobalFilters) -> Unit,
     onFilters: (Script) -> Unit,
+    /** Told while the filters page's "describe a filter" box has a request in flight. */
+    onFilterBusy: (Boolean) -> Unit = {},
     onClose: () -> Unit,
     /** The account the Security and phone pages manage, the same one the other pages are about. */
     security: Session? = null,
@@ -175,6 +177,7 @@ internal fun SettingsPane(
                             error = filtersError,
                             supported = filtersSupported,
                             onSave = onFilters,
+                            onBusy = onFilterBusy,
                         )
                         "themes" -> ThemesPage(onTheme, iconPack, onIconPack, onTintRowsByTag, onLoader)
                         "identities" -> IdentitiesPage(

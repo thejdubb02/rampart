@@ -82,7 +82,7 @@ internal fun ChatPane(
             Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            RookAvatar(size = 22.dp, file = "rook-avatar-256.png")
+            RookAvatar(size = 22.dp, file = "rook-avatar-256.png", working = thinking)
             Spacer(Modifier.width(8.dp))
             Text("Rook", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
             if (said.isNotEmpty()) {
@@ -128,7 +128,13 @@ internal fun ChatPane(
             if (thinking) {
                 item {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Spinner(Modifier.height(16.dp))
+                        RookAvatar(size = 18.dp, working = true)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "Rook is working on it.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
                     }
                 }
             }
