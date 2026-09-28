@@ -759,6 +759,14 @@ Before that, the user's own account, which is six small files' worth of `x:` typ
 on a host name: mailbox password, display name, TOTP, app passwords, API keys, public
 keys, encryption at rest, quota.
 
+**The first three are built, 2026-09-28, not yet checked against a live server:** Settings,
+Security changes the password, makes and revokes app passwords, and turns two-step login
+on and off, all as the signed-in user. `account-security.md` has the object names, the two
+findings that shaped it (the server never checks a code against a new TOTP secret, and
+two-step login stops the mailbox password working for every mail app, Rampart included),
+and the list of what to confirm on a real server. API keys, public keys, encryption at rest
+and the display name are still to do, on the same plumbing.
+
 ---
 
 ## Ideas, logged and not scheduled

@@ -81,6 +81,10 @@ server what it can do and hides what it cannot.
   the mail still arrives, a little later.
 - **Server-side settings, identities, aliases and the admin console**, which are Stalwart's
   and appear only on a Stalwart account with the rights for them.
+- **Changing your password, app passwords and two-step login**, in Settings, Security. Stalwart
+  over JMAP only, done as you with your own sign-in and never with an admin token. On any
+  other account the page says in one sentence why it has nothing to offer. See
+  `account-security.md`.
 
 A capability your server lacks degrades with a reason on screen. It is never an error and
 never a silent nothing.
