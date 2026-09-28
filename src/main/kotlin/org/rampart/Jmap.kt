@@ -253,7 +253,8 @@ internal fun emailQueryFilter(
 }
 
 internal class Jmap private constructor(
-    private val credential: String,
+    /** Replaced only by [usePassword], when the password this session signs with changes under it. */
+    @Volatile private var credential: String,
     private val apiUrl: String,
     val accountId: String,
     private val downloadUrl: String,
@@ -264,6 +265,12 @@ internal class Jmap private constructor(
     private val pushUrl: String,
     /** What the server will accept in one upload, in bytes. Zero when it did not say. */
     private val maxUpload: Long,
+    /**
+     * The account Stalwart's management objects answer for, which is this login's own.
+     * Null on any server that is not Stalwart, and that is the test for it: Stalwart names
+     * `urn:stalwart:jmap` under `primaryAccounts` and nothing else does.
+     */
+    val managementAccountId: String? = null,
 ) : MailBackend {
     companion object {
         fun connect(server: String, user: String, password: String): Jmap = try {
@@ -304,6 +311,8 @@ internal class Jmap private constructor(
             // Kept so a feature can ask whether this server has it rather than calling and
             // reading the refusal. A server without Sieve should not be offered filters.
             val capabilities = session["capabilities"]?.jsonObject?.keys.orEmpty().toSet()
+            val management = (session["primaryAccounts"]?.jsonObject?.get(STALWART_CAPABILITY) as? JsonPrimitive)
+                ?.contentOrNull
             return Jmap(
                 credential = credential,
                 apiUrl = session["apiUrl"].require("apiUrl"),
@@ -313,6 +322,7 @@ internal class Jmap private constructor(
                 pushUrl = pushUrl,
                 maxUpload = maxUpload,
                 capabilities = capabilities,
+                managementAccountId = management,
             )
         }
 
@@ -1430,6 +1440,22 @@ internal class Jmap private constructor(
             }
         }
         return responses.map { it.jsonArray }
+    }
+
+    /**
+     * Stalwart's own `x:` management methods, as the signed-in user. Only the Security
+     * page calls this, and only after [managementAccountId] said the server is Stalwart.
+     */
+    internal fun manage(vararg invocations: JsonArray): List<JsonArray> =
+        call(*invocations, also = STALWART_CAPABILITY)
+
+    /**
+     * Signs every later request with a new password. Stalwart drops its cached sign-in the
+     * moment a credential changes, so after a password change, or a switch to an app
+     * password, the old one would fail on the very next call.
+     */
+    internal fun usePassword(user: String, password: String) {
+        credential = "Basic " + Base64.getEncoder().encodeToString("$user:$password".toByteArray(Charsets.UTF_8))
     }
 
     override fun move(ids: List<String>, toMailboxId: String): Applied {
