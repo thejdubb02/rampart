@@ -79,4 +79,29 @@ class CalendarLayoutTest {
         assertEquals(LocalDateTime.parse("2026-09-01T10:00"), series.start)
         assertEquals(LocalDateTime.parse("2026-09-01T11:30"), series.end)
     }
+
+    @Test
+    fun `editing every time keeps the event's own zone, not the viewer's`() {
+        val viewer = ZoneId.of("Europe/London")
+        val e = assertNotNull(
+            calendarEventOf(
+                Json.parseToJsonElement(
+                    """{"id":"e","start":"2026-09-01T09:00:00","timeZone":"America/New_York","duration":"PT1H",
+                       "recurrenceRules":[{"frequency":"weekly"}]}""",
+                ).jsonObject,
+            ),
+        )
+        val fourth = occurrences(e, LocalDate.parse("2026-09-22"), LocalDate.parse("2026-09-23"), viewer).single()
+        // The editor opened this occurrence in the viewer's zone, the way CalendarPane does.
+        val moved = draftFrom(fourth, emptyList()).copy(
+            timeZone = viewer,
+            start = LocalDateTime.parse("2026-09-22T15:00"),
+            end = LocalDateTime.parse("2026-09-22T16:00"),
+        )
+        val series = seriesDraft(fourth, moved, viewer)
+        // The series is written back in the event's own zone. Saving it in the viewer's
+        // instead would expand every future occurrence on the viewer's daylight saving
+        // boundaries rather than the event's own.
+        assertEquals(ZoneId.of("America/New_York"), series.timeZone)
+    }
 }

@@ -127,6 +127,11 @@ internal fun sideBySide(spans: List<Pair<Int, Int>>): List<Pair<Int, Int>> {
  * The editor opens on the instance that was clicked, which may be the fortieth. Saving that
  * date as the series start would drop the thirty-nine before it, so the change is taken as
  * a shift and applied to the series' own first date instead.
+ *
+ * The result keeps the event's own time zone rather than the viewer's, even though the
+ * editor worked in the viewer's. A repeating rule is expanded in whatever zone is stored
+ * with it, so writing the series back in the viewer's zone would move every future
+ * occurrence onto that zone's daylight saving boundaries instead of its own.
  */
 internal fun seriesDraft(occurrence: Occurrence, draft: EventDraft, viewer: ZoneId): EventDraft {
     val event = occurrence.event
@@ -136,5 +141,5 @@ internal fun seriesDraft(occurrence: Occurrence, draft: EventDraft, viewer: Zone
     val shift = Duration.between(occurrence.start, draft.start)
     val length = Duration.between(draft.start, draft.end)
     val start = first.plus(shift)
-    return draft.copy(start = start, end = start.plus(length))
+    return draft.copy(start = start, end = start.plus(length), timeZone = event.timeZone ?: viewer)
 }
