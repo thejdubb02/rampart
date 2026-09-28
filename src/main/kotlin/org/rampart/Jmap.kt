@@ -179,6 +179,11 @@ data class Body(
     val sentAt: String? = null,
     /** Every Received line, newest first. Only the topmost is ever trusted. */
     val received: List<String> = emptyList(),
+    /**
+     * The topmost copy of each of [VERDICT_HEADERS] the message carries, by header name:
+     * the spam filter's findings and any virus scanner's result.
+     */
+    val serverVerdicts: Map<String, String> = emptyMap(),
 )
 
 /**
@@ -519,6 +524,10 @@ internal class Jmap private constructor(
                 add("size"); add("sentAt")
                 add("header:Received:asText:all")
                 add("header:" + MDN_HEADER + ":asText")
+                // Every copy rather than JMAP's default of the last one, because the last
+                // one is the copy furthest from our server and the only one a sender can
+                // have written themselves.
+                VERDICT_HEADERS.forEach { add("header:$it:asText:all") }
                 add("attachments")
                 add("blobId")
             }
@@ -565,6 +574,9 @@ internal class Jmap private constructor(
             size = email["size"]?.jsonPrimitive?.longOrNull ?: 0L,
             sentAt = email["sentAt"]?.str(),
             received = stringsIn(email["header:Received:asText:all"]),
+            serverVerdicts = VERDICT_HEADERS.mapNotNull { name ->
+                stringsIn(email["header:$name:asText:all"]).firstOrNull()?.let { name to it }
+            }.toMap(),
         )
         val attachments = attachmentsIn(email)
         val calendar = attachments.firstOrNull {

@@ -993,6 +993,7 @@ internal fun bodyFromHeaders(headers: List<Pair<String, String>>): Body {
         size = 0L,
         sentAt = first("Date")?.let(::sentAtFrom),
         received = values("Received"),
+        serverVerdicts = VERDICT_HEADERS.mapNotNull { name -> first(name)?.let { name to it } }.toMap(),
     )
 }
 
