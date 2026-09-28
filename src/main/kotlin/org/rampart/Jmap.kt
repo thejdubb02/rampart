@@ -1337,6 +1337,29 @@ internal class Jmap private constructor(
         }.getOrElse { "Sent, but the tracking pixel could not be removed from the copy in Sent Items." }
     }
 
+    /**
+     * What the server knows about delivering [emailId], from the EmailSubmission that sent it.
+     *
+     * One round trip: the query finds the submission by the message it sent, and the get
+     * reads its per-recipient status. Stalwart answers that status from its live delivery
+     * queue, so it changes while a message is still being delivered and is worth asking
+     * again rather than caching.
+     */
+    override fun delivery(emailId: String): DeliveryReport? {
+        // A server with no submission would refuse the whole request for naming it.
+        if (SUBMISSION !in capabilities) return null
+        val responses = call(
+            invoke("EmailSubmission/query", "q") {
+                putJsonObject("filter") { putJsonArray("emailIds") { add(emailId) } }
+            },
+            invoke("EmailSubmission/get", "g") {
+                putJsonObject("#ids") { put("resultOf", "q"); put("name", "EmailSubmission/query"); put("path", "/ids") }
+                putJsonArray("properties") { add("emailId"); add("sendAt"); add("undoStatus"); add("deliveryStatus") }
+            },
+        )
+        return deliveryReport(responses[1].list().mapNotNull { (it as? JsonObject)?.let(::submissionRecordOf) })
+    }
+
     /** JMAP reports a refused create per id, so the reason is inside the response, not the status code. */
     private fun refusal(response: JsonObject, field: String, prefix: String): String {
         val problem = response[field]?.jsonObject?.values?.firstOrNull()?.jsonObject
