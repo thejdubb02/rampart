@@ -2,6 +2,7 @@ package org.rampart
 
 import kotlinx.serialization.json.JsonObject
 import java.nio.file.Path
+import java.time.Instant
 
 /**
  * One message, opened.
@@ -165,6 +166,43 @@ internal interface MailBackend {
      */
     fun send(draft: Draft, identity: Identity, draftsMailboxId: String, sentMailboxId: String?): String?
 
+    /**
+     * How many seconds into the future this account's server will hold a message before
+     * sending it, or zero when it will not hold one at all.
+     *
+     * Read once from the JMAP session's submission capability. Zero on every IMAP
+     * account: IMAP has no submission object for a server to hold anything in, so the
+     * SMTP connection [send] uses just delivers whatever it is handed.
+     */
+    val maxDelayedSend: Long get() = 0L
+
+    /**
+     * Sends [draft] the way [send] does, but asks the server to hold it until [holdUntil]
+     * instead of delivering it now, via the FUTURERELEASE extension (RFC 4865) carried in
+     * the EmailSubmission envelope (RFC 8621).
+     *
+     * Only called when [maxDelayedSend] covers the wait, so a backend that always answers
+     * zero there does not need a real implementation of this one.
+     */
+    fun sendDelayed(
+        draft: Draft,
+        identity: Identity,
+        draftsMailboxId: String,
+        sentMailboxId: String?,
+        holdUntil: Instant,
+    ): DelayedSend = throw Unsupported(Lacks.DELAYED_SEND)
+
+    /**
+     * Cancels a message the server is still holding, by moving its EmailSubmission's
+     * undoStatus to "canceled".
+     *
+     * Null means the server agreed and the send will not happen; the caller still has to
+     * put the message back in Drafts itself, since JMAP does not do that as part of a
+     * cancel. Anything else is the server's own words for why not, usually that the hold
+     * has already ended.
+     */
+    fun cancelDelayed(submissionId: String): String? = throw Unsupported(Lacks.DELAYED_SEND)
+
     // ---- things a server may simply not have ---------------------------------------
 
     /**
@@ -224,6 +262,18 @@ internal class Unsupported(val lacks: Lacks) : Exception(lacks.why)
  * the folder. Null on a server that has no such string, which IMAP does not.
  */
 internal data class Applied(val newState: String?)
+
+/**
+ * What asking the server to hold a message produced.
+ *
+ * [submissionId] is kept so a later cancel can name exactly this held message, the same
+ * way a local [ScheduledSend.id] lets [ScheduledSends.cancel] find its own record.
+ * [filedId] is the id of the copy now sitting wherever it was filed, which for a tracked
+ * message is not the id [sendDelayed] was asked to send, because a clean copy replaces it.
+ * [notice] matches [send]'s own: null on an ordinary success, a sentence when the copy
+ * could not be filed cleanly even though the hold itself was accepted.
+ */
+internal data class DelayedSend(val submissionId: String, val filedId: String, val notice: String?)
 
 /**
  * The five toggles above a folder.

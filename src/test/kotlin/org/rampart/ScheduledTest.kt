@@ -9,6 +9,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -166,6 +167,26 @@ class ScheduledTest {
     fun `a missing file is an empty list`() {
         assertTrue(ScheduledSends.pending().isEmpty())
         assertTrue(ScheduledSends.due().isEmpty())
+    }
+
+    @Test
+    fun `the server holds a message only when it offers enough delay`() {
+        assertTrue(serverCanHold(maxDelayedSend = 2_592_000, delaySeconds = 3_600))
+        assertTrue(serverCanHold(maxDelayedSend = 3_600, delaySeconds = 3_600), "exactly the limit is still covered")
+        assertFalse(serverCanHold(maxDelayedSend = 3_600, delaySeconds = 3_601))
+        assertFalse(serverCanHold(maxDelayedSend = 0, delaySeconds = 0), "zero is RFC 8621's own way to say never")
+        assertFalse(serverCanHold(maxDelayedSend = 0, delaySeconds = 60))
+    }
+
+    @Test
+    fun `a held item is skipped by fireDue's due filter and dropped once past its time`() {
+        val heldPast = sample("held", "sent1", 1_000).copy(heldSubmissionId = "sub1")
+        val clientHeldFuture = sample("client", "d2", 5_000)
+        ScheduledSends.schedule(heldPast)
+        ScheduledSends.schedule(clientHeldFuture)
+        val due = ScheduledSends.due(2_000)
+        assertEquals(listOf("held"), due.map { it.id })
+        assertEquals("sub1", due.single().heldSubmissionId)
     }
 
     private fun sample(id: String, draftId: String, sendAt: Long) = ScheduledSend(

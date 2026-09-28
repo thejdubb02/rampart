@@ -3100,14 +3100,96 @@ private fun Reader(
     }
 
     /**
+     * Submits [draft] the way [deliverNow] does, but asks the server to hold it until
+     * [holdUntil] instead of sending it now.
+     *
+     * Everything [deliverNow] does around the actual send, minting the tracking id, filing
+     * the working draft's cleanup, noting the address book, applies here unchanged, which
+     * is why the two read almost the same. They are kept as separate functions rather than
+     * merged behind one signature because what comes back differs: a submission id to
+     * cancel by, and the id of wherever the message ended up filed, not just a notice.
+     */
+    suspend fun deliverDelayed(
+        account: Session,
+        draft: Draft,
+        identity: Identity,
+        draftsId: String,
+        sentId: String?,
+        draftId: String?,
+        key: String,
+        holdUntil: Instant,
+    ): Result<DelayedSend> = tried {
+        val trackingBase = Settings.trackingServer()
+        var tracked: Tracked? = null
+        val outgoing = if (!draft.tracked || trackingBase.isBlank()) {
+            draft
+        } else {
+            val id = newTrackingId()
+            draft.copy(
+                trackingPixel = pixelHtml(trackingBase, id),
+                messageId = newTrackingId() + "@" + (domainOf(identity.email).ifBlank { "rampart.invalid" }),
+            ).also { ready ->
+                tracked = Tracked(
+                    id = id,
+                    messageId = ready.messageId.orEmpty(),
+                    account = key,
+                    recipient = draft.recipients.firstOrNull().orEmpty(),
+                    subject = draft.subject,
+                    sentAt = Instant.now(),
+                )
+            }
+        }
+        var cleanupDraft: String? = null
+        val delayed = Diagnostics.time(Metric.SEND_COMPOSE_TO_SENT) {
+            withContext(Dispatchers.IO) {
+                val made = account.jmap.sendDelayed(outgoing, identity, draftsId, sentId, holdUntil)
+                tracked?.let { account.store?.track(it) }
+                val cleanup = draftId?.let { id ->
+                    runCatching { account.jmap.destroy(listOf(id)) }.exceptionOrNull()
+                }
+                if (cleanup != null) cleanupDraft = draftId
+                made.copy(
+                    notice = listOfNotNull(
+                        made.notice,
+                        cleanup?.let {
+                            "The message was scheduled, but its working draft could not be removed. Try deleting it from Drafts."
+                        },
+                    ).joinToString(" ").ifBlank { null },
+                )
+            }
+        }
+        cleanupDraft?.let { id ->
+            scope.launch {
+                delay(5_000)
+                withContext(Dispatchers.IO) { runCatching { account.jmap.destroy(listOf(id)) } }
+            }
+        }
+        draft.recipients.firstOrNull()?.let {
+            Settings.rememberTracking(trackingDomain(it), draft.tracked)
+        }
+        var book = books[key] ?: AddressBook.read(AddressBook.file(key))
+        draft.recipients.forEach { book = noted(book, it) }
+        books = books + (key to book)
+        runCatching { AddressBook.write(book, AddressBook.file(key)) }
+        delayed
+    }.also { result ->
+        result.onFailure { thrown ->
+            Diagnostics.event(Metric.SEND_FAILURE, sendFailureCategoryOf(thrown))
+        }
+    }
+
+    /**
      * Sends one scheduled message, if its account is open and ready.
      *
      * Null means skipped: the account is not signed in, its folders have not
-     * arrived yet, or a send of this same message is already in flight. None of
-     * those cancel the schedule. A failure is a result, and the schedule stays
-     * so the next pass can try again.
+     * arrived yet, a send of this same message is already in flight, or the server is
+     * already holding this one itself. None of those cancel the schedule, except the
+     * last: a message the server holds is never fired from here at all, so calling this
+     * a second time on it (from the "Send now" row action, say) cannot send it twice. A
+     * failure is a result, and the schedule stays so the next pass can try again.
      */
     suspend fun fireOne(item: ScheduledSend): Result<Unit>? {
+        if (item.heldSubmissionId != null) return null
         if (!firing.add(item.id)) return null
         try {
             val account = sessions.firstOrNull { it.key == item.account } ?: return null
@@ -3139,14 +3221,23 @@ private fun Reader(
     /*
      * Fires anything whose time has come, for accounts that are signed in.
      *
-     * This server advertises submission with maxDelayedSend of zero, so JMAP's
-     * own future sendAt is refused. Rampart holds the message and sends it
-     * itself. The message is already in Drafts. This only decides when.
+     * Whether that means sending it here or leaving it to the server was decided back
+     * when it was scheduled, in onSchedule, from that account's maxDelayedSend. This
+     * only handles what onSchedule left for us:
      *
-     * If Rampart is not running when the time arrives, nothing sends until the
-     * next time it is opened. A message can go out late. If Rampart is never
-     * opened again, the draft sits in Drafts until somebody sends it by hand.
-     * It does not disappear.
+     * - A server-held item (heldSubmissionId set) was already submitted at scheduling
+     *   time, with the server asked to hold it until now. There is nothing to send here;
+     *   once its time has passed the server has taken care of it, so the local record is
+     *   simply dropped.
+     * - Anything else is one Rampart itself is holding, because the account's server
+     *   either has no delayed send at all or not enough of it for this wait. The message
+     *   is already in Drafts. This only decides when.
+     *
+     * If Rampart is not running when a client-held time arrives, nothing sends until the
+     * next time it is opened. A message can go out late. If Rampart is never opened
+     * again, the draft sits in Drafts until somebody sends it by hand. It does not
+     * disappear. A server-held message has no such gap, which is the point of asking for
+     * one: it goes out on time whether or not Rampart is running to notice.
      *
      * An account that is not signed in is skipped, not cancelled, and is tried
      * again whenever that account is open. A send that fails is left in the
@@ -3157,6 +3248,10 @@ private fun Reader(
         var problem: String? = null
         try {
             for (item in ScheduledSends.due()) {
+                if (item.heldSubmissionId != null) {
+                    ScheduledSends.cancel(item.id)
+                    continue
+                }
                 if (sessions.none { it.key == item.account }) continue
                 when (val outcome = fireOne(item)) {
                     null -> Unit
@@ -3201,11 +3296,47 @@ private fun Reader(
         }
     }
 
-    /** Drop the schedule. The draft stays in Drafts, as an ordinary draft. */
+    /**
+     * Drop the schedule.
+     *
+     * A client-held message was never touched, so dropping the local record is the whole
+     * of it: the draft stays in Drafts exactly as it was. A server-held one has already
+     * been submitted, so cancelling it means asking the server to call it back and then
+     * putting the message back in Drafts as an editable draft ourselves, since JMAP has
+     * no way to hand a submission back to us once it exists.
+     */
     fun cancelScheduled(message: Summary) {
         val item = ScheduledSends.pending().firstOrNull { it.draftId == message.id } ?: return
-        ScheduledSends.cancel(item.id)
-        scheduledSends = ScheduledSends.pending()
+        val held = item.heldSubmissionId
+        if (held == null) {
+            ScheduledSends.cancel(item.id)
+            scheduledSends = ScheduledSends.pending()
+            return
+        }
+        scope.launch {
+            val account = sessions.firstOrNull { it.key == item.account } ?: return@launch
+            val identity = identityForDraft(identities[item.account].orEmpty(), item.identityEmail) ?: return@launch
+            val drafts = folderFor("drafts", mailboxes[item.account].orEmpty()) ?: return@launch
+            val outcome = runCatching { account.jmap.cancelDelayed(held) }
+            if (outcome.isFailure) {
+                report("That message could not be reached to cancel it.", whyFailed(outcome.exceptionOrNull()!!))
+                return@launch
+            }
+            // Non-null here is the server's own sentence for why not, usually that the
+            // hold has already ended. Nothing here is touched: the message is on its way
+            // or gone, and the schedule is left for fireDue to clean up once it is due.
+            val refusal = outcome.getOrNull()
+            if (refusal != null) {
+                report(refusal)
+                return@launch
+            }
+            runCatching { account.jmap.saveDraft(item.draft, identity, drafts.id, null) }
+            runCatching { account.jmap.destroy(listOf(item.draftId)) }
+            if (selected?.id == item.draftId) selected = null
+            ScheduledSends.cancel(item.id)
+            scheduledSends = ScheduledSends.pending()
+            refreshNow()
+        }
     }
 
     /*
@@ -4468,10 +4599,13 @@ private fun Reader(
                          * The pause before it goes, held here rather than asked of the
                          * server.
                          *
-                         * The server advertises submission with maxDelayedSend of zero, which
-                         * per RFC 8621 means a future sendAt is refused. The pause before a
-                         * send has to be held here. A scheduled send is the same constraint
-                         * on a longer clock: Rampart fires it, because the server will not.
+                         * This is the "undo send" window, not a schedule: a few seconds,
+                         * the same length on every account regardless of what the server
+                         * can do, so there is nothing for a delayed-send capability to buy
+                         * here even on a server that has one. A genuinely scheduled send is
+                         * a different matter, and onSchedule below asks the server to hold
+                         * that one itself whenever its maxDelayedSend covers the wait, so
+                         * it goes out even if Rampart is not running to fire it.
                          *
                          * Cancelling is a plain flag rather than cancelling the coroutine,
                          * because the window is the easy part and what matters is that
@@ -4541,21 +4675,66 @@ private fun Reader(
                         sendError = null; sendDetail = null
                         yield()
                         try {
-                            val id = writing.saves.save { replacing ->
-                                account.jmap.saveDraft(draft, identity, drafts.id, replacing)
+                            val secondsAhead = (sendAt - System.currentTimeMillis()) / 1000
+                            // Covered by the server: submit it now, with the server asked
+                            // to hold it, so it goes out on time whether or not Rampart is
+                            // still running when that time comes. Not covered, whether
+                            // because the server has no delayed send at all or not enough
+                            // of it for this particular wait: fall back to Rampart holding
+                            // the draft and firing it itself, exactly as before.
+                            if (serverCanHold(account.jmap.maxDelayedSend, secondsAhead)) {
+                                val latest = writing.saves.awaitIdle()
+                                val result = deliverDelayed(
+                                    account,
+                                    draft,
+                                    identity,
+                                    drafts.id,
+                                    folderFor("sent", boxes)?.id,
+                                    latest,
+                                    key,
+                                    Instant.ofEpochMilli(sendAt),
+                                )
+                                if (result.isSuccess) {
+                                    val delayed = result.getOrNull()
+                                    if (delayed != null) {
+                                        ScheduledSends.schedule(
+                                            ScheduledSend(
+                                                id = java.util.UUID.randomUUID().toString(),
+                                                account = key,
+                                                draftId = delayed.filedId,
+                                                identityEmail = identity.email,
+                                                draft = draft,
+                                                sendAt = sendAt,
+                                                heldSubmissionId = delayed.submissionId,
+                                            ),
+                                        )
+                                        scheduledSends = ScheduledSends.pending()
+                                        delayed.notice?.let { report(it) }
+                                    }
+                                    composing = null
+                                } else {
+                                    result.exceptionOrNull()?.let { thrown ->
+                                        sendError = "Could not schedule that message."
+                                        sendDetail = faultDetail(thrown, "Could not schedule that message.")
+                                    }
+                                }
+                            } else {
+                                val id = writing.saves.save { replacing ->
+                                    account.jmap.saveDraft(draft, identity, drafts.id, replacing)
+                                }
+                                ScheduledSends.schedule(
+                                    ScheduledSend(
+                                        id = java.util.UUID.randomUUID().toString(),
+                                        account = key,
+                                        draftId = id,
+                                        identityEmail = identity.email,
+                                        draft = draft,
+                                        sendAt = sendAt,
+                                    ),
+                                )
+                                scheduledSends = ScheduledSends.pending()
+                                composing = null
                             }
-                            ScheduledSends.schedule(
-                                ScheduledSend(
-                                    id = java.util.UUID.randomUUID().toString(),
-                                    account = key,
-                                    draftId = id,
-                                    identityEmail = identity.email,
-                                    draft = draft,
-                                    sendAt = sendAt,
-                                ),
-                            )
-                            scheduledSends = ScheduledSends.pending()
-                            composing = null
                         } catch (e: Exception) {
                             sendError = "Could not schedule that message."
                             sendDetail = faultDetail(e, "Could not schedule that message.")

@@ -31,6 +31,9 @@ import java.util.concurrent.TimeUnit
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
+import java.time.Instant
+import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 import java.util.Base64
 
 /** Anything the server said no to, in words a person can read. */
@@ -53,6 +56,45 @@ internal fun capabilitiesFor(invocations: Array<out JsonArray>): List<String> = 
     }
     if (needsSubmission) add(SUBMISSION)
 }
+
+/**
+ * How many seconds into the future this server will hold a submission for, straight from
+ * its own session document.
+ *
+ * Zero, RFC 8621's own default, means the server refuses a future sendAt outright and
+ * Rampart has to hold the message itself. Pulled out as its own function, the way
+ * [capabilitiesFor] already is, so the parsing can be checked against a session document
+ * without a live server to hand one over.
+ */
+internal fun maxDelayedSendOf(session: JsonObject): Long =
+    session["capabilities"]?.jsonObject?.get(SUBMISSION)?.jsonObject
+        ?.get("maxDelayedSend")?.jsonPrimitive?.longOrNull ?: 0L
+
+/**
+ * The envelope for a delayed send: an ordinary mailFrom and rcptTo, the way the server
+ * would have derived them itself, plus the one parameter that is the point of asking,
+ * FUTURERELEASE's HOLDUNTIL (RFC 4865), carrying an RFC 3339 time in UTC.
+ *
+ * Supplying an envelope at all means supplying the whole thing: JMAP does not merge a
+ * partial one with what it would otherwise derive, so rcptTo is built from the same
+ * addresses [Jmap]'s own `emailObject` already puts in To and Cc.
+ *
+ * A top-level function rather than a method on [Jmap], the same way [capabilitiesFor] is,
+ * so the shape of the request can be checked without a live server to send it to.
+ */
+internal fun holdEnvelope(identity: Identity, draft: Draft, holdUntil: Instant): JsonObjectBuilder.() -> Unit = {
+    putJsonObject("mailFrom") {
+        put("email", identity.email)
+        putJsonObject("parameters") { put("HOLDUNTIL", holdUntilText(holdUntil)) }
+    }
+    putJsonArray("rcptTo") {
+        draft.recipients.forEach { email -> add(buildJsonObject { put("email", email) }) }
+    }
+}
+
+/** RFC 3339, in UTC, to the second: what FUTURERELEASE's HOLDUNTIL parameter takes. */
+internal fun holdUntilText(at: Instant): String =
+    DateTimeFormatter.ISO_INSTANT.format(at.truncatedTo(ChronoUnit.SECONDS))
 
 /**
  * About where a server stops taking an HTML signature.
@@ -271,6 +313,8 @@ internal class Jmap private constructor(
      * `urn:stalwart:jmap` under `primaryAccounts` and nothing else does.
      */
     val managementAccountId: String? = null,
+    /** Seconds of delay the server will hold a submission for. Zero when it will not. */
+    override val maxDelayedSend: Long = 0L,
 ) : MailBackend {
     companion object {
         fun connect(server: String, user: String, password: String): Jmap = try {
@@ -306,6 +350,7 @@ internal class Jmap private constructor(
             val uploadUrl = (session["uploadUrl"] as? JsonPrimitive)?.contentOrNull.orEmpty()
             val maxUpload = session["capabilities"]?.jsonObject?.get(CORE)?.jsonObject
                 ?.get("maxSizeUpload")?.jsonPrimitive?.longOrNull ?: 0L
+            val maxDelayedSend = maxDelayedSendOf(session)
             val pushUrl = (session["capabilities"]?.jsonObject?.get(WEBSOCKET)?.jsonObject
                 ?.get("url") as? JsonPrimitive)?.contentOrNull.orEmpty()
             // Kept so a feature can ask whether this server has it rather than calling and
@@ -321,6 +366,7 @@ internal class Jmap private constructor(
                 uploadUrl = uploadUrl,
                 pushUrl = pushUrl,
                 maxUpload = maxUpload,
+                maxDelayedSend = maxDelayedSend,
                 capabilities = capabilities,
                 managementAccountId = management,
             )
@@ -1227,10 +1273,74 @@ internal class Jmap private constructor(
         // Only on the way out. A draft keeps the base64 in it, which is what makes the
         // picture still visible when the draft is reopened.
         val ready = withInlineSignature(draft)
+        val (emailId, _) = submit(ready, identity, draftsMailboxId, sentMailboxId)
+        if (ready.trackingPixel.isNotEmpty() && sentMailboxId != null) {
+            return replaceSentCopy(ready, identity, sentMailboxId, emailId).second
+        }
+        return null
+    }
+
+    override fun sendDelayed(
+        draft: Draft,
+        identity: Identity,
+        draftsMailboxId: String,
+        sentMailboxId: String?,
+        holdUntil: Instant,
+    ): DelayedSend {
+        val ready = withInlineSignature(draft)
+        val (emailId, submissionId) = submit(
+            ready,
+            identity,
+            draftsMailboxId,
+            sentMailboxId,
+            envelope = holdEnvelope(identity, ready, holdUntil),
+        )
+        val (filedId, notice) = if (ready.trackingPixel.isNotEmpty() && sentMailboxId != null) {
+            replaceSentCopy(ready, identity, sentMailboxId, emailId)
+        } else {
+            emailId to null
+        }
+        return DelayedSend(submissionId, filedId, notice)
+    }
+
+    override fun cancelDelayed(submissionId: String): String? {
+        val response = call(
+            invoke("EmailSubmission/set", "u") {
+                putJsonObject("update") {
+                    putJsonObject(submissionId) { put("undoStatus", "canceled") }
+                }
+            },
+        )[0][1].jsonObject
+        if (response["updated"]?.jsonObject?.containsKey(submissionId) == true) return null
+        return refusal(response, "notUpdated", "That message could no longer be called back")
+    }
+
+    /**
+     * Creates the Email and its EmailSubmission in one request, so the message is never
+     * round tripped through us between being written and being sent, and there is no
+     * window in which a draft exists that nothing will ever send. On success the server
+     * itself moves it out of Drafts and into Sent and drops the draft keyword, which is
+     * why that move cannot be left half done by us losing the connection.
+     *
+     * [envelope] is left out for an ordinary send, so the server derives mailFrom and
+     * rcptTo from the message itself. A delayed send supplies one, because the
+     * FUTURERELEASE parameter that holds it for later has nowhere else to go.
+     *
+     * Returns the new Email's id and the EmailSubmission's id. [send] only needs the
+     * first; [sendDelayed] needs the second too, so a later cancel can name this exact
+     * submission.
+     */
+    private fun submit(
+        draft: Draft,
+        identity: Identity,
+        draftsMailboxId: String,
+        sentMailboxId: String?,
+        envelope: (JsonObjectBuilder.() -> Unit)? = null,
+    ): Pair<String, String> {
         val responses = call(
             invoke("Email/set", "e") {
                 putJsonObject("create") {
-                    putJsonObject("m") { emailObject(ready, identity, draftsMailboxId) }
+                    putJsonObject("m") { emailObject(draft, identity, draftsMailboxId) }
                 }
             },
             invoke("EmailSubmission/set", "s") {
@@ -1238,6 +1348,7 @@ internal class Jmap private constructor(
                     putJsonObject("sub") {
                         put("emailId", "#m")
                         put("identityId", identity.id)
+                        if (envelope != null) putJsonObject("envelope", envelope)
                     }
                 }
                 putJsonObject("onSuccessUpdateEmail") {
@@ -1251,13 +1362,9 @@ internal class Jmap private constructor(
         )
         val created = responses[0][1].jsonObject["created"]?.jsonObject?.get("m")
             ?: throw JmapError(refusal(responses[0][1].jsonObject, "notCreated", "The server would not store the message"))
-        checkNotNull(created)
-        responses[1][1].jsonObject["created"]?.jsonObject?.get("sub")
+        val submitted = responses[1][1].jsonObject["created"]?.jsonObject?.get("sub")
             ?: throw JmapError(refusal(responses[1][1].jsonObject, "notCreated", "The server would not send the message"))
-        if (ready.trackingPixel.isNotEmpty() && sentMailboxId != null) {
-            return replaceSentCopy(ready, identity, sentMailboxId, created.jsonObject["id"].require("id"))
-        }
-        return null
+        return created.jsonObject["id"].require("id") to submitted.jsonObject["id"].require("id")
     }
 
     /**
@@ -1281,8 +1388,12 @@ internal class Jmap private constructor(
      * Created before the old one is destroyed, so a failure anywhere leaves a correct copy
      * in Sent that merely still has a pixel in it. Losing the record of what was sent would
      * be a far worse outcome than a self-open.
+     *
+     * Returns the id now sitting in Sent alongside the usual notice, because a caller that
+     * needs to find that row again ([sendDelayed] does, to match it in the scheduled list)
+     * cannot use [trackedId] any more: this is the object that replaced it.
      */
-    private fun replaceSentCopy(sent: Draft, identity: Identity, sentMailboxId: String, trackedId: String): String? {
+    private fun replaceSentCopy(sent: Draft, identity: Identity, sentMailboxId: String, trackedId: String): Pair<String, String?> {
         return runCatching {
             val clean = sent.copy(trackingPixel = "")
             val made = call(
@@ -1296,17 +1407,17 @@ internal class Jmap private constructor(
                     }
                 },
             )[0][1].jsonObject
-            made["created"]?.jsonObject?.get("clean")
+            val cleanId = made["created"]?.jsonObject?.get("clean")?.jsonObject?.get("id")?.str()
                 ?: throw JmapError(refusal(made, "notCreated", "The server would not clean the Sent copy"))
             val removed = call(invoke("Email/set", "d") { putJsonArray("destroy") { add(trackedId) } })[0][1].jsonObject
             if (removed["destroyed"]?.jsonArray?.any { it.str() == trackedId } != true) {
                 throw JmapError(refusal(removed, "notDestroyed", "The server would not replace the Sent copy"))
             }
-            null
-        }.getOrElse { "Sent, but the tracking pixel could not be removed from the copy in Sent Items." }
+            cleanId to null
+        }.getOrElse { trackedId to "Sent, but the tracking pixel could not be removed from the copy in Sent Items." }
     }
 
-    /** JMAP reports a refused create per id, so the reason is inside the response, not the status code. */
+    /** JMAP reports a refused create, update, or destroy per id, so the reason is inside the response, not the status code. */
     private fun refusal(response: JsonObject, field: String, prefix: String): String {
         val problem = response[field]?.jsonObject?.values?.firstOrNull()?.jsonObject
         val type = problem?.get("type")?.str()

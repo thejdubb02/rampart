@@ -8,6 +8,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 
 /**
  * The accounts file is meant to be written by other people and other people's assistants,
@@ -221,6 +226,50 @@ class JmapTest {
         val error = thrown.exceptionOrNull()
         assertTrue(error is JmapError, "expected a refusal, got: $error")
         assertTrue(error.message!!.contains("https"), "the refusal should say what to do instead")
+    }
+
+    @Test
+    fun `a session with no submission capability holds nothing`() {
+        val session = kotlinx.serialization.json.buildJsonObject {
+            putJsonObject("capabilities") { putJsonObject("urn:ietf:params:jmap:mail") {} }
+        }
+        assertEquals(0L, maxDelayedSendOf(session))
+    }
+
+    @Test
+    fun `a session that offers delayed send reports how long`() {
+        val session = kotlinx.serialization.json.buildJsonObject {
+            putJsonObject("capabilities") {
+                putJsonObject("urn:ietf:params:jmap:submission") { put("maxDelayedSend", 2_592_000) }
+            }
+        }
+        assertEquals(2_592_000L, maxDelayedSendOf(session))
+    }
+
+    @Test
+    fun `a delayed send envelope carries HOLDUNTIL and the message's own addresses`() {
+        val identity = Identity(id = "i1", name = "Me", email = "me@example.com")
+        val draft = Draft(from = "me@example.com", to = "you@example.com", cc = "cc@example.com")
+        val holdUntil = java.time.Instant.parse("2026-10-15T14:30:07Z")
+        val envelope = kotlinx.serialization.json.buildJsonObject(holdEnvelope(identity, draft, holdUntil))
+
+        val mailFrom = envelope["mailFrom"]!!.jsonObject
+        assertEquals("me@example.com", mailFrom["email"]!!.jsonPrimitive.content)
+        assertEquals(
+            "2026-10-15T14:30:07Z",
+            mailFrom["parameters"]!!.jsonObject["HOLDUNTIL"]!!.jsonPrimitive.content,
+            "RFC 4865's parameter name, carrying an RFC 3339 UTC time",
+        )
+        val rcptTo = envelope["rcptTo"]!!.jsonArray.map { it.jsonObject["email"]!!.jsonPrimitive.content }
+        assertEquals(listOf("you@example.com", "cc@example.com"), rcptTo, "derived from To and Cc, same as the server would")
+    }
+
+    @Test
+    fun `HOLDUNTIL drops anything finer than a second`() {
+        assertEquals(
+            "2026-10-15T14:30:07Z",
+            holdUntilText(java.time.Instant.parse("2026-10-15T14:30:07.900Z")),
+        )
     }
 }
 

@@ -29,6 +29,15 @@ internal data class ScheduledSend(
     val draft: Draft,
     /** Epoch millis. */
     val sendAt: Long,
+    /**
+     * Set when the server itself is holding this message and will send it without
+     * Rampart's help, and null (the default) when Rampart is holding it instead, as
+     * every one of these was before the server offered a delay long enough to use.
+     *
+     * Doubles as the flag and the id: a caller that has one already knows the other, and
+     * a nullable id said the same thing a separate boolean would have, one field short.
+     */
+    val heldSubmissionId: String? = null,
 )
 
 /**
@@ -86,6 +95,18 @@ internal fun thisEvening(now: ZonedDateTime): ZonedDateTime {
 /** 09:00 on the next calendar day, in [now]'s zone. */
 internal fun tomorrowMorning(now: ZonedDateTime): ZonedDateTime =
     now.plusDays(1).withHour(9).withMinute(0).withSecond(0).withNano(0)
+
+/**
+ * Whether an account's server can be asked to hold a message for [delaySeconds] rather
+ * than Rampart holding it itself.
+ *
+ * [maxDelayedSend] of zero is RFC 8621's own way of saying "not at all", which a plain
+ * `<=` would answer yes to for a delay of zero seconds; the explicit check keeps that
+ * case with the client-held fallback, where every account already was before any server
+ * offered a delay worth using.
+ */
+internal fun serverCanHold(maxDelayedSend: Long, delaySeconds: Long): Boolean =
+    maxDelayedSend > 0 && delaySeconds <= maxDelayedSend
 
 /** A date and time the schedule dialog can accept, or a sentence saying why not. */
 internal sealed class ScheduleWhen {
