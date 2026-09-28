@@ -1284,6 +1284,14 @@ private fun Reader(
      * clicking a message in the list makes.
      */
     var openedByHand by remember { mutableStateOf<Set<String>>(emptySet()) }
+    /**
+     * Messages the reader marked unread while looking at them.
+     *
+     * The mark-as-read effects run again whenever the open row changes, and marking it
+     * unread is such a change, so without this the message went straight back to read,
+     * on the server as well as on screen. Cleared when a different message is opened.
+     */
+    var keptUnread by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     /**
      * Messages filed out of this conversation while the rest of it was still being fetched.
@@ -2679,7 +2687,7 @@ private fun Reader(
             // The row changes now. The server is told after, and a refusal puts the
             // row back. Waiting for the server first is what left it bold for the
             // whole round trip.
-            if (selected?.sameMail(message) != true) return@LaunchedEffect
+            if (selected?.sameMail(message) != true || message.id in keptUnread) return@LaunchedEffect
             paintSeen(key, setOf(message.id), true)
             scope.launch {
                 if (changed(key) { session(key).jmap.markSeen(message.id) } == null) {
@@ -2700,14 +2708,18 @@ private fun Reader(
      * on regardless: a card opened and immediately closed again still got marked, and two
      * quick presses sent two requests for the same message.
      */
-    LaunchedEffect(openedByHand, thread) {
+    LaunchedEffect(selected?.id) {
+        keptUnread = keptUnread.filter { it == selected?.id }.toSet()
+    }
+
+    LaunchedEffect(openedByHand, thread, keptUnread) {
         val wait = Settings.markReadDelay()
         // Negative means never on its own, the same as everywhere else it is read.
         if (wait < 0) return@LaunchedEffect
-        val waiting = thread.filter { it.id in openedByHand && it.id in expanded && !it.seen }
+        val waiting = thread.filter { it.id in openedByHand && it.id in expanded && !it.seen && it.id !in keptUnread }
         if (waiting.isEmpty()) return@LaunchedEffect
         if (wait > 0) delay(wait)
-        val still = thread.filter { it.id in openedByHand && it.id in expanded && !it.seen }
+        val still = thread.filter { it.id in openedByHand && it.id in expanded && !it.seen && it.id !in keptUnread }
         still.groupBy { accountOf(it) }.forEach { (key, rows) ->
             if (key == null) return@forEach
             val ids = rows.map { it.id }.toSet()
@@ -3455,6 +3467,7 @@ private fun Reader(
     }
 
     fun markRead(message: Summary, read: Boolean) {
+        keptUnread = if (read) keptUnread - message.id else keptUnread + message.id
         accountOf(message)?.let { setSeen(it, setOf(message.id), read) }
     }
 
