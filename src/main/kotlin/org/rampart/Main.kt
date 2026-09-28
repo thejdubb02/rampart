@@ -1303,6 +1303,10 @@ private fun Reader(
     var chatOpen by remember { mutableStateOf(false) }
     var said by remember { mutableStateOf<List<Said>>(emptyList()) }
     var chatThinking by remember { mutableStateOf(false) }
+    // Told by the composer and the filter box whenever either has a request of its own
+    // in flight, so the sidebar's Rook button can animate for those too, not only chat.
+    var composeBusy by remember { mutableStateOf(false) }
+    var filterBusy by remember { mutableStateOf(false) }
     // Read once rather than on every recomposition of the panel: it comes off disk.
     var chatAgreed by remember { mutableStateOf(Assistant.agreed(Assistant.CHAT)) }
     /*
@@ -4745,6 +4749,7 @@ private fun Reader(
                     }
                 }
             },
+            onBusy = { composeBusy = it },
         )
 
     }
@@ -4820,6 +4825,7 @@ private fun Reader(
         Row(Modifier.fillMaxSize()) {
             Sidebar(
                 asking = chatOpen,
+                working = chatThinking || summarising || composeBusy || filterBusy,
                 onAsk = { chatOpen = !chatOpen },
                 search = {
                     SearchBar(
@@ -4903,6 +4909,7 @@ private fun Reader(
                     onMade = { rule ->
                         saveGlobalFilters(globalFilters.copy(rules = globalFilters.rules + rule))
                     },
+                    onBusy = { filterBusy = it },
                 )
             }
             changelogDialog?.let { changes ->
@@ -5120,6 +5127,7 @@ private fun Reader(
                     globalFilters = globalFilters,
                     onGlobalFilters = { saveGlobalFilters(it) },
                     onFilters = { next -> filterAccount?.let { saveFilters(it, next) } },
+                    onFilterBusy = { filterBusy = it },
                     onClose = { settingsOpen = false },
                     security = settingsAccount()?.let { key -> sessions.firstOrNull { it.key == key } },
                 )
@@ -5845,6 +5853,11 @@ internal fun Sidebar(
     inDashboard: Boolean = false,
     /** Whether the assistant panel is showing, so its button says so. */
     asking: Boolean = false,
+    /** Whether a request to the assistant is actually in flight, from anywhere in the
+     *  app: the chat panel, a thread summary, a compose draft, or a filter being
+     *  written. The button animates for this, separately from [asking], because Rook
+     *  can be working while the panel that started it is closed. */
+    working: Boolean = false,
     onAsk: () -> Unit = {},
     onToggleCollapsed: () -> Unit = {},
     onSettings: () -> Unit,
@@ -6061,7 +6074,7 @@ internal fun Sidebar(
             }
             SidebarTooltip("Ask Rook") {
                 IconButton(onClick = onAsk, modifier = Modifier.size(32.dp)) {
-                    RookAvatar(size = 16.dp, ring = asking)
+                    RookAvatar(size = 16.dp, ring = asking, working = working)
                 }
             }
             SidebarTooltip("Settings") {
@@ -6117,7 +6130,7 @@ internal fun Sidebar(
                 }
                 SidebarTooltip("Ask Rook") {
                     IconButton(onClick = onAsk, modifier = Modifier.size(28.dp)) {
-                        RookAvatar(size = 16.dp, ring = asking)
+                        RookAvatar(size = 16.dp, ring = asking, working = working)
                     }
                 }
                 SidebarTooltip("Settings") {

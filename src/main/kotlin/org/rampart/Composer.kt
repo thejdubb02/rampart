@@ -415,6 +415,9 @@ internal fun Composer(
      * Null hides the control, so a caller that only sends is unchanged.
      */
     onSchedule: ((Draft, sendAt: Long) -> Unit)? = null,
+    /** Told whenever an AI draft or refine request starts or finishes, so somewhere
+     *  outside this composer, such as the sidebar's Rook button, can show it too. */
+    onBusy: (Boolean) -> Unit = {},
 ) {
     var draft by remember(initial) { mutableStateOf(initial) }
     /*
@@ -474,6 +477,11 @@ internal fun Composer(
     var composeAgreed by remember { mutableStateOf(Assistant.agreed(Assistant.COMPOSE)) }
     val firstField = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
+
+    // Either kind of AI request counts as busy. A plain state read, not a callback fired
+    // from inside runComposeDraft and runRefine, so a caller that changes onBusy between
+    // recompositions cannot end up with the old one still holding the flag on.
+    LaunchedEffect(running, runningRefine) { onBusy(running || runningRefine != null) }
 
     /*
      * Saving as you type, with the pause built out of the effect rather than a timer: a
