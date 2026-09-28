@@ -62,6 +62,12 @@ dependencies {
     // system against the logged in user rather than by anything we wrote.
     implementation("net.java.dev.jna:jna-platform:5.17.0")
 
+    // Draws the QR code an authenticator app scans to turn on two-step login. ZXing's core
+    // module, which is pure Java with no dependencies of its own. Not hand rolled: a QR
+    // encoder is Reed-Solomon codes, masks and version tables, and a subtle mistake in one
+    // is a code that scans on some phones and not others.
+    implementation("com.google.zxing:core:3.5.3")
+
     /*
      * A real engine for message HTML.
      *
