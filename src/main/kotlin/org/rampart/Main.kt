@@ -4101,6 +4101,7 @@ private fun Reader(
             summary = cardSummary,
             body = card.body,
             accountKey = key.orEmpty(),
+            sentBy = if (ours.any { it.equals(cardSummary.fromEmail, ignoreCase = true) }) sessions.firstOrNull { it.key == key }?.jmap else null,
             onReply = { all ->
                 sendError = null; sendDetail = null
                 val account = key ?: writingAccount()
@@ -4588,6 +4589,7 @@ private fun Reader(
             onFull = { composeFull = it },
             trackingReady = trackingServer.isNotBlank(),
             trackedBefore = { domain -> domain in Settings.trackedDomains() },
+            sendExtensions = sessions.firstOrNull { it.key == key }?.jmap?.submissionExtensions.orEmpty(),
             onSend = { draft ->
                 val account = key?.let(::session)
                 val boxes = mailboxes[key].orEmpty()
@@ -7635,6 +7637,8 @@ internal fun Message(
     body: Body?,
     /** The account that owns [summary], because message ids are only unique inside it. */
     accountKey: String = summary?.account.orEmpty(),
+    /** The account that sent this, when it was one of the reader's own. See [DeliveryLine]. */
+    sentBy: MailBackend? = null,
     onReply: (all: Boolean) -> Unit = {},
     replyAll: Boolean = false,
     /** Why the message would not open, when it would not. */
@@ -8226,6 +8230,7 @@ internal fun Message(
                         Spacer(Modifier.height(10.dp))
                         MessageDetails(summary, body, proof.spamScore)
                     }
+                    DeliveryLine(sentBy, summary.id)
                     if (!readOnly) {
                     val colours = LocalTagColours.current
                     val tags = remember(summary.keywords, colours) { tagsOf(summary.keywords, colours) }

@@ -35,15 +35,24 @@ internal fun warningsFor(
     replyTo: List<String> = emptyList(),
     /** Domains the reader deals with, so a lookalike of one of those is caught too. */
     known: Set<String> = emptySet(),
+    /**
+     * Which checks to run, or null for all of them. Narrowed by [trustWarnings] when the
+     * server has already reached a verdict on the rest.
+     */
+    only: Set<TrustSignal>? = null,
 ): List<Warning> = buildList {
     val domain = domainOf(fromEmail)
+    fun wanted(signal: TrustSignal) = only == null || signal in only
 
-    punycodeWarning(domain)?.let(::add)
-    lookalikeWarning(domain, known)?.let(::add)
-    passwordWarning(html)?.let(::add)
-    impersonationWarning(fromName, fromEmail)?.let(::add)
-    replyToWarning(domain, replyTo, authenticationResults)?.let(::add)
+    if (wanted(TrustSignal.PUNYCODE_SENDER)) punycodeWarning(domain)?.let(::add)
+    if (wanted(TrustSignal.LOOKALIKE_SENDER)) lookalikeWarning(domain, known)?.let(::add)
+    if (wanted(TrustSignal.PASSWORD_FIELD)) passwordWarning(html)?.let(::add)
+    if (wanted(TrustSignal.IMPERSONATION)) impersonationWarning(fromName, fromEmail)?.let(::add)
+    if (wanted(TrustSignal.REPLY_TO)) replyToWarning(domain, replyTo, authenticationResults)?.let(::add)
 }
+
+/** The checks [warningsFor] runs, one per warning it can give. */
+internal enum class TrustSignal { PUNYCODE_SENDER, LOOKALIKE_SENDER, PASSWORD_FIELD, IMPERSONATION, REPLY_TO }
 
 /**
  * A domain written in another alphabet.

@@ -221,6 +221,11 @@ data class Body(
     val sentAt: String? = null,
     /** Every Received line, newest first. Only the topmost is ever trusted. */
     val received: List<String> = emptyList(),
+    /**
+     * The topmost copy of each of [VERDICT_HEADERS] the message carries, by header name:
+     * the spam filter's findings and any virus scanner's result.
+     */
+    val serverVerdicts: Map<String, String> = emptyMap(),
 )
 
 /**
@@ -315,6 +320,8 @@ internal class Jmap private constructor(
     val managementAccountId: String? = null,
     /** Seconds of delay the server will hold a submission for. Zero when it will not. */
     override val maxDelayedSend: Long = 0L,
+    /** What the server's submission capability says it will take on an envelope. */
+    override val submissionExtensions: Set<String> = emptySet(),
 ) : MailBackend {
     companion object {
         fun connect(server: String, user: String, password: String): Jmap = try {
@@ -369,6 +376,13 @@ internal class Jmap private constructor(
                 maxDelayedSend = maxDelayedSend,
                 capabilities = capabilities,
                 managementAccountId = management,
+                // RFC 8621 puts the list on the account, not the session; the session's own
+                // entry for submission is an empty object. The session is read as well in
+                // case a server puts it there instead.
+                submissionExtensions = submissionExtensionsIn(
+                    ((session["accounts"] as? JsonObject)?.get(account) as? JsonObject)
+                        ?.get("accountCapabilities")?.let { it as? JsonObject }?.get(SUBMISSION),
+                ).ifEmpty { submissionExtensionsIn((session["capabilities"] as? JsonObject)?.get(SUBMISSION)) },
             )
         }
 
@@ -565,6 +579,10 @@ internal class Jmap private constructor(
                 add("size"); add("sentAt")
                 add("header:Received:asText:all")
                 add("header:" + MDN_HEADER + ":asText")
+                // Every copy rather than JMAP's default of the last one, because the last
+                // one is the copy furthest from our server and the only one a sender can
+                // have written themselves.
+                VERDICT_HEADERS.forEach { add("header:$it:asText:all") }
                 add("attachments")
                 add("blobId")
             }
@@ -611,6 +629,9 @@ internal class Jmap private constructor(
             size = email["size"]?.jsonPrimitive?.longOrNull ?: 0L,
             sentAt = email["sentAt"]?.str(),
             received = stringsIn(email["header:Received:asText:all"]),
+            serverVerdicts = VERDICT_HEADERS.mapNotNull { name ->
+                stringsIn(email["header:$name:asText:all"]).firstOrNull()?.let { name to it }
+            }.toMap(),
         )
         val attachments = attachmentsIn(email)
         val calendar = attachments.firstOrNull {
@@ -1282,7 +1303,15 @@ internal class Jmap private constructor(
         // Only on the way out. A draft keeps the base64 in it, which is what makes the
         // picture still visible when the draft is reopened.
         val ready = withInlineSignature(draft)
-        val (emailId, _) = submit(ready, identity, draftsMailboxId, sentMailboxId)
+        refusedOption(ready, submissionExtensions)?.let { throw JmapError(it) }
+        val envelope = submissionEnvelope(
+            from = identity.email,
+            recipients = ready.recipients,
+            requireTls = ready.requireTls,
+            confirmDelivery = ready.confirmDelivery,
+            extensions = submissionExtensions,
+        )
+        val (emailId, _) = submit(ready, identity, draftsMailboxId, sentMailboxId, envelope)
         if (ready.trackingPixel.isNotEmpty() && sentMailboxId != null) {
             return replaceSentCopy(ready, identity, sentMailboxId, emailId).second
         }
@@ -1297,12 +1326,16 @@ internal class Jmap private constructor(
         holdUntil: Instant,
     ): DelayedSend {
         val ready = withInlineSignature(draft)
+        // The composer hides secure delivery once a send is scheduled rather than
+        // immediate, but a draft saved before that could still carry it, and holding it
+        // for later must not quietly send it unencrypted once the wait is over.
+        refusedOption(ready, submissionExtensions)?.let { throw JmapError(it) }
         val (emailId, submissionId) = submit(
             ready,
             identity,
             draftsMailboxId,
             sentMailboxId,
-            envelope = holdEnvelope(identity, ready, holdUntil),
+            envelope = buildJsonObject(holdEnvelope(identity, ready, holdUntil)),
         )
         val (filedId, notice) = if (ready.trackingPixel.isNotEmpty() && sentMailboxId != null) {
             replaceSentCopy(ready, identity, sentMailboxId, emailId)
@@ -1331,9 +1364,10 @@ internal class Jmap private constructor(
      * itself moves it out of Drafts and into Sent and drops the draft keyword, which is
      * why that move cannot be left half done by us losing the connection.
      *
-     * [envelope] is left out for an ordinary send, so the server derives mailFrom and
-     * rcptTo from the message itself. A delayed send supplies one, because the
-     * FUTURERELEASE parameter that holds it for later has nowhere else to go.
+     * [envelope] is left off entirely unless an option needs it, so the server derives
+     * mailFrom and rcptTo from the message itself; see [submissionEnvelope]. A delayed
+     * send always supplies one, because the FUTURERELEASE parameter that holds it for
+     * later has nowhere else to go.
      *
      * Returns the new Email's id and the EmailSubmission's id. [send] only needs the
      * first; [sendDelayed] needs the second too, so a later cancel can name this exact
@@ -1344,7 +1378,7 @@ internal class Jmap private constructor(
         identity: Identity,
         draftsMailboxId: String,
         sentMailboxId: String?,
-        envelope: (JsonObjectBuilder.() -> Unit)? = null,
+        envelope: JsonObject? = null,
     ): Pair<String, String> {
         val responses = call(
             invoke("Email/set", "e") {
@@ -1357,7 +1391,7 @@ internal class Jmap private constructor(
                     putJsonObject("sub") {
                         put("emailId", "#m")
                         put("identityId", identity.id)
-                        if (envelope != null) putJsonObject("envelope", envelope)
+                        envelope?.let { put("envelope", it) }
                     }
                 }
                 putJsonObject("onSuccessUpdateEmail") {
@@ -1424,6 +1458,29 @@ internal class Jmap private constructor(
             }
             cleanId to null
         }.getOrElse { trackedId to "Sent, but the tracking pixel could not be removed from the copy in Sent Items." }
+    }
+
+    /**
+     * What the server knows about delivering [emailId], from the EmailSubmission that sent it.
+     *
+     * One round trip: the query finds the submission by the message it sent, and the get
+     * reads its per-recipient status. Stalwart answers that status from its live delivery
+     * queue, so it changes while a message is still being delivered and is worth asking
+     * again rather than caching.
+     */
+    override fun delivery(emailId: String): DeliveryReport? {
+        // A server with no submission would refuse the whole request for naming it.
+        if (SUBMISSION !in capabilities) return null
+        val responses = call(
+            invoke("EmailSubmission/query", "q") {
+                putJsonObject("filter") { putJsonArray("emailIds") { add(emailId) } }
+            },
+            invoke("EmailSubmission/get", "g") {
+                putJsonObject("#ids") { put("resultOf", "q"); put("name", "EmailSubmission/query"); put("path", "/ids") }
+                putJsonArray("properties") { add("emailId"); add("sendAt"); add("undoStatus"); add("deliveryStatus") }
+            },
+        )
+        return deliveryReport(responses[1].list().mapNotNull { (it as? JsonObject)?.let(::submissionRecordOf) })
     }
 
     /** JMAP reports a refused create, update, or destroy per id, so the reason is inside the response, not the status code. */

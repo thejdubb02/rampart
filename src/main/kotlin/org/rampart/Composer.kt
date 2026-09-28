@@ -158,6 +158,16 @@ data class Draft(
      * is minted at send time, so the composer can carry the decision around without one.
      */
     val tracked: Boolean = false,
+    /**
+     * Whether the message may only travel over encrypted connections (RFC 8689 REQUIRETLS).
+     *
+     * On the draft rather than decided at send time, for the reason [trackingPixel] is: a
+     * scheduled message is sent later from what was saved, and a condition held anywhere
+     * else would be forgotten by then.
+     */
+    val requireTls: Boolean = false,
+    /** Whether to ask every receiving server to confirm delivery (RFC 3461 NOTIFY=SUCCESS). */
+    val confirmDelivery: Boolean = false,
 ) {
     val recipients: List<String> get() = (parseAddressList(to) + parseAddressList(cc)).map { it.email }
 }
@@ -417,6 +427,12 @@ internal fun Composer(
      * Null hides the control, so a caller that only sends is unchanged.
      */
     onSchedule: ((Draft, sendAt: Long) -> Unit)? = null,
+    /**
+     * The submission extensions the account's server advertises, upper-cased. Each option
+     * that needs one is absent without it, which is every IMAP account and any JMAP server
+     * that does not offer it: there is no version of either that Rampart could do alone.
+     */
+    sendExtensions: Set<String> = emptySet(),
 ) {
     var draft by remember(initial) { mutableStateOf(initial) }
     /*
@@ -739,6 +755,23 @@ internal fun Composer(
                     }
                     TextButton(onClick = { draft = draft.copy(receipt = !draft.receipt) }) {
                         Text(if (draft.receipt) "Receipt on" else "Receipt", maxLines = 1)
+                    }
+                    // Shown on a draft that already asks for it even when this server cannot,
+                    // so the condition can be seen and turned off rather than refusing to send
+                    // for a reason nobody can find on screen.
+                    if (REQUIRETLS in sendExtensions || draft.requireTls) {
+                        TextButton(onClick = { draft = draft.copy(requireTls = !draft.requireTls) }) {
+                            Text(
+                                if (draft.requireTls) "Secure delivery required" else "Require secure delivery",
+                                maxLines = 1,
+                                color = if (draft.requireTls) MaterialTheme.colorScheme.primary else Color.Unspecified,
+                            )
+                        }
+                    }
+                    if (DSN in sendExtensions) {
+                        TextButton(onClick = { draft = draft.copy(confirmDelivery = !draft.confirmDelivery) }) {
+                            Text(if (draft.confirmDelivery) "Confirm delivery on" else "Confirm delivery", maxLines = 1)
+                        }
                     }
                     /*
                      * Always here, and off where no server has been set up, rather than

@@ -492,6 +492,9 @@ internal class Imap private constructor(
     }
 
     override fun send(draft: Draft, identity: Identity, draftsMailboxId: String, sentMailboxId: String?): String? {
+        // The composer hides secure delivery here, but a scheduled message saved on another
+        // account could still carry it, and sending it unencrypted would undo the choice.
+        refusedOption(draft, submissionExtensions)?.let { throw JmapError(it) }
         // Opened per send rather than held. A submission connection sitting idle for hours
         // is one the server will drop without telling us, and the failure then lands on
         // whoever pressed Send rather than on the connection that went stale.
@@ -1001,6 +1004,7 @@ internal fun bodyFromHeaders(headers: List<Pair<String, String>>): Body {
         size = 0L,
         sentAt = first("Date")?.let(::sentAtFrom),
         received = values("Received"),
+        serverVerdicts = VERDICT_HEADERS.mapNotNull { name -> first(name)?.let { name to it } }.toMap(),
     )
 }
 

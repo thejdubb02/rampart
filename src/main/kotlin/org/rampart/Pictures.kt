@@ -218,13 +218,16 @@ internal fun prepareReading(
     return Reading(
         page = body.html?.let { emailDocument(it, carried, showRemote, dark) },
         cited = carried.keys,
-        warnings = warningsFor(
+        // The server's verdicts first, and the checks worked out here only where it gave
+        // none. See [trustWarnings].
+        warnings = listOfNotNull(virusWarning(virusVerdictOf(body.serverVerdicts))) + trustWarnings(
             fromEmail = fromEmail,
             fromName = fromName,
             html = body.html,
             authenticationResults = body.authenticationResults.joinToString("\n"),
             replyTo = body.replyTo,
             known = known,
+            spamResult = body.serverVerdicts["X-Spam-Result"],
         ),
         images = images,
     )

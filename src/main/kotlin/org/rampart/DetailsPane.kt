@@ -88,6 +88,11 @@ internal fun MessageDetails(
                         ),
                     )
                 }
+                // Only when a scanner wrote something. No chip on a server without one,
+                // because "not checked" on every message says nothing about any of them.
+                virusVerdictOf(body?.serverVerdicts.orEmpty())?.let {
+                    Verdict(Detail("Virus scan", it.says, if (it.infected) Check.FAIL else Check.PASS))
+                }
 
                 Spacer(Modifier.height(14.dp))
                 Heading("Message properties")
