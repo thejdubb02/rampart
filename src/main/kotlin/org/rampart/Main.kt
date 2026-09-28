@@ -1302,11 +1302,10 @@ private fun Reader(
     // message already on screen instead of the one after next.
     var messageMode by remember { mutableStateOf(Settings.messageMode()) }
     var messageScale by remember { mutableStateOf(Settings.messageScale()) }
-    var chatOpen by remember { mutableStateOf(false) }
     var said by remember { mutableStateOf<List<Said>>(emptyList()) }
     var chatThinking by remember { mutableStateOf(false) }
     // Told by the composer and the filter box whenever either has a request of its own
-    // in flight, so the sidebar's Rook button can animate for those too, not only chat.
+    // in flight, so the app bar's Rook button can animate for those too, not only chat.
     var composeBusy by remember { mutableStateOf(false) }
     var filterBusy by remember { mutableStateOf(false) }
     // Read once rather than on every recomposition of the panel: it comes off disk.
@@ -2374,9 +2373,11 @@ private fun Reader(
         place = listOf(here?.first, here?.second?.id, viewingTag, showingResults),
     ) { settingsOpen = false; contactsOpen = false; dashboardOpen = false; calendarOpen = false }
 
-    LaunchedEffect(contactsOpen, sessions.size) {
+    // The page or the panel beside the mail: either one showing is a reason to read again.
+    val contactsShowing = contactsOpen || AppBar.showing(SideTool.CONTACTS)
+    LaunchedEffect(contactsShowing, sessions.size) {
         val key = writingAccount() ?: return@LaunchedEffect
-        if (contacts.isNotEmpty() && !contactsOpen) return@LaunchedEffect
+        if (contacts.isNotEmpty() && !contactsShowing) return@LaunchedEffect
         if (!session(key).jmap.hasContacts()) return@LaunchedEffect
         contactsLoading = true
         contactsError = null
@@ -4425,7 +4426,10 @@ private fun Reader(
             "contacts" -> { contactsOpen = true; settingsOpen = false; dashboardOpen = false; calendarOpen = false }
             "dashboard" -> { dashboardOpen = true; settingsOpen = false; contactsOpen = false; calendarOpen = false }
             "shortcuts" -> showShortcuts = true
-            "assistant" -> chatOpen = !chatOpen
+            "calendar" -> { calendarOpen = true; settingsOpen = false; dashboardOpen = false; contactsOpen = false }
+            // Rook and the other panels beside the mail, the same toggle their button and
+            // their Ctrl key are.
+            "assistant", "side-calendar", "side-contacts", "side-files" -> SideTool.byCommand(id)?.let { AppBar.toggle(it) }
             // Only where there is a conversation. Muting one message is not a thing, and a
             // command that quietly does nothing is worse than one that is not offered.
             "mute" -> selected?.takeIf { thread.size > 1 }?.let { muteConversation(it, !conversationMuted) }
@@ -4461,6 +4465,9 @@ private fun Reader(
             showPalette = true
             return true
         }
+        // Ctrl and a digit opens a panel from the app bar. Also above the typing guard: no
+        // text field does anything with it, and a panel is often wanted mid-sentence.
+        if (AppBar.key(event)) return true
         // Shift is what makes it a question mark on most layouts, so the search key has to
         // say it does not want one or Shift+/ lands in the search box instead of the list.
         if (event.key == Key.Slash && event.isShiftPressed) {
@@ -4881,11 +4888,124 @@ private fun Reader(
             LocalTintRowsByTag provides tintRows,
             LocalLoader provides loader,
         ) {
-        Row(Modifier.fillMaxSize()) {
+        /*
+         * One address book, drawn in two places: the full page, and the panel the app bar
+         * opens beside the mail. Held once so the two cannot drift apart in what saving,
+         * deleting or writing to somebody does.
+         */
+        val contactsPane: @Composable () -> Unit = {
+            ContactsPane(
+                contacts = contacts.map { it.first },
+                loading = contactsLoading,
+                error = contactsError,
+                books = contactBooks,
+                onSave = if (sessions.any { it.jmap.hasContacts() }) { wanted ->
+                    val key = writingAccount()
+                    if (key != null) {
+                        scope.launch {
+                            contactsError = null
+                            try {
+                                withContext(Dispatchers.IO) {
+                                    val jmap = session(key).jmap
+                                    val original = contacts.firstOrNull { it.first.id == wanted.id }?.second
+                                    // A card has to land in a book: Stalwart refuses one
+                                    // that belongs to none. The editor picks it now, so
+                                    // this is only the fallback for a card that arrived
+                                    // from somewhere else without one.
+                                    val books = wanted.bookIds.ifEmpty {
+                                        val known = contactBooks.ifEmpty { jmap.addressBooks() }
+                                        listOfNotNull(
+                                            (known.firstOrNull { it.isDefault } ?: known.firstOrNull())?.id,
+                                        )
+                                    }
+                                    jmap.saveContact(wanted.copy(bookIds = books), original)
+                                    contacts = jmap.contacts()
+                                }
+                            } catch (e: Exception) {
+                                contactsError = whyFailed(e)
+                            }
+                        }
+                    }
+                } else {
+                    null
+                },
+                onDelete = { gone ->
+                    val key = writingAccount()
+                    if (key != null) {
+                        scope.launch {
+                            contactsError = null
+                            try {
+                                withContext(Dispatchers.IO) {
+                                    val jmap = session(key).jmap
+                                    jmap.deleteContact(gone.id)
+                                    contacts = jmap.contacts()
+                                }
+                            } catch (e: Exception) {
+                                contactsError = whyFailed(e)
+                            }
+                        }
+                    }
+                },
+                onWrite = { address ->
+                    contactsOpen = false
+                    sendError = null; sendDetail = null
+                    val account = writingAccount()
+                    write(
+                        account,
+                        Draft(
+                            from = identities[account].orEmpty().firstOrNull()?.email.orEmpty(),
+                            to = address,
+                        ),
+                    )
+                },
+            )
+        }
+        /*
+         * The app bar down the right edge, and the panel it opens beside the mail. What was
+         * already here is the content, in a row of its own that gives the panel its width.
+         * Labelled Row so the early returns below still leave the same block they always did.
+         */
+        WithSideTools(
+            working = chatThinking || summarising || composeBusy || filterBusy,
+            panel = { tool ->
+                when (tool) {
+                    SideTool.ROOK -> ChatPane(
+                        said = said,
+                        thinking = chatThinking,
+                        unavailable = Assistant.whyNot(Assistant.CHAT),
+                        onSend = { ask(it) },
+                        onClear = {
+                            said = emptyList()
+                            // A new conversation has been shown nothing, so it may act on
+                            // nothing until it looks something up again.
+                            chatShown.clear()
+                        },
+                        onClose = { AppBar.close(SideTool.ROOK) },
+                        onSettings = { settingsOpen = true },
+                        model = Assistant.config().model,
+                        agreed = chatAgreed,
+                        onAgree = { Assistant.agree(Assistant.CHAT); chatAgreed = true },
+                        onTyping = { typing = it },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    SideTool.CALENDAR -> {
+                        val key = (here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key)
+                        val open = sessions.firstOrNull { it.key == key }
+                        AgendaPanel(
+                            open?.jmap,
+                            open?.let { shortAccountName(it.account.name, it.account.email) }.orEmpty(),
+                            onOpenCalendar = { AppBar.close(SideTool.CALENDAR); run("calendar") },
+                        )
+                    }
+                    SideTool.CONTACTS -> contactsPane()
+                    SideTool.FILES -> FilesPanel(writingAccount()?.let { session(it) }) { folder ->
+                        AppBar.close(SideTool.FILES)
+                        FilesPage.openAt(folder)
+                    }
+                }
+            },
+        ) Row@{
             Sidebar(
-                asking = chatOpen,
-                working = chatThinking || summarising || composeBusy || filterBusy,
-                onAsk = { chatOpen = !chatOpen },
                 search = {
                     SearchBar(
                         query = query,
@@ -4930,10 +5050,6 @@ private fun Reader(
                 onDashboard = { dashboardOpen = !dashboardOpen; if (dashboardOpen) { contactsOpen = false; settingsOpen = false; calendarOpen = false } },
                 inDashboard = dashboardOpen,
                 inSettings = settingsOpen,
-                onContacts = { contactsOpen = !contactsOpen; if (contactsOpen) { settingsOpen = false; dashboardOpen = false; calendarOpen = false } },
-                inContacts = contactsOpen,
-                onCalendar = { calendarOpen = !calendarOpen; if (calendarOpen) { settingsOpen = false; dashboardOpen = false; contactsOpen = false } },
-                inCalendar = calendarOpen,
                 onAddAccount = onAddAccount,
                 collapsed = collapsed,
                 onToggleCollapsed = { collapsed = !collapsed; Settings.setSidebarCollapsed(collapsed) },
@@ -5009,71 +5125,7 @@ private fun Reader(
                     },
                 )
             } else if (contactsOpen) {
-                ContactsPane(
-                    contacts = contacts.map { it.first },
-                    loading = contactsLoading,
-                    error = contactsError,
-                    books = contactBooks,
-                    onSave = if (sessions.any { it.jmap.hasContacts() }) { wanted ->
-                        val key = writingAccount()
-                        if (key != null) {
-                            scope.launch {
-                                contactsError = null
-                                try {
-                                    withContext(Dispatchers.IO) {
-                                        val jmap = session(key).jmap
-                                        val original = contacts.firstOrNull { it.first.id == wanted.id }?.second
-                                        // A card has to land in a book: Stalwart refuses one
-                                        // that belongs to none. The editor picks it now, so
-                                        // this is only the fallback for a card that arrived
-                                        // from somewhere else without one.
-                                        val books = wanted.bookIds.ifEmpty {
-                                            val known = contactBooks.ifEmpty { jmap.addressBooks() }
-                                            listOfNotNull(
-                                                (known.firstOrNull { it.isDefault } ?: known.firstOrNull())?.id,
-                                            )
-                                        }
-                                        jmap.saveContact(wanted.copy(bookIds = books), original)
-                                        contacts = jmap.contacts()
-                                    }
-                                } catch (e: Exception) {
-                                    contactsError = whyFailed(e)
-                                }
-                            }
-                        }
-                    } else {
-                        null
-                    },
-                    onDelete = { gone ->
-                        val key = writingAccount()
-                        if (key != null) {
-                            scope.launch {
-                                contactsError = null
-                                try {
-                                    withContext(Dispatchers.IO) {
-                                        val jmap = session(key).jmap
-                                        jmap.deleteContact(gone.id)
-                                        contacts = jmap.contacts()
-                                    }
-                                } catch (e: Exception) {
-                                    contactsError = whyFailed(e)
-                                }
-                            }
-                        }
-                    },
-                    onWrite = { address ->
-                        contactsOpen = false
-                        sendError = null; sendDetail = null
-                        val account = writingAccount()
-                        write(
-                            account,
-                            Draft(
-                                from = identities[account].orEmpty().firstOrNull()?.email.orEmpty(),
-                                to = address,
-                            ),
-                        )
-                    },
-                )
+                contactsPane()
             } else if (settingsOpen) {
                 SettingsPane(
                     accounts = sessions.map {
@@ -5515,33 +5567,6 @@ private fun Reader(
                     }
                 }
             }
-            /*
-             * Beside the mail rather than instead of it.
-             *
-             * Every question worth asking it is about something on screen, so a panel that
-             * replaced the screen would mean leaving the thing being asked about.
-             */
-            if (chatOpen) {
-                VerticalDivider()
-                ChatPane(
-                    said = said,
-                    thinking = chatThinking,
-                    unavailable = Assistant.whyNot(Assistant.CHAT),
-                    onSend = { ask(it) },
-                    onClear = {
-                        said = emptyList()
-                        // A new conversation has been shown nothing, so it may act on
-                        // nothing until it looks something up again.
-                        chatShown.clear()
-                    },
-                    onClose = { chatOpen = false },
-                    onSettings = { settingsOpen = true },
-                    model = Assistant.config().model,
-                    agreed = chatAgreed,
-                    onAgree = { Assistant.agree(Assistant.CHAT); chatAgreed = true },
-                    onTyping = { typing = it },
-                )
-            }
         }
         }
         }
@@ -5919,22 +5944,10 @@ internal fun Sidebar(
     here: Pair<String, Mailbox>?,
     collapsed: Boolean = false,
     inSettings: Boolean = false,
-    inContacts: Boolean = false,
     inDashboard: Boolean = false,
-    inCalendar: Boolean = false,
-    /** Whether the assistant panel is showing, so its button says so. */
-    asking: Boolean = false,
-    /** Whether a request to the assistant is actually in flight, from anywhere in the
-     *  app: the chat panel, a thread summary, a compose draft, or a filter being
-     *  written. The button animates for this, separately from [asking], because Rook
-     *  can be working while the panel that started it is closed. */
-    working: Boolean = false,
-    onAsk: () -> Unit = {},
     onToggleCollapsed: () -> Unit = {},
     onSettings: () -> Unit,
-    onContacts: () -> Unit = {},
     onDashboard: () -> Unit = {},
-    onCalendar: () -> Unit = {},
     onAddAccount: () -> Unit,
     onWrite: () -> Unit,
     /** The version line at the bottom is clicked to see what changed. A no-op default so
@@ -6133,24 +6146,8 @@ internal fun Sidebar(
                     )
                 }
             }
-            CalendarSidebarButton(inCalendar, onCalendar, 32.dp)
-            SidebarTooltip("Contacts") {
-                IconButton(onClick = onContacts, modifier = Modifier.size(32.dp)) {
-                    Icon(
-                        RampartIcons.Contacts,
-                        contentDescription = "Contacts",
-                        tint = if (inContacts) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-            }
-            FilesSidebarButton(32.dp)
-            SidebarTooltip("Ask Rook") {
-                IconButton(onClick = onAsk, modifier = Modifier.size(32.dp)) {
-                    RookAvatar(size = 16.dp, ring = asking, working = working)
-                }
-            }
+            // Calendar, Contacts, Files and Rook moved to the app bar on the right, where
+            // they open beside the message instead of in place of it.
             AdminSidebarButton(32.dp)
             SidebarTooltip("Settings") {
                 IconButton(onClick = onSettings, modifier = Modifier.size(32.dp)) {
@@ -6190,24 +6187,6 @@ internal fun Sidebar(
                             else MaterialTheme.colorScheme.outline,
                             modifier = Modifier.size(16.dp),
                         )
-                    }
-                }
-                CalendarSidebarButton(inCalendar, onCalendar, 28.dp)
-                SidebarTooltip("Contacts") {
-                    IconButton(onClick = onContacts, modifier = Modifier.size(28.dp)) {
-                        Icon(
-                            RampartIcons.Contacts,
-                            contentDescription = "Contacts",
-                            tint = if (inContacts) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.size(16.dp),
-                        )
-                    }
-                }
-                FilesSidebarButton(28.dp)
-                SidebarTooltip("Ask Rook") {
-                    IconButton(onClick = onAsk, modifier = Modifier.size(28.dp)) {
-                        RookAvatar(size = 16.dp, ring = asking, working = working)
                     }
                 }
                 AdminSidebarButton(28.dp)

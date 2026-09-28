@@ -434,7 +434,7 @@ internal fun Composer(
      */
     sendExtensions: Set<String> = emptySet(),
     /** Told whenever an AI draft or refine request starts or finishes, so somewhere
-     *  outside this composer, such as the sidebar's Rook button, can show it too. */
+     *  outside this composer, such as the app bar's Rook button, can show it too. */
     onBusy: (Boolean) -> Unit = {},
 ) {
     var draft by remember(initial) { mutableStateOf(initial) }

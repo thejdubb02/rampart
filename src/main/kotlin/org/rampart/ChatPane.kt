@@ -64,9 +64,17 @@ internal fun ChatPane(
     agreed: Boolean = true,
     onAgree: () -> Unit = {},
     onTyping: (Boolean) -> Unit = {},
+    /**
+     * Its size. The fixed width it always had by default; the app bar's panel passes a fill
+     * instead, because there the width is whatever the panel was dragged to.
+     */
+    modifier: Modifier = Modifier.width(360.dp),
 ) {
     var typed by remember { mutableStateOf("") }
     var asking by remember { mutableStateOf<String?>(null) }
+    // The agreement is a dialog, and the message beside this panel is a native view that
+    // would paint straight over it.
+    CoverBody(asking != null)
     val scroll = rememberLazyListState()
 
     // The newest line, whenever one arrives. A transcript that has to be scrolled to be
@@ -76,7 +84,7 @@ internal fun ChatPane(
     }
 
     Column(
-        Modifier.width(360.dp).fillMaxHeight().background(MaterialTheme.colorScheme.background),
+        modifier.fillMaxHeight().background(MaterialTheme.colorScheme.background),
     ) {
         Row(
             Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 8.dp),
