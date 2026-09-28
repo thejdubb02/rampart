@@ -9,6 +9,8 @@ import java.security.MessageDigest
 import java.sql.Connection
 import java.sql.DriverManager
 import kotlin.io.path.createDirectories
+import kotlin.io.path.deleteIfExists
+import kotlin.io.path.exists
 
 /** How many picture bytes one message may keep. Past this the text is kept and the pictures are not. */
 internal const val PICTURE_CACHE_CAP = 5 * 1024 * 1024
@@ -99,6 +101,12 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             return Accounts.file().parent.resolve("mail-$prefix-$hash.db")
         }
 
+        /** The path used before account cache names included a hash. */
+        internal fun legacyFile(account: String): Path {
+            val safe = account.filter { it.isLetterOrDigit() || it == '-' || it == '_' }.ifBlank { "default" }
+            return Accounts.file().parent.resolve("mail-$safe.db")
+        }
+
         /**
          * Opens, and makes the file if it is not there.
          *
@@ -106,7 +114,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
          * key comes from the OS credential store, and a missing one is a reason to run
          * without a local store rather than to write one in the clear.
          */
-        fun open(path: Path, key: String?): Store {
+        fun open(path: Path, key: String?, legacy: Pair<Path, String?>? = null): Store {
             path.parent?.createDirectories()
             /*
              * The key goes in the URL rather than into a `PRAGMA key` afterwards.
@@ -124,7 +132,10 @@ internal class Store(private val connection: Connection) : AutoCloseable {
                 }
             }
             val connection = DriverManager.getConnection(url)
-            return Store(connection).apply { prepare() }
+            return Store(connection).apply {
+                prepare()
+                legacy?.let { (legacyPath, legacyKey) -> migrateTracking(legacyPath, legacyKey) }
+            }
         }
     }
 
@@ -216,6 +227,31 @@ internal class Store(private val connection: Connection) : AutoCloseable {
                 it.execute("ALTER TABLE kept_picture ADD COLUMN used INTEGER NOT NULL DEFAULT 0")
             }
         }
+    }
+
+    /** Copies the only non-cache rows from the database used before cache names changed. */
+    private fun migrateTracking(path: Path, key: String?) {
+        if (!path.exists()) return
+        val copied = runCatching {
+            open(path, key).use { old ->
+                val tracking = old.tracking(Int.MAX_VALUE)
+                val was = connection.autoCommit
+                connection.autoCommit = false
+                try {
+                    tracking.forEach { (tracked, fetches) ->
+                        track(tracked)
+                        recordFetches(fetches)
+                    }
+                    connection.commit()
+                } catch (e: Exception) {
+                    connection.rollback()
+                    throw e
+                } finally {
+                    connection.autoCommit = was
+                }
+            }
+        }.isSuccess
+        if (copied) runCatching { path.deleteIfExists() }
     }
 
     /** Remembers that a message went out tracked. */

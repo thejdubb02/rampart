@@ -344,6 +344,7 @@ private fun built(rule: Rule): JsonObject = buildJsonObject {
  * off without being lost.
  */
 internal fun sieveOf(script: Script): String {
+    if (!script.editable) return script.tail
     val out = StringBuilder()
     val meta = buildJsonObject {
         put("version", 1)

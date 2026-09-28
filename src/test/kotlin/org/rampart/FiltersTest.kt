@@ -94,7 +94,7 @@ class FiltersTest {
         assertEquals(null, theOneRunning(emptyList()))
     }
 
-    /** A rule this build does not understand is still written back exactly as it came. */
+    /** A rule this build does not understand leaves the whole script read-only and unchanged. */
     @Test
     fun `a rule we do not understand is not rebuilt`() {
         val odd = """
@@ -104,7 +104,7 @@ class FiltersTest {
             @metadata:end */
         """.trimIndent()
         val script = scriptOf(odd)
-        assertFalse(script.rules.single().understood)
-        assertContains(sieveOf(script), "list_id")
+        assertFalse(script.editable)
+        assertEquals(odd, sieveOf(script))
     }
 }

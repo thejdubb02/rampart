@@ -374,7 +374,10 @@ internal class Session(val account: SavedAccount, val jmap: MailBackend) {
      */
     val store: Store? by lazy {
         runCatching {
-            Secrets.mailKey(account)?.let { Store.open(Store.file(key), it) }
+            Secrets.mailKey(account)?.let { mailKey ->
+                val legacy = Secrets.legacyMailKey(account)?.let { Store.legacyFile(key) to it }
+                Store.open(Store.file(key), mailKey, legacy)
+            }
         }.getOrNull()
     }
 }

@@ -4,6 +4,7 @@ import java.lang.reflect.Modifier
 import java.nio.file.Files
 import java.nio.file.Path
 import java.sql.DriverManager
+import java.time.Instant
 import kotlin.io.path.deleteIfExists
 import kotlin.io.path.readBytes
 import kotlin.test.Test
@@ -302,6 +303,30 @@ class StoreTest {
             Store.open(path, null).use { assertEquals(3, it.messages("inbox").size) }
         } finally {
             path.deleteIfExists()
+        }
+    }
+
+    @Test
+    fun `tracking rows move from the legacy database`() {
+        val directory = Files.createTempDirectory("rampart-store")
+        val legacy = directory.resolve("mail-old.db")
+        val current = directory.resolve("mail-new.db")
+        val tracked = Tracked("token", "message", "account", "reader@example.org", "Subject", Instant.ofEpochMilli(10))
+        val fetch = Fetch("token", Instant.ofEpochMilli(20), "Mail", "network")
+        try {
+            Store.open(legacy, null).use {
+                it.track(tracked)
+                it.recordFetches(listOf(fetch))
+            }
+
+            Store.open(current, null, legacy to null).use {
+                val copied = it.tracking().single()
+                assertEquals(tracked.copy(account = ""), copied.first)
+                assertEquals(listOf(fetch), copied.second)
+            }
+            assertFalse(Files.exists(legacy))
+        } finally {
+            directory.toFile().deleteRecursively()
         }
     }
 

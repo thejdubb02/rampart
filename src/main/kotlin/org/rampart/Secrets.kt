@@ -113,6 +113,10 @@ object Secrets {
     internal fun mailKeyAccount(account: SavedAccount) =
         SavedAccount("${account.name} (local mail)", account.server, "db:${account.email}")
 
+    /** The cache key identity used before credentials were separated by account. */
+    fun legacyMailKey(account: SavedAccount): String? =
+        if (available()) load(SavedAccount("\${account.name} (local mail)", account.server, "db:\${account.email}")) else null
+
     /**
      * The token Rampart uses to read opens back from the companion server.
      *

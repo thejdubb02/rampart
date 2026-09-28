@@ -41,17 +41,22 @@ internal class JsonStore(private val name: String) {
 
     fun read(): JsonObject = synchronized(lock) { readFile() }
 
-    fun write(change: MutableMap<String, JsonElement>.() -> Unit) = synchronized(lock) {
-        val updated = readFile().toMutableMap().apply(change)
-        val path = file()
-        path.parent?.createDirectories()
-        val temp = Files.createTempFile(path.parent, "$name.", ".new")
-        try {
-            temp.writeText(Json.encodeToString(JsonObject.serializer(), JsonObject(updated)))
-            Files.move(temp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-        } finally {
-            Files.deleteIfExists(temp)
-        }
+    fun write(change: MutableMap<String, JsonElement>.() -> Unit): Boolean = synchronized(lock) {
+        runCatching {
+            val updated = readFile().toMutableMap().apply(change)
+            val path = file()
+            path.parent?.createDirectories()
+            val temp = Files.createTempFile(path.parent, "$name.", ".new")
+            try {
+                temp.writeText(Json.encodeToString(JsonObject.serializer(), JsonObject(updated)))
+                Files.move(temp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            } finally {
+                Files.deleteIfExists(temp)
+            }
+        }.onFailure {
+            // A full or read-only disk loses this one change, never the application.
+            System.err.println("Could not save $name: $it")
+        }.isSuccess
     }
 
     private fun readFile(): JsonObject = runCatching {

@@ -7,7 +7,7 @@ import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFails
+import kotlin.test.assertFalse
 
 class JsonStoreTest {
     @Test
@@ -45,7 +45,7 @@ class JsonStoreTest {
         val file = Files.createTempFile("rampart-store", ".file")
         try {
             System.setProperty("rampart.config.dir", file.toString())
-            assertFails { JsonStore("test.json").write {} }
+            assertFalse(JsonStore("test.json").write {})
         } finally {
             if (previous == null) System.clearProperty("rampart.config.dir")
             else System.setProperty("rampart.config.dir", previous)
