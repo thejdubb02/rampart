@@ -1,7 +1,12 @@
 package org.rampart
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,6 +21,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -67,6 +74,7 @@ internal fun MessageDetails(
                 Heading("Authentication and security")
                 val checks = authChecks(body?.authenticationResults?.joinToString("\n")) +
                     listOfNotNull(senderHost(body?.received.orEmpty()))
+                Summary(checks.filter { it.label in SENDER_CHECKS })
                 checks.forEach { Verdict(it) }
                 spamScore?.let {
                     Verdict(
@@ -129,21 +137,26 @@ private fun Line(label: String, value: String, mono: Boolean = false) {
  */
 @Composable
 private fun Verdict(detail: Detail) {
-    val colour = when (detail.verdict) {
-        Check.PASS -> MaterialTheme.colorScheme.primary
-        Check.FAIL -> MaterialTheme.colorScheme.error
-        Check.MISSING -> MaterialTheme.colorScheme.outline
-    }
+    val colour = verdictColour(detail.verdict)
     Row(
-        Modifier.padding(bottom = 5.dp),
+        Modifier
+            .padding(bottom = 5.dp)
+            .clip(RoundedCornerShape(50))
+            .background(colour.copy(alpha = 0.12f))
+            .padding(horizontal = 8.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            if (detail.verdict == Check.FAIL) RampartIcons.Close else RampartIcons.Tick,
-            contentDescription = null,
-            tint = colour,
-            modifier = Modifier.width(13.dp).height(13.dp),
-        )
+        if (detail.verdict == Check.MISSING) {
+            // An empty ring rather than a tick: a tick beside "not checked" reads as a pass.
+            Box(Modifier.size(11.dp).border(1.5.dp, colour, CircleShape))
+        } else {
+            Icon(
+                if (detail.verdict == Check.FAIL) RampartIcons.Close else RampartIcons.Tick,
+                contentDescription = null,
+                tint = colour,
+                modifier = Modifier.width(13.dp).height(13.dp),
+            )
+        }
         Spacer(Modifier.width(7.dp))
         Text(
             detail.label,
@@ -158,6 +171,7 @@ private fun Verdict(detail: Detail) {
                 Check.MISSING -> "not checked"
             },
             style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
             color = colour,
         )
         if (detail.value.isNotBlank()) {
@@ -170,3 +184,60 @@ private fun Verdict(detail: Detail) {
         }
     }
 }
+
+/** The three checks that say whether the sender is who they claim to be. */
+private val SENDER_CHECKS = setOf("SPF", "DKIM", "DMARC")
+
+/**
+ * One line above the checks that says what they add up to, so the answer does not have to
+ * be worked out from three acronyms.
+ *
+ * Any failure is red, because a forged sender is the thing this panel exists to catch.
+ * All three passing is green. Anything in between is amber: not proof of a forgery, but not
+ * proof of the sender either. Nothing checked at all is grey, which is ordinary for mail
+ * that never left your own server.
+ */
+@Composable
+private fun Summary(checks: List<Detail>) {
+    if (checks.isEmpty()) return
+    val verdicts = checks.map { it.verdict }
+    val (colour, text) = when {
+        Check.FAIL in verdicts -> verdictColour(Check.FAIL) to
+            "Failed a sender check. This may not be from who it says. Be careful with links and attachments."
+        verdicts.all { it == Check.PASS } -> verdictColour(Check.PASS) to "Sender verified."
+        verdicts.all { it == Check.MISSING } -> MaterialTheme.colorScheme.outline to
+            "No sender checks were recorded for this message."
+        else -> amber() to "Only partly verified. Treat unexpected requests with care."
+    }
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = FontWeight.SemiBold,
+        color = colour,
+        modifier = Modifier
+            .padding(bottom = 8.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(colour.copy(alpha = 0.12f))
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+    )
+}
+
+/**
+ * Green for a pass, red for a failure, amber for not checked.
+ *
+ * Not the theme's primary colour for a pass: in Rampart that is red, and a passing check
+ * drawn in red reads as a warning. The greens and ambers are picked per light or dark
+ * background so they keep their contrast on either.
+ */
+@Composable
+private fun verdictColour(check: Check): Color = when (check) {
+    Check.PASS -> if (dark()) Color(0xFF3FB950) else Color(0xFF1A7F37)
+    Check.FAIL -> MaterialTheme.colorScheme.error
+    Check.MISSING -> amber()
+}
+
+@Composable
+private fun amber(): Color = if (dark()) Color(0xFFD29922) else Color(0xFF9A6700)
+
+@Composable
+private fun dark(): Boolean = MaterialTheme.colorScheme.surface.luminance() < 0.5f
