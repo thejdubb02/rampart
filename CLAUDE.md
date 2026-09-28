@@ -9,6 +9,12 @@ public**, so everything here is written to be read, and run, by strangers.
   already built that app and builds it faster than we could. Rampart exists for the
   two things Sterna does not do: desktop, and real server administration. Read
   `docs/architecture.md` before arguing with this.
+- **Speak Stalwart natively. If the server can hold it, the server holds it.** Rampart
+  is built for people who run Stalwart, so anything Stalwart or JMAP can store or do
+  (signatures, filters, away replies, scheduled send, spam verdicts, and whatever comes
+  next) lives on the server and Rampart is the editor for it. A feature that only works
+  while Rampart is open, or only on one computer, when the server could have done it is
+  a bug. Local-only is allowed only as the fallback for servers that cannot, and says so.
 - **JMAP first, IMAP and SMTP second, and both ship.** This said "JMAP only" until
   2026-09-17, on the reasoning that IMAP cannot carry settings, filters, aliases or
   admin. All true, and beside the point: a client that only talks to Stalwart is a
