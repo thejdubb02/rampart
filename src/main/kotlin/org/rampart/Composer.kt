@@ -526,7 +526,7 @@ internal fun Composer(
      * still worth asking about when the message will not go for an hour.
      */
     fun askThen(sendAt: Long?, go: () -> Unit) {
-        if (sending || draft.recipients.isEmpty()) return
+        if (sending || attaching || draft.recipients.isEmpty()) return
         val question = askBeforeSend(
             draft.subject,
             draft.body,
@@ -647,7 +647,7 @@ internal fun Composer(
                 true
             }
             event.key == Key.Escape -> {
-                if (!sending) onDiscard()
+                if (!sending && !attaching) onDiscard()
                 true
             }
             event.isCtrlPressed && event.key == Key.B -> format("**", "**")
@@ -771,20 +771,20 @@ internal fun Composer(
                     TextButton(onClick = { onFull(!full) }) {
                         Text(if (full) "Shrink" else "Full screen", maxLines = 1)
                     }
-                    TextButton(onClick = onDiscard, enabled = !sending) { Text("Discard", maxLines = 1) }
+                    TextButton(onClick = onDiscard, enabled = !sending && !attaching) { Text("Discard", maxLines = 1) }
                     // maxLines = 1 on every label in this row: none of them had it, so at a
                     // dragged-narrow panel width Compose was free to wrap each one, Send
                     // included, one letter per line instead of just crowding the row.
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Button(
                             onClick = ::send,
-                            enabled = !sending && draft.recipients.isNotEmpty(),
+                            enabled = !sending && !attaching && draft.recipients.isNotEmpty(),
                         ) { Text(if (sending) "Sending" else "Send", maxLines = 1) }
                         if (onSchedule != null) {
                             Box {
                                 IconButton(
                                     onClick = { scheduleMenu = true },
-                                    enabled = !sending && draft.recipients.isNotEmpty(),
+                                    enabled = !sending && !attaching && draft.recipients.isNotEmpty(),
                                     modifier = Modifier.size(40.dp),
                                 ) {
                                     Icon(
@@ -1217,6 +1217,7 @@ internal fun Composer(
             confirmButton = {
                 TextButton(
                     onClick = {
+                        if (attaching) return@TextButton
                         val at = heldSendAt
                         warning = null
                         heldSendAt = null

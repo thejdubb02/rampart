@@ -164,9 +164,23 @@ internal const val CID_FETCH_CAP = 5L * 1024 * 1024
 internal fun cidBytes(backend: MailBackend, body: Body, attachments: List<Attachment>): Map<String, ByteArray> {
     val parts = cidImages(body.html, attachments)
     if (parts.isEmpty() || parts.sumOf { it.size } > CID_FETCH_CAP) return emptyMap()
-    return parts.mapNotNull { part ->
-        runCatching { backend.blob(part) }.getOrNull()?.let { part.blobId to it }
-    }.toMap()
+    return fetchCidBytes(parts) { part, remaining -> backend.blob(part, remaining) }
+}
+
+internal fun fetchCidBytes(
+    parts: List<Attachment>,
+    fetch: (Attachment, Long) -> ByteArray?,
+): Map<String, ByteArray> {
+    var remaining = CID_FETCH_CAP
+    return buildMap {
+        for (part in parts) {
+            if (remaining <= 0) break
+            val bytes = runCatching { fetch(part, remaining) }.getOrNull() ?: continue
+            if (bytes.size.toLong() > remaining) continue
+            put(part.blobId, bytes)
+            remaining -= bytes.size
+        }
+    }
 }
 
 /**
@@ -203,7 +217,7 @@ internal fun prepareReading(
     }.toMap()
     return Reading(
         page = body.html?.let { emailDocument(it, carried, showRemote, dark) },
-        cited = citedCids(body.html),
+        cited = carried.keys,
         warnings = warningsFor(
             fromEmail = fromEmail,
             fromName = fromName,

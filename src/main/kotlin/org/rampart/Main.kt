@@ -186,6 +186,16 @@ private data class ComposeSession(
     val saves: DraftSaves,
 )
 
+private data class ListRequest(
+    val account: String,
+    val mailbox: String,
+    val query: String,
+    val results: Boolean,
+    val tag: String?,
+    val filters: QuickFilters,
+    val offset: Int,
+)
+
 /**
  * The update, as a line in the window's own bottom bar rather than a card over the mail.
  *
@@ -1070,6 +1080,7 @@ private fun Reader(
     var vacation by remember { mutableStateOf<Vacation?>(null) }
     var vacationError by remember { mutableStateOf<String?>(null) }
     var composing by remember { mutableStateOf<ComposeSession?>(null) }
+    var composeEpoch by remember { mutableStateOf(0) }
     var sending by remember { mutableStateOf(false) }
     var sendError by remember { mutableStateOf<String?>(null) }
     var sendDetail by remember { mutableStateOf<String?>(null) }
@@ -1178,7 +1189,7 @@ private fun Reader(
      * off. Cleared as soon as a later load does not need it.
      */
     var filterNote by remember { mutableStateOf<String?>(null) }
-    var paper by remember { mutableStateOf(false) }
+    var paperMessages by remember { mutableStateOf<Set<CardKey>>(emptySet()) }
     // Not remembered: a panel is the right default every time, and a message that needed
     // the whole window last week is not a reason to open the next one that way.
     var composeFull by remember { mutableStateOf(false) }
@@ -1209,6 +1220,7 @@ private fun Reader(
     /** The message whose row asked for a filter, or null while that dialog is closed. */
     var filterFor by remember { mutableStateOf<Summary?>(null) }
     var loadingMore by remember { mutableStateOf(false) }
+    var listEpoch by remember { mutableStateOf(0) }
     // Set when a page comes back short, so the bottom of a folder is not re-queried forever.
     var exhausted by remember { mutableStateOf(false) }
     val searchField = remember { FocusRequester() }
@@ -1420,16 +1432,21 @@ private fun Reader(
      * the first autosave replace that draft, and the earlier message is gone.
      */
     fun write(account: String?, draft: Draft, savedId: String? = null) {
-        composing = ComposeSession(account, draft, DraftSaves(savedId))
+        val epoch = ++composeEpoch
+        if (account == null) {
+            composing = ComposeSession(account, draft, DraftSaves(savedId))
+            return
+        }
         // A signature edited in Bulwark is picked up when a composer opens.
-        // Asked in the background so opening is not held up. The draft already
-        // on screen is remembered for this session, so a fresh list does not
-        // replace what is being typed.
-        if (account != null) scope.launch {
+        // Resolve it before the session is made, so refreshing the identities cannot
+        // replace text after somebody has started typing.
+        scope.launch {
             val fresh = withContext(Dispatchers.IO) {
                 runCatching { session(account).jmap.identities() }.getOrNull()
-            } ?: return@launch
-            identities = identities + (account to fresh)
+            }
+            if (epoch != composeEpoch) return@launch
+            if (fresh != null) identities = identities + (account to fresh)
+            composing = ComposeSession(account, draft, DraftSaves(savedId))
         }
     }
 
@@ -1522,7 +1539,7 @@ private fun Reader(
         "dark" -> true
         "light" -> false
         else -> MaterialTheme.colorScheme.surface.luminance() < 0.5f
-    } && !paper
+    }
 
     fun knownDomains(): Set<String> =
         books.values.flatten().map { domainOf(it.email) }.filter { it.isNotBlank() }.toSet()
@@ -1847,6 +1864,12 @@ private fun Reader(
         // A toggle that cannot be answered must not stay on, or the row would say it is
         // filtering a list that was fetched without it.
         if (quick.attachment && !canAttach) quick = quick.copy(attachment = false)
+        val request = ListRequest(key, mailbox.id, query, showingResults, viewingTag, quick, 0)
+        val epoch = ++listEpoch
+        loadingMore = false
+        fun live() = epoch == listEpoch && here?.let {
+            ListRequest(it.first, it.second.id, query, showingResults, viewingTag, quick, 0)
+        } == request
         val asked = quick.asked(canAttach)
         val known = if (asked.knownSender && key != ALL_ACCOUNTS) {
             io { knownAddresses(key, memory) }.orEmpty()
@@ -1872,6 +1895,7 @@ private fun Reader(
                 val kept = session(key).store ?: return@io null
                 kept.messages(mailbox.id, filters = asked, knownSenders = known)
             }
+            if (!live()) return
             filterNote = if (found == null) {
                 "This folder has no saved copy, so that filter cannot be answered."
             } else {
@@ -1890,6 +1914,7 @@ private fun Reader(
         // at once, filtered the same way the server is about to be asked.
         val cached = if (key == ALL_ACCOUNTS || showingResults || viewingTag != null || asked.attachment) emptyList()
         else io { session(key).store?.messages(mailbox.id, filters = asked, knownSenders = known) }.orEmpty()
+        if (!live()) return
         if (cached.isNotEmpty()) emails = cached
         /*
          * A spinner only where there is nothing to look at.
@@ -1922,6 +1947,7 @@ private fun Reader(
         // cached: a first read has to leave a cursor behind or the second one cannot skip.
         val state = if (plain) io { session(key).jmap.mailState() } else null
         val savedCursor = if (state != null) io { session(key).store?.cursor(mailbox.id) } else null
+        if (!live()) return
         // An empty cache with a matching cursor is a folder the server has already
         // told us is empty. Skipping only when the cache holds rows would fetch that
         // folder again on every refresh.
@@ -1930,9 +1956,9 @@ private fun Reader(
             exhausted = cached.size < 100
             return
         }
-        val tagging = viewingTag
+        val tagging = request.tag
         var freshPage: List<Summary>? = null
-        emails = if (tagging != null) {
+        val loadedEmails = if (tagging != null) {
             /*
              * A tag is asked of every account that has it, and the answers are put together.
              *
@@ -1954,22 +1980,24 @@ private fun Reader(
             withContext(Dispatchers.IO) { everyInbox(memory, asked) }
         } else {
             val fetched = io {
-                if (showingResults && query.isNotBlank()) {
-                    session(key).jmap.search(query, null, except = searchExcept(key))
+                if (request.results && request.query.isNotBlank()) {
+                    session(key).jmap.search(request.query, null, except = searchExcept(key))
                 } else {
                     quickPage(session(key).jmap, session(key).store, mailbox.id, asked, known)
                 }
             }
-            if (!showingResults) freshPage = fetched
+            if (!request.results) freshPage = fetched
             fetched
                 // The server is still the authority on search, because it can see mail we
                 // have never fetched. The local copy is the answer when it cannot be
                 // reached, which is the difference between "no results" and "no network".
-                ?: io { session(key).store?.search(query) }.takeIf { showingResults && query.isNotBlank() }
+                ?: io { session(key).store?.search(request.query) }.takeIf { request.results && request.query.isNotBlank() }
                 // A refresh that failed is not an empty folder. Blanking the rows
                 // that were already there is what a spinner over a loaded list did.
-                ?: if (showingResults) emptyList() else emails
+                ?: if (request.results) emptyList() else emails
         }
+        if (!live()) return
+        emails = loadedEmails
         loading = false
         exhausted = false
         learnFrom(emails)
@@ -2014,6 +2042,9 @@ private fun Reader(
         val memory = books
         val canAttach = session(key).jmap !is Imap
         val asked = quick.asked(canAttach)
+        val offset = emails.size
+        val request = ListRequest(key, mailbox.id, query, showingResults, viewingTag, quick, offset)
+        val epoch = listEpoch
         scope.launch {
             Diagnostics.time(Metric.LIST_PAGE_LOAD) {
                 val page = io {
@@ -2024,9 +2055,13 @@ private fun Reader(
                         mailbox.id,
                         asked,
                         known,
-                        from = emails.size,
+                        from = offset,
                     )
                 }.orEmpty()
+                val current = here?.let {
+                    ListRequest(it.first, it.second.id, query, showingResults, viewingTag, quick, emails.size)
+                }
+                if (epoch != listEpoch || current != request) return@time
                 // Ids already on screen are dropped rather than trusted: mail arriving between
                 // two pages shifts every position down, and the seam is where it shows up twice.
                 val known = emails.map { it.id }.toSet()
@@ -2057,15 +2092,18 @@ private fun Reader(
      * where they go, never Trash. Mute means stop bothering me, not throw it away.
      */
     suspend fun hush(key: String, ids: List<String>) {
-        withContext(Dispatchers.IO) {
+        val seen = withContext(Dispatchers.IO) {
             runCatching { session(key).jmap.setKeyword(ids, "\$seen", true) }
-            folderFor("archive", mailboxes[key].orEmpty())?.id?.let { into ->
-                runCatching { session(key).jmap.move(ids, into) }
-                runCatching { session(key).store?.forget(ids) }
-            }
         }
-        val gone = ids.toSet()
-        emails = emails.filterNot { it.sameMail(key, gone) }
+        seen.exceptionOrNull()?.let { report("Muted messages could not be marked read.", whyFailed(it)) }
+        val into = folderFor("archive", mailboxes[key].orEmpty())?.id ?: return
+        val moved = withContext(Dispatchers.IO) { runCatching { session(key).jmap.move(ids, into) } }
+        if (moved.isFailure) {
+            report("Muted messages could not be archived.", whyFailed(moved.exceptionOrNull()!!))
+            return
+        }
+        withContext(Dispatchers.IO) { runCatching { session(key).store?.forget(ids) } }
+        emails = emails.filterNot { it.sameMail(key, ids.toSet()) }
     }
 
     /**
@@ -2478,7 +2516,7 @@ private fun Reader(
     LaunchedEffect(selected) {
         val message = selected ?: return@LaunchedEffect
         val key = accountOf(message) ?: return@LaunchedEffect
-        paper = false
+        paperMessages = emptySet()
         invitation = null
         answering = null
         // Read here rather than during composition: it comes off disk, and a file read on
@@ -2585,10 +2623,11 @@ private fun Reader(
             val card = cardFor(message)
             // The card's own list when this open already fetched it. Otherwise ask now,
             // so a draft is not opened with its files missing and then saved that way.
-            val parts = if (card.loaded) card.attachments else withContext(Dispatchers.IO) {
-                runCatching { session(key).jmap.attachments(message.id) }.getOrDefault(emptyList())
+            if (!card.loaded || card.body == null) {
+                report("That draft could not be opened.", card.bodyError)
+                return@LaunchedEffect
             }
-            write(key, draftOf(message, card.body, from, parts), message.id)
+            write(key, draftOf(message, card.body, from, card.attachments), message.id)
             return@LaunchedEffect
         }
 
@@ -2739,13 +2778,24 @@ private fun Reader(
      * whether it is spam, and stamping every filed message would teach the classifier that
      * everything ever tidied away was ham.
      */
-    suspend fun sayJunk(key: String, ids: List<String>, from: String?, into: String) {
+    suspend fun sayJunk(key: String, ids: List<String>, from: String?, into: String): Boolean {
         val junk = folderFor("junk", mailboxes[key].orEmpty())?.id
-        val spam = junkVerdict(junk, from, into) ?: return
-        io {
-            session(key).jmap.setKeyword(ids, "\$junk", spam)
-            session(key).jmap.setKeyword(ids, "\$notjunk", !spam)
+        val spam = junkVerdict(junk, from, into) ?: return true
+        val first = withContext(Dispatchers.IO) {
+            runCatching { session(key).jmap.setKeyword(ids, "\$junk", spam) }
         }
+        if (first.isFailure) {
+            report("The spam verdict could not be saved.", whyFailed(first.exceptionOrNull()!!))
+            return false
+        }
+        val second = withContext(Dispatchers.IO) {
+            runCatching { session(key).jmap.setKeyword(ids, "\$notjunk", !spam) }
+        }
+        if (second.isFailure) {
+            report("Only part of the spam verdict was saved. The message was not moved.", whyFailed(second.exceptionOrNull()!!))
+            return false
+        }
+        return true
     }
 
     /**
@@ -2768,7 +2818,7 @@ private fun Reader(
     }
 
     suspend fun carryOut(key: String, message: Summary, into: String, from: String?, verb: String) {
-        sayJunk(key, listOf(message.id), from, into)
+        if (!sayJunk(key, listOf(message.id), from, into)) return
         // The row stays until the server accepts the move. A refusal used to take
         // it off the list and offer Undo, and the message came back on the next
         // refresh because the server had never moved it.
@@ -2841,7 +2891,10 @@ private fun Reader(
             val due = until.dueAt(ZonedDateTime.now()).toInstant()
             val from = sourceFolder(key)
             if (changed(key) { session(key).jmap.setKeyword(listOf(message.id), snoozeKeyword(due), true) } == null) return@launch
-            if (changed(key) { session(key).jmap.move(listOf(message.id), folder) } == null) return@launch
+            if (changed(key) { session(key).jmap.move(listOf(message.id), folder) } == null) {
+                changed(key) { session(key).jmap.setKeyword(listOf(message.id), snoozeKeyword(due), false) }
+                return@launch
+            }
             io { session(key).store?.forget(listOf(message.id)) }
             advancePast { it.sameMail(message) }
             emails = emails.filterNot { it.sameMail(message) }
@@ -2865,18 +2918,33 @@ private fun Reader(
         val waiting = io { session(key).jmap.emails(folder.id, limit = 200) }.orEmpty()
         val due = waiting.filter { dueBack(it.keywords, now) }
         if (due.isEmpty()) return
-        withContext(Dispatchers.IO) {
-            due.forEach { message ->
-                snoozedIn(message.keywords)?.let {
-                    runCatching { session(key).jmap.setKeyword(listOf(message.id), it.keyword, false) }
-                }
+        val results = withContext(Dispatchers.IO) {
+            due.map { message ->
+                val moved = runCatching { session(key).jmap.move(listOf(message.id), inbox.id) }
+                val followups = mutableListOf<Result<*>>()
+                if (moved.isSuccess) {
+                    snoozedIn(message.keywords)?.let {
+                        followups += runCatching {
+                            session(key).jmap.setKeyword(listOf(message.id), it.keyword, false)
+                        }
+                    }
                 // Unread on the way back, because the point of snoozing was to deal with it
                 // later and a message that returns already read returns invisible.
-                runCatching { session(key).jmap.setKeyword(listOf(message.id), "\$seen", false) }
-                runCatching { session(key).jmap.move(listOf(message.id), inbox.id) }
+                    followups += runCatching {
+                        session(key).jmap.setKeyword(listOf(message.id), "\$seen", false)
+                    }
+                }
+                Triple(message, moved, followups)
             }
         }
-        io { session(key).store?.forget(due.map { it.id }) }
+        val moved = results.filter { it.second.isSuccess }.map { it.first.id }
+        if (moved.isNotEmpty()) io { session(key).store?.forget(moved) }
+        val failure = results.firstNotNullOfOrNull { (_, move, followups) ->
+            move.exceptionOrNull() ?: followups.firstNotNullOfOrNull { it.exceptionOrNull() }
+        }
+        failure?.let {
+            report("Some snoozed messages could not be returned.", whyFailed(it))
+        }
         refreshFolders(key)
     }
 
@@ -2982,6 +3050,7 @@ private fun Reader(
         // Measured from here, not from an undo wait the caller may have done first:
         // that pause is deliberate, not server latency, and counting it would make
         // every send look exactly [Settings.undoSeconds] slower than it was.
+        var cleanupDraft: String? = null
         val notice = Diagnostics.time(Metric.SEND_COMPOSE_TO_SENT) {
             withContext(Dispatchers.IO) {
                 val filed = account.jmap.send(outgoing, identity, draftsId, sentId)
@@ -2991,8 +3060,22 @@ private fun Reader(
                 tracked?.let { account.store?.track(it) }
                 // The sent message is its own copy in Sent, so the working copy in
                 // Drafts is now a duplicate of mail already gone.
-                draftId?.let { runCatching { account.jmap.destroy(listOf(it)) } }
-                filed
+                val cleanup = draftId?.let { id ->
+                    runCatching { account.jmap.destroy(listOf(id)) }.exceptionOrNull()
+                }
+                if (cleanup != null) cleanupDraft = draftId
+                listOfNotNull(
+                    filed,
+                    cleanup?.let {
+                        "The message was sent, but its working draft could not be removed. Try deleting it from Drafts."
+                    },
+                ).joinToString(" ").ifBlank { null }
+            }
+        }
+        cleanupDraft?.let { id ->
+            scope.launch {
+                delay(5_000)
+                withContext(Dispatchers.IO) { runCatching { account.jmap.destroy(listOf(id)) } }
             }
         }
         // Who you write to counts for more than who writes to you, so a sent
@@ -3245,8 +3328,13 @@ private fun Reader(
 
         override fun markRead(ids: List<String>, read: Boolean): Int {
             if (ids.isEmpty()) return 0
-            if (runCatching { session(key).jmap.setKeyword(ids, "\$seen", read) }.isFailure) return 0
-            scope.launch { setSeen(key, ids.toSet(), read) }
+            val changed = runCatching { session(key).jmap.setKeyword(ids, "\$seen", read) }
+            if (changed.isFailure) return 0
+            noteState(key, changed.getOrNull())
+            scope.launch {
+                paintSeen(key, ids.toSet(), read)
+                rememberSeen(key, ids.toSet())
+            }
             return ids.size
         }
 
@@ -3417,7 +3505,7 @@ private fun Reader(
         if (ids.isEmpty()) return
         val from = sourceFolder(key)
         scope.launch {
-            sayJunk(key, ids, from, target)
+            if (!sayJunk(key, ids, from, target)) return@launch
             if (changed(key) { session(key).jmap.move(ids, target) } == null) return@launch
             io { session(key).store?.forget(ids) }
             val gone = ids.toSet()
@@ -3869,6 +3957,7 @@ private fun Reader(
         Message(
             summary = cardSummary,
             body = card.body,
+            accountKey = key.orEmpty(),
             onReply = { all ->
                 sendError = null; sendDetail = null
                 val account = key ?: writingAccount()
@@ -4005,12 +4094,15 @@ private fun Reader(
             savedTo = card.saved,
             source = card.source,
             onSource = { toggleSource(cardSummary) },
-            paper = paper,
+            paper = CardKey(key.orEmpty(), cardSummary.id) in paperMessages,
             messageMode = messageMode,
             messageScale = messageScale,
             // Per message rather than a setting: it is a look at this one, and having
             // to turn it back off in settings would make it a mode instead.
-            onPaper = { paper = it },
+            onPaper = { on ->
+                val slot = CardKey(key.orEmpty(), cardSummary.id)
+                paperMessages = if (on) paperMessages + slot else paperMessages - slot
+            },
             onSaveSource = {
                 val text = card.source
                 if (text != null) {
@@ -4286,8 +4378,8 @@ private fun Reader(
             // is the one used here without anything having to be imported or kept in step.
             // Computed from the account captured when writing started, so a later change
             // of selection does not hand the composer a new initial draft.
-            // Remembered per session: the composer resets what has been typed whenever
-            // initial changes, and a refetched identity must not count as a change.
+            // Remembered per session: the identities were refreshed before this session
+            // was constructed, and later changes must not replace what is being typed.
             initial = remember(writing) { draftOpening(writing.draft, accountIdentities, Settings.signatureAboveQuote()) },
             sending = sending,
             error = sendError,
@@ -4946,11 +5038,11 @@ private fun Reader(
                             }
                         if (byAccount.isNotEmpty()) {
                             scope.launch {
-                                byAccount.forEach { (key, move, target) ->
+                                val ready = byAccount.filter { (key, move, target) ->
                                     sayJunk(key, move.ids, move.fromMailboxId, target)
                                 }
                                 val results = withContext(Dispatchers.IO) {
-                                    byAccount.map { (key, move, target) ->
+                                    ready.map { (key, move, target) ->
                                         Triple(key, move, runCatching { session(key).jmap.move(move.ids, target) })
                                     }
                                 }
@@ -5157,15 +5249,23 @@ private fun Reader(
                             scope.launch {
                                 // Every account is put back, and the notice only clears if they all
                                 // did. One that failed leaves the offer up rather than pretending.
-                                val allBack = withContext(Dispatchers.IO) {
-                                    last.moves.all { move ->
-                                        runCatching { session(move.accountKey).jmap.move(move.ids, move.fromMailboxId) }
-                                            .isSuccess
+                                val results = withContext(Dispatchers.IO) {
+                                    last.moves.map { move ->
+                                        move to runCatching {
+                                            session(move.accountKey).jmap.move(move.ids, move.fromMailboxId)
+                                        }
                                     }
                                 }
-                                if (allBack) {
+                                val failed = results.filter { it.second.isFailure }.map { it.first }
+                                if (failed.isEmpty()) {
                                     undo = null
                                     refreshNow()
+                                } else {
+                                    undo = Undoable(failed, last.what)
+                                    report(
+                                        "Some messages could not be put back.",
+                                        whyFailed(results.first { it.second.isFailure }.second.exceptionOrNull()!!),
+                                    )
                                 }
                             }
                         },
@@ -7329,6 +7429,8 @@ internal data class SummariseActions(
 internal fun Message(
     summary: Summary?,
     body: Body?,
+    /** The account that owns [summary], because message ids are only unique inside it. */
+    accountKey: String = summary?.account.orEmpty(),
     onReply: (all: Boolean) -> Unit = {},
     replyAll: Boolean = false,
     /** Why the message would not open, when it would not. */
@@ -8161,7 +8263,11 @@ internal fun Message(
                         dark = darkWindow && !paper,
                         scale = messageScale,
                         messageId = summary.id,
-                        initialHeight = openingHeight(messageHeights.of(summary.id), paneHeight),
+                        accountKey = accountKey,
+                        initialHeight = openingHeight(
+                            messageHeights.of(CardKey(accountKey, summary.id)),
+                            paneHeight,
+                        ),
                     )
                     else {
                         /*

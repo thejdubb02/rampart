@@ -58,6 +58,41 @@ class PicturesTest {
     }
 
     @Test
+    fun `CID downloads use the remaining actual byte allowance`() {
+        val parts = listOf(
+            Attachment("one", "one.png", "image/png", 0, cid = "one"),
+            Attachment("two", "two.png", "image/png", 0, cid = "two"),
+        )
+        val limits = mutableListOf<Long>()
+        val bytes = fetchCidBytes(parts) { part, limit ->
+            limits += limit
+            if (part.blobId == "one") ByteArray(4 * 1024 * 1024) else ByteArray(2 * 1024 * 1024)
+        }
+
+        assertEquals(listOf(CID_FETCH_CAP, 1024L * 1024), limits)
+        assertEquals(setOf("one"), bytes.keys)
+    }
+
+    @Test
+    fun `only CID pictures that loaded are hidden from the file list`() {
+        val shown = prepareReading(
+            "sender@example.com",
+            "Sender",
+            Body("<img src=\"cid:one\"><img src=\"cid:two\">", null),
+            listOf(
+                Attachment("one", "one.png", "image/png", 4, cid = "one"),
+                Attachment("two", "two.png", "image/png", 4, cid = "two"),
+            ),
+            mapOf("one" to (javaClass.getResourceAsStream("/clear.png")?.readBytes() ?: error("fixture missing"))),
+            false,
+            false,
+            emptySet(),
+        ).cited
+
+        assertEquals(setOf("one"), shown)
+    }
+
+    @Test
     fun `the spaces that come out as empty boxes are spaces again`() {
         assertEquals("From: Mark", withoutTofu("From: Mark"))
         assertEquals("10.44 AM", withoutTofu("10.44 AM"))

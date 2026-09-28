@@ -87,6 +87,8 @@ internal fun WebBody(
      * one settled on instead of a short strip.
      */
     messageId: String = "",
+    /** The account that owns [messageId], because message ids are only unique inside it. */
+    accountKey: String = "",
     /**
      * How tall to be before the first measurement.
      *
@@ -165,7 +167,7 @@ internal fun WebBody(
         drew.set(true)
         measured = true
         height = next
-        if (messageId.isNotBlank()) messageHeights.remember(messageId, next)
+        if (messageId.isNotBlank()) messageHeights.remember(CardKey(accountKey, messageId), next)
     }
     /*
      * If nothing ever answers, hand the message back rather than showing a box.
@@ -209,6 +211,7 @@ internal fun WebBody(
      * counts as measured, which is what stops the fallback from ever running.
      */
     val ticker = remember { java.util.concurrent.atomic.AtomicReference<javafx.animation.Timeline?>(null) }
+    val documentGeneration = remember { java.util.concurrent.atomic.AtomicInteger(0) }
 
     /*
      * How wide the panel actually is, which is the one thing the engine must have before it
@@ -243,19 +246,38 @@ internal fun WebBody(
                         fresh.prefWidthProperty().bind(widthProperty())
                         fresh.prefHeightProperty().bind(heightProperty())
                     }
-                    fresh.engine.loadWorker.stateProperty().addListener { _, _, state ->
-                        if (state != Worker.State.SUCCEEDED) return@addListener
-                        (fresh.engine.executeScript("window") as JSObject).setMember("rampart", bridge)
-                        // On the document that just loaded. Doing this from outside, in the
-                        // moment after load() is asked for, hits whatever document is still
-                        // showing, which is the previous message.
-                        fresh.engine.executeScript(darkSwitch(bridge.dark, bridge.paper, bridge.ink))
-                        fresh.engine.executeScript(WIRING)
-                    }
                 }
                 view.zoom = zoom
+                val generation = documentGeneration.incrementAndGet()
+                ticker.getAndSet(null)?.stop()
+                lateinit var listener: javafx.beans.value.ChangeListener<Worker.State>
+                listener = javafx.beans.value.ChangeListener { _, _, state ->
+                    if (state != Worker.State.SUCCEEDED && state != Worker.State.FAILED && state != Worker.State.CANCELLED) {
+                        return@ChangeListener
+                    }
+                    view.engine.loadWorker.stateProperty().removeListener(listener)
+                    if (generation != documentGeneration.get()) return@ChangeListener
+                    if (state != Worker.State.SUCCEEDED) {
+                        bridge.onBlank()
+                        return@ChangeListener
+                    }
+                    (view.engine.executeScript("window") as JSObject).setMember("rampart", bridge)
+                    view.engine.executeScript(darkSwitch(bridge.dark, bridge.paper, bridge.ink))
+                    view.engine.executeScript(WIRING)
+                    ticker.set(
+                        measure(
+                            view,
+                            { if (generation == documentGeneration.get()) bridge.onHeight(it) },
+                            { if (generation == documentGeneration.get()) bridge.onBlank() },
+                        ),
+                    )
+                }
                 view.engine.load(asUrl(document))
-                ticker.getAndSet(measure(view, { bridge.onHeight(it) }, { bridge.onBlank() }))?.stop()
+                view.engine.loadWorker.stateProperty().addListener(listener)
+                val state = view.engine.loadWorker.state
+                if (state == Worker.State.SUCCEEDED || state == Worker.State.FAILED || state == Worker.State.CANCELLED) {
+                    listener.changed(view.engine.loadWorker.stateProperty(), state, state)
+                }
             }.onFailure { bridge.onBlank() }
         }
     }
@@ -788,16 +810,16 @@ internal fun warmWebBody() {
  * keep a height for every one of them. The eldest is dropped.
  */
 internal class HeightMemory(private val cap: Int = 200) {
-    private val heights = object : LinkedHashMap<String, Int>(cap.coerceAtLeast(1), 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Int>?) = size > cap
+    private val heights = object : LinkedHashMap<CardKey, Int>(cap.coerceAtLeast(1), 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<CardKey, Int>?) = size > cap
     }
 
-    fun remember(id: String, height: Int) {
-        if (id.isBlank() || height <= 0) return
-        synchronized(heights) { heights[id] = height.coerceAtMost(TALLEST) }
+    fun remember(key: CardKey, height: Int) {
+        if (key.id.isBlank() || height <= 0) return
+        synchronized(heights) { heights[key] = height.coerceAtMost(TALLEST) }
     }
 
-    fun of(id: String): Int? = synchronized(heights) { heights[id] }
+    fun of(key: CardKey): Int? = synchronized(heights) { heights[key] }
 
     fun size(): Int = synchronized(heights) { heights.size }
 }
