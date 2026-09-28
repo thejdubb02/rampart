@@ -317,7 +317,7 @@ internal class Jmap private constructor(
         }
 
         /** Accepts a bare host, a base URL, a /jmap/ URL, or the well-known URL itself. */
-        private fun sessionUrl(server: String): URI {
+        internal fun sessionUrl(server: String): URI {
             var s = server.trim().removeSuffix("/")
             // Basic auth sends the password on every request. Over plain http that is the
             // password in the clear to anyone on the path, so it is refused outright rather
