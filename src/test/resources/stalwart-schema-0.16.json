@@ -1,0 +1,2278 @@
+{
+ "objects": {
+  "x:Account": {
+   "type": "object",
+   "description": "Defines a user or group account for authentication and email access.",
+   "permissionPrefix": "sysAccount"
+  },
+  "x:Account/Group": {
+   "type": "view",
+   "objectName": "x:Account"
+  },
+  "x:Account/User": {
+   "type": "view",
+   "objectName": "x:Account"
+  },
+  "x:Domain": {
+   "type": "object",
+   "description": "Defines an email domain and its DNS, DKIM, and TLS certificate settings.",
+   "permissionPrefix": "sysDomain"
+  }
+ },
+ "schemas": {
+  "x:Account": {
+   "type": "multiple",
+   "variants": [
+    {
+     "name": "User",
+     "label": "User account",
+     "schemaName": "x:UserAccount"
+    },
+    {
+     "name": "Group",
+     "label": "Group account",
+     "schemaName": "x:GroupAccount"
+    }
+   ]
+  },
+  "x:CertificateManagement": {
+   "type": "multiple",
+   "variants": [
+    {
+     "name": "Manual",
+     "label": "Manual TLS certificate management"
+    },
+    {
+     "name": "Automatic",
+     "label": "ACME TLS certificate management",
+     "schemaName": "x:CertificateManagementProperties"
+    }
+   ]
+  },
+  "x:Credential": {
+   "type": "multiple",
+   "variants": [
+    {
+     "name": "Password",
+     "label": "Password for authenticating to the account",
+     "schemaName": "x:PasswordCredential"
+    },
+    {
+     "name": "AppPassword",
+     "label": "App password for third-party applications",
+     "schemaName": "x:SecondaryCredential"
+    },
+    {
+     "name": "ApiKey",
+     "label": "API key for programmatic access",
+     "schemaName": "x:SecondaryCredential"
+    }
+   ]
+  },
+  "x:CredentialPermissions": {
+   "type": "multiple",
+   "variants": [
+    {
+     "name": "Inherit",
+     "label": "Same permissions as account"
+    },
+    {
+     "name": "Disable",
+     "label": "Disable some permissions",
+     "schemaName": "x:CredentialPermissionsList"
+    },
+    {
+     "name": "Replace",
+     "label": "Replace all permissions",
+     "schemaName": "x:CredentialPermissionsList"
+    }
+   ]
+  },
+  "x:DkimManagement": {
+   "type": "multiple",
+   "variants": [
+    {
+     "name": "Automatic",
+     "label": "Automatic DKIM management",
+     "schemaName": "x:DkimManagementProperties"
+    },
+    {
+     "name": "Manual",
+     "label": "Manual DKIM management"
+    }
+   ]
+  },
+  "x:DnsManagement": {
+   "type": "multiple",
+   "variants": [
+    {
+     "name": "Manual",
+     "label": "Manual DNS management"
+    },
+    {
+     "name": "Automatic",
+     "label": "Automatic DNS management",
+     "schemaName": "x:DnsManagementProperties"
+    }
+   ]
+  },
+  "x:Domain": {
+   "type": "single",
+   "schemaName": "x:Domain"
+  },
+  "x:EmailAlias": {
+   "type": "single",
+   "schemaName": "x:EmailAlias"
+  },
+  "x:EncryptionAtRest": {
+   "type": "multiple",
+   "variants": [
+    {
+     "name": "Disabled",
+     "label": "Disabled"
+    },
+    {
+     "name": "Aes128",
+     "label": "AES-128",
+     "schemaName": "x:EncryptionSettings"
+    },
+    {
+     "name": "Aes256",
+     "label": "AES-256",
+     "schemaName": "x:EncryptionSettings"
+    },
+    {
+     "name": "Aes256Gcm",
+     "label": "AES-256-GCM (S/MIME only)",
+     "schemaName": "x:EncryptionSettings"
+    },
+    {
+     "name": "ChaCha20Poly1305",
+     "label": "ChaCha20-Poly1305 (S/MIME only)",
+     "schemaName": "x:EncryptionSettings"
+    }
+   ]
+  },
+  "x:Expression": {
+   "type": "single",
+   "schemaName": "x:Expression"
+  },
+  "x:ExpressionMatch": {
+   "type": "single",
+   "schemaName": "x:ExpressionMatch"
+  },
+  "x:Permissions": {
+   "type": "multiple",
+   "variants": [
+    {
+     "name": "Inherit",
+     "label": "Inherited permissions"
+    },
+    {
+     "name": "Merge",
+     "label": "Permissions are combined with inherited permissions",
+     "schemaName": "x:PermissionsList"
+    },
+    {
+     "name": "Replace",
+     "label": "Permissions replace all inherited permissions",
+     "schemaName": "x:PermissionsList"
+    }
+   ]
+  },
+  "x:Roles": {
+   "type": "multiple",
+   "variants": [
+    {
+     "name": "Default",
+     "label": "Default role"
+    },
+    {
+     "name": "Custom",
+     "label": "Custom role",
+     "schemaName": "x:CustomRoles"
+    }
+   ]
+  },
+  "x:SubAddressing": {
+   "type": "multiple",
+   "variants": [
+    {
+     "name": "Enabled",
+     "label": "Enable sub-addressing"
+    },
+    {
+     "name": "Custom",
+     "label": "Enable custom sub-addressing",
+     "schemaName": "x:SubAddressingCustom"
+    },
+    {
+     "name": "Disabled",
+     "label": "Disable sub-addressing"
+    }
+   ]
+  },
+  "x:UserRoles": {
+   "type": "multiple",
+   "variants": [
+    {
+     "name": "User",
+     "label": "User role"
+    },
+    {
+     "name": "Admin",
+     "label": "Administrator role"
+    },
+    {
+     "name": "Custom",
+     "label": "Custom role",
+     "schemaName": "x:CustomRoles"
+    }
+   ]
+  }
+ },
+ "fields": {
+  "x:CertificateManagementProperties": {
+   "properties": {
+    "acmeProviderId": {
+     "description": "Identifier for the ACME provider managing certificates for this domain",
+     "type": {
+      "type": "objectId",
+      "objectName": "x:AcmeProvider"
+     },
+     "update": "mutable"
+    },
+    "subjectAlternativeNames": {
+     "description": "Additional hostnames to include in the certificate as Subject Alternative Names (SANs).\nEnter hostnames only (e.g. `mta-sts`, `autoconfig`), the domain is appended automatically.\nTo include the apex domain, enter it in full (e.g. `example.org`).\nLeave empty to request a wildcard certificate when possible, or to use the default SANs.",
+     "type": {
+      "type": "set",
+      "class": {
+       "type": "string",
+       "format": "string"
+      }
+     },
+     "update": "mutable"
+    }
+   }
+  },
+  "x:CredentialPermissionsList": {
+   "properties": {
+    "permissions": {
+     "description": "List of permissions to assign.",
+     "type": {
+      "type": "set",
+      "class": {
+       "type": "enum",
+       "enumName": "Permission"
+      }
+     },
+     "update": "mutable"
+    }
+   }
+  },
+  "x:CustomRoles": {
+   "properties": {
+    "roleIds": {
+     "description": "List of roles assigned to this principal.",
+     "type": {
+      "type": "set",
+      "class": {
+       "type": "objectId",
+       "objectName": "x:Role"
+      }
+     },
+     "update": "mutable"
+    }
+   }
+  },
+  "x:DkimManagementProperties": {
+   "properties": {
+    "algorithms": {
+     "description": "List of signing algorithms to use when generating new DKIM keys",
+     "type": {
+      "type": "set",
+      "class": {
+       "type": "enum",
+       "enumName": "DkimSignatureType"
+      }
+     },
+     "update": "mutable"
+    },
+    "deleteAfter": {
+     "description": "How long to retain old DKIM keys on the server after rotation before deleting them permanently. Requires automatic DNS management.",
+     "type": {
+      "type": "number",
+      "format": "duration"
+     },
+     "update": "mutable"
+    },
+    "retireAfter": {
+     "description": "How long to keep the old key's DNS record published after rotation before removing it. Requires automatic DNS management.",
+     "type": {
+      "type": "number",
+      "format": "duration"
+     },
+     "update": "mutable"
+    },
+    "rotateAfter": {
+     "description": "How often to rotate DKIM keys. Requires automatic DNS management to be enabled for the domain.",
+     "type": {
+      "type": "number",
+      "format": "duration"
+     },
+     "update": "mutable"
+    },
+    "selectorTemplate": {
+     "description": "Template for generating DKIM selectors during key rotation. Supported variables:\n- `{algorithm}`: signing algorithm in lowercase (`rsa`, `ed25519`)\n- `{hash}`: hash algorithm (`sha256`)\n- `{version}`: DKIM version number (`1`)\n- `{date-<fmt>}`: current UTC date formatted with chrono strftime (e.g. `{date-%Y%m%d}`)\n- `{epoch}`: current UTC unix timestamp\n- `{random}`: random 8-character alphanumeric string",
+     "type": {
+      "type": "string",
+      "format": "string"
+     },
+     "update": "mutable"
+    }
+   },
+   "defaults": {
+    "algorithms": {
+     "Dkim1Ed25519Sha256": true,
+     "Dkim1RsaSha256": true
+    },
+    "deleteAfter": 2592000000,
+    "retireAfter": 604800000,
+    "rotateAfter": 7776000000,
+    "selectorTemplate": "v{version}-{algorithm}-{date-%Y%m%d}"
+   }
+  },
+  "x:DnsManagementProperties": {
+   "properties": {
+    "dnsServerId": {
+     "description": "Identifier for the DNS server provider managing DNS records for this domain",
+     "type": {
+      "type": "objectId",
+      "objectName": "x:DnsServer"
+     },
+     "update": "mutable"
+    },
+    "origin": {
+     "description": "Origin domain used to determine the correct DNS zone for managing records. For example, if the domain is \"sub.example.com\" and DNS records should be managed in the \"example.com\" zone, set the origin to \"example.com\". Leave empty to use the domain name itself as the zone origin.",
+     "type": {
+      "type": "string",
+      "format": "string",
+      "nullable": true
+     },
+     "update": "mutable"
+    },
+    "publishRecords": {
+     "description": "Which DNS record types should be automatically published and kept in sync",
+     "type": {
+      "type": "set",
+      "class": {
+       "type": "enum",
+       "enumName": "DnsRecordType"
+      },
+      "minItems": 1
+     },
+     "update": "mutable"
+    }
+   },
+   "defaults": {
+    "publishRecords": {
+     "autoConfig": true,
+     "autoConfigLegacy": true,
+     "autoDiscover": true,
+     "caa": true,
+     "dkim": true,
+     "dmarc": true,
+     "mtaSts": true,
+     "mx": true,
+     "spf": true,
+     "srv": true,
+     "tlsRpt": true
+    }
+   }
+  },
+  "x:Domain": {
+   "properties": {
+    "aliases": {
+     "description": "List of additional domain names that are aliases of this domain",
+     "type": {
+      "type": "set",
+      "class": {
+       "type": "string",
+       "format": "string"
+      }
+     },
+     "update": "mutable"
+    },
+    "allowRelaying": {
+     "description": "Whether to allow relaying for non-local recipients, useful in split delivery scenarios",
+     "type": {
+      "type": "boolean"
+     },
+     "update": "mutable"
+    },
+    "allowScimProvisioning": {
+     "description": "Whether external SCIM clients may provision accounts in this domain. When enabled, SCIM becomes authoritative for accounts in this domain and just-in-time directory provisioning no longer modifies them",
+     "type": {
+      "type": "boolean"
+     },
+     "update": "mutable",
+     "enterprise": true
+    },
+    "catchAllAddress": {
+     "description": "Catch-all email address that receives messages addressed to unknown local recipients",
+     "type": {
+      "type": "string",
+      "format": "emailAddress",
+      "nullable": true
+     },
+     "update": "mutable"
+    },
+    "certificateManagement": {
+     "description": "Whether TLS certificates for this domain are managed manually or automatically by an ACME provider",
+     "type": {
+      "type": "object",
+      "objectName": "x:CertificateManagement"
+     },
+     "update": "mutable"
+    },
+    "createdAt": {
+     "description": "Creation date of the domain",
+     "type": {
+      "type": "utcDateTime"
+     },
+     "update": "serverSet"
+    },
+    "description": {
+     "description": "Description of the domain",
+     "type": {
+      "type": "string",
+      "format": "string",
+      "nullable": true
+     },
+     "update": "mutable"
+    },
+    "directoryId": {
+     "description": "Identifier for the directory where accounts for this domain are stored, or null to use the internal directory",
+     "type": {
+      "type": "objectId",
+      "objectName": "x:Directory",
+      "nullable": true
+     },
+     "update": "mutable",
+     "enterprise": true
+    },
+    "dkimManagement": {
+     "description": "Whether DKIM keys for this domain are managed manually or automatically by the server",
+     "type": {
+      "type": "object",
+      "objectName": "x:DkimManagement"
+     },
+     "update": "mutable"
+    },
+    "dnsManagement": {
+     "description": "Whether DNS records for this domain are managed manually or automatically by a DNS provider",
+     "type": {
+      "type": "object",
+      "objectName": "x:DnsManagement"
+     },
+     "update": "mutable"
+    },
+    "dnsZoneFile": {
+     "description": "Current DNS zone data for the domain",
+     "type": {
+      "type": "string",
+      "format": "text"
+     },
+     "update": "serverSet"
+    },
+    "isEnabled": {
+     "description": "Whether this domain is enabled",
+     "type": {
+      "type": "boolean"
+     },
+     "update": "mutable"
+    },
+    "logo": {
+     "description": "URL or base64-encoded image representing the domain",
+     "type": {
+      "type": "string",
+      "format": "string",
+      "nullable": true
+     },
+     "update": "mutable",
+     "enterprise": true
+    },
+    "memberTenantId": {
+     "description": "Identifier for the tenant this domain belongs to",
+     "type": {
+      "type": "objectId",
+      "objectName": "x:Tenant",
+      "nullable": true
+     },
+     "update": "mutable",
+     "enterprise": true
+    },
+    "name": {
+     "description": "Domain name",
+     "type": {
+      "type": "string",
+      "format": "string"
+     },
+     "update": "mutable"
+    },
+    "reportAddressUri": {
+     "description": "Email address to receive DMARC, TLS-RPT and CAA reports for this domain, or null to not receive reports",
+     "type": {
+      "type": "string",
+      "format": "string",
+      "nullable": true
+     },
+     "update": "mutable"
+    },
+    "subAddressing": {
+     "description": "Whether sub-addressing (plus addressing) is enabled for the domain",
+     "type": {
+      "type": "object",
+      "objectName": "x:SubAddressing"
+     },
+     "update": "mutable"
+    }
+   },
+   "defaults": {
+    "isEnabled": true,
+    "reportAddressUri": "mailto:postmaster"
+   }
+  },
+  "x:EmailAlias": {
+   "properties": {
+    "description": {
+     "description": "Description of the email alias",
+     "type": {
+      "type": "string",
+      "format": "string",
+      "nullable": true
+     },
+     "update": "mutable"
+    },
+    "domainId": {
+     "description": "Identifier for the domain of the email alias (the part after the @ symbol).",
+     "type": {
+      "type": "objectId",
+      "objectName": "x:Domain"
+     },
+     "update": "mutable"
+    },
+    "enabled": {
+     "description": "Whether this email alias is enabled",
+     "type": {
+      "type": "boolean"
+     },
+     "update": "mutable"
+    },
+    "name": {
+     "description": "The local part of the email alias (the part before the @ symbol)",
+     "type": {
+      "type": "string",
+      "format": "string"
+     },
+     "update": "mutable"
+    }
+   },
+   "defaults": {
+    "enabled": true
+   }
+  },
+  "x:EncryptionSettings": {
+   "properties": {
+    "allowSpamTraining": {
+     "description": "Whether to allow training the spam classifier with plaintext emails before encryption",
+     "type": {
+      "type": "boolean"
+     },
+     "update": "mutable"
+    },
+    "encryptOnAppend": {
+     "description": "Whether to encrypt emails when they are appended to mailboxes",
+     "type": {
+      "type": "boolean"
+     },
+     "update": "mutable"
+    },
+    "publicKey": {
+     "description": "Public key used for encrypting emails",
+     "type": {
+      "type": "objectId",
+      "objectName": "x:PublicKey"
+     },
+     "update": "mutable"
+    }
+   }
+  },
+  "x:Expression": {
+   "properties": {
+    "else": {
+     "description": "Else condition",
+     "type": {
+      "type": "string",
+      "format": "string"
+     },
+     "update": "mutable"
+    },
+    "match": {
+     "description": "List of conditions and their corresponding results",
+     "type": {
+      "type": "objectList",
+      "objectName": "x:ExpressionMatch"
+     },
+     "update": "mutable"
+    }
+   }
+  },
+  "x:ExpressionMatch": {
+   "properties": {
+    "if": {
+     "description": "If condition",
+     "type": {
+      "type": "string",
+      "format": "string"
+     },
+     "update": "mutable"
+    },
+    "then": {
+     "description": "Then clause",
+     "type": {
+      "type": "string",
+      "format": "string"
+     },
+     "update": "mutable"
+    }
+   }
+  },
+  "x:GroupAccount": {
+   "properties": {
+    "aliases": {
+     "description": "List of email aliases for the group",
+     "type": {
+      "type": "objectList",
+      "objectName": "x:EmailAlias"
+     },
+     "update": "mutable"
+    },
+    "createdAt": {
+     "description": "Creation date of the account",
+     "type": {
+      "type": "utcDateTime"
+     },
+     "update": "serverSet"
+    },
+    "description": {
+     "description": "Description of the group",
+     "type": {
+      "type": "string",
+      "format": "string",
+      "nullable": true
+     },
+     "update": "mutable"
+    },
+    "domainId": {
+     "description": "Identifier for the domain this group belongs to. This is used to determine the email address of the group, which is formed as name@domain.",
+     "type": {
+      "type": "objectId",
+      "objectName": "x:Domain"
+     },
+     "update": "mutable"
+    },
+    "emailAddress": {
+     "description": "Email address of the group, formed as name@domain.",
+     "type": {
+      "type": "string",
+      "format": "emailAddress"
+     },
+     "update": "serverSet"
+    },
+    "externalId": {
+     "description": "Identifier assigned by an external provisioning client such as a SCIM identity provider",
+     "type": {
+      "type": "string",
+      "format": "string",
+      "nullable": true
+     },
+     "update": "mutable",
+     "enterprise": true
+    },
+    "locale": {
+     "description": "Preferred locale for the group",
+     "type": {
+      "type": "enum",
+      "enumName": "Locale"
+     },
+     "update": "mutable"
+    },
+    "memberTenantId": {
+     "description": "Identifier for the tenant this group belongs to",
+     "type": {
+      "type": "objectId",
+      "objectName": "x:Tenant",
+      "nullable": true
+     },
+     "update": "mutable"
+    },
+    "name": {
+     "description": "Name of the group, typically an email address local part.",
+     "type": {
+      "type": "string",
+      "format": "string"
+     },
+     "update": "mutable"
+    },
+    "permissions": {
+     "description": "Permissions assigned to this group",
+     "type": {
+      "type": "object",
+      "objectName": "x:Permissions"
+     },
+     "update": "mutable"
+    },
+    "quotas": {
+     "description": "Quotas for different object types within this group",
+     "type": {
+      "type": "map",
+      "keyClass": {
+       "type": "enum",
+       "enumName": "StorageQuota"
+      },
+      "valueClass": {
+       "type": "number",
+       "format": "unsignedInteger"
+      }
+     },
+     "update": "mutable"
+    },
+    "roles": {
+     "description": "Roles assigned to this group",
+     "type": {
+      "type": "object",
+      "objectName": "x:Roles"
+     },
+     "update": "mutable"
+    },
+    "timeZone": {
+     "description": "Preferred time zone for the account",
+     "type": {
+      "type": "enum",
+      "enumName": "TimeZone",
+      "nullable": true
+     },
+     "update": "mutable"
+    },
+    "usedDiskQuota": {
+     "description": "Amount of disk space currently used by this account (bytes)",
+     "type": {
+      "type": "number",
+      "format": "size"
+     },
+     "update": "serverSet"
+    }
+   },
+   "defaults": {
+    "locale": "en-US"
+   }
+  },
+  "x:PasswordCredential": {
+   "properties": {
+    "allowedIps": {
+     "description": "List of allowed IP addresses or CIDR ranges for this credential",
+     "type": {
+      "type": "set",
+      "class": {
+       "type": "string",
+       "format": "ipNetwork"
+      }
+     },
+     "update": "mutable"
+    },
+    "credentialId": {
+     "description": "Unique identifier for the credential",
+     "type": {
+      "type": "string",
+      "format": "string"
+     },
+     "update": "serverSet"
+    },
+    "expiresAt": {
+     "description": "Expiration date of the credential",
+     "type": {
+      "type": "utcDateTime",
+      "nullable": true
+     },
+     "update": "mutable"
+    },
+    "otpAuth": {
+     "description": "OTP authentication URI for the account",
+     "type": {
+      "type": "string",
+      "format": "uri",
+      "nullable": true
+     },
+     "update": "mutable"
+    },
+    "secret": {
+     "description": "Secret value of the account",
+     "type": {
+      "type": "string",
+      "format": "secret"
+     },
+     "update": "mutable"
+    }
+   }
+  },
+  "x:PermissionsList": {
+   "properties": {
+    "disabledPermissions": {
+     "description": "List of permissions that are explicitly disabled, even if they would be inherited through other roles or groups. This takes precedence over enabled permissions.",
+     "type": {
+      "type": "set",
+      "class": {
+       "type": "enum",
+       "enumName": "Permission"
+      }
+     },
+     "update": "mutable"
+    },
+    "enabledPermissions": {
+     "description": "List of permissions that are explicitly enabled.",
+     "type": {
+      "type": "set",
+      "class": {
+       "type": "enum",
+       "enumName": "Permission"
+      }
+     },
+     "update": "mutable"
+    }
+   }
+  },
+  "x:SecondaryCredential": {
+   "properties": {
+    "allowedIps": {
+     "description": "List of allowed IP addresses or CIDR ranges for this credential",
+     "type": {
+      "type": "set",
+      "class": {
+       "type": "string",
+       "format": "ipNetwork"
+      }
+     },
+     "update": "mutable"
+    },
+    "createdAt": {
+     "description": "Creation date of the credential",
+     "type": {
+      "type": "utcDateTime"
+     },
+     "update": "serverSet"
+    },
+    "credentialId": {
+     "description": "Unique identifier for the credential",
+     "type": {
+      "type": "string",
+      "format": "string"
+     },
+     "update": "serverSet"
+    },
+    "description": {
+     "description": "Description of the credential",
+     "type": {
+      "type": "string",
+      "format": "string"
+     },
+     "update": "mutable"
+    },
+    "expiresAt": {
+     "description": "Expiration date of the credential",
+     "type": {
+      "type": "utcDateTime",
+      "nullable": true
+     },
+     "update": "mutable"
+    },
+    "permissions": {
+     "description": "List of permissions assigned to this credential",
+     "type": {
+      "type": "object",
+      "objectName": "x:CredentialPermissions"
+     },
+     "update": "mutable"
+    },
+    "secret": {
+     "description": "Secret value of the credential",
+     "type": {
+      "type": "string",
+      "format": "secret"
+     },
+     "update": "serverSet"
+    }
+   }
+  },
+  "x:SubAddressingCustom": {
+   "properties": {
+    "customRule": {
+     "description": "Expression that defines custom sub-addressing rules for the domain",
+     "type": {
+      "type": "object",
+      "objectName": "x:Expression"
+     },
+     "update": "mutable"
+    }
+   }
+  },
+  "x:UserAccount": {
+   "properties": {
+    "aliases": {
+     "description": "List of email aliases for the account",
+     "type": {
+      "type": "objectList",
+      "objectName": "x:EmailAlias"
+     },
+     "update": "mutable"
+    },
+    "createdAt": {
+     "description": "Creation date of the account",
+     "type": {
+      "type": "utcDateTime"
+     },
+     "update": "serverSet"
+    },
+    "credentials": {
+     "description": "List of credential objects representing authentication methods for the account",
+     "type": {
+      "type": "objectList",
+      "objectName": "x:Credential"
+     },
+     "update": "mutable"
+    },
+    "description": {
+     "description": "Description of the account",
+     "type": {
+      "type": "string",
+      "format": "string",
+      "nullable": true
+     },
+     "update": "mutable"
+    },
+    "domainId": {
+     "description": "Identifier for the domain this account belongs to. This is used to determine the email address of the account, which is formed as name@domain.",
+     "type": {
+      "type": "objectId",
+      "objectName": "x:Domain"
+     },
+     "update": "mutable"
+    },
+    "emailAddress": {
+     "description": "Email address for the user account, formed as name@domain.",
+     "type": {
+      "type": "string",
+      "format": "emailAddress"
+     },
+     "update": "serverSet"
+    },
+    "encryptionAtRest": {
+     "description": "Encryption-at-rest settings for the account",
+     "type": {
+      "type": "object",
+      "objectName": "x:EncryptionAtRest"
+     },
+     "update": "mutable"
+    },
+    "externalId": {
+     "description": "Identifier assigned by an external provisioning client such as a SCIM identity provider",
+     "type": {
+      "type": "string",
+      "format": "string",
+      "nullable": true
+     },
+     "update": "mutable",
+     "enterprise": true
+    },
+    "locale": {
+     "description": "Preferred locale for the account",
+     "type": {
+      "type": "enum",
+      "enumName": "Locale"
+     },
+     "update": "mutable"
+    },
+    "memberGroupIds": {
+     "description": "List of groups that this account is a member of",
+     "type": {
+      "type": "set",
+      "class": {
+       "type": "objectId",
+       "objectName": "x:Account/Group"
+      }
+     },
+     "update": "mutable"
+    },
+    "memberTenantId": {
+     "description": "Identifier for the tenant this account belongs to",
+     "type": {
+      "type": "objectId",
+      "objectName": "x:Tenant",
+      "nullable": true
+     },
+     "update": "mutable"
+    },
+    "name": {
+     "description": "Name of the account, typically an email address local part.",
+     "type": {
+      "type": "string",
+      "format": "string"
+     },
+     "update": "mutable"
+    },
+    "permissions": {
+     "description": "Permissions assigned to this account",
+     "type": {
+      "type": "object",
+      "objectName": "x:Permissions"
+     },
+     "update": "mutable"
+    },
+    "quotas": {
+     "description": "Quotas for different object types within this account",
+     "type": {
+      "type": "map",
+      "keyClass": {
+       "type": "enum",
+       "enumName": "StorageQuota"
+      },
+      "valueClass": {
+       "type": "number",
+       "format": "unsignedInteger"
+      }
+     },
+     "update": "mutable"
+    },
+    "roles": {
+     "description": "Roles assigned to this user account",
+     "type": {
+      "type": "object",
+      "objectName": "x:UserRoles"
+     },
+     "update": "mutable"
+    },
+    "timeZone": {
+     "description": "Preferred time zone for the account",
+     "type": {
+      "type": "enum",
+      "enumName": "TimeZone",
+      "nullable": true
+     },
+     "update": "mutable"
+    },
+    "usedDiskQuota": {
+     "description": "Amount of disk space currently used by this account (bytes)",
+     "type": {
+      "type": "number",
+      "format": "size"
+     },
+     "update": "serverSet"
+    }
+   },
+   "defaults": {
+    "locale": "en-US"
+   }
+  }
+ },
+ "forms": {
+  "x:Account": {
+   "sections": [
+    {
+     "fields": [
+      {
+       "name": "@type",
+       "label": "Account type"
+      }
+     ]
+    }
+   ]
+  },
+  "x:CertificateManagementProperties": {
+   "sections": [
+    {
+     "title": "Certificate",
+     "fields": [
+      {
+       "name": "acmeProviderId",
+       "label": "ACME Provider"
+      }
+     ]
+    },
+    {
+     "title": "Subject Alternative Names",
+     "fields": [
+      {
+       "name": "subjectAlternativeNames",
+       "label": "Additional Hostnames",
+       "placeholder": "e.g. mail.example.com"
+      }
+     ]
+    }
+   ]
+  },
+  "x:CredentialPermissionsList": {
+   "sections": [
+    {
+     "title": "Permissions",
+     "fields": [
+      {
+       "name": "permissions",
+       "label": "Permissions"
+      }
+     ]
+    }
+   ]
+  },
+  "x:CustomRoles": {
+   "sections": [
+    {
+     "title": "Roles",
+     "fields": [
+      {
+       "name": "roleIds",
+       "label": "Roles"
+      }
+     ]
+    }
+   ]
+  },
+  "x:DkimManagementProperties": {
+   "sections": [
+    {
+     "title": "Key Generation",
+     "fields": [
+      {
+       "name": "algorithms",
+       "label": "Signing Algorithms"
+      },
+      {
+       "name": "selectorTemplate",
+       "label": "Selector Template",
+       "placeholder": "e.g. v{version}-{algorithm}-{date-%Y%m%d}"
+      }
+     ]
+    },
+    {
+     "title": "Key Rotation",
+     "fields": [
+      {
+       "name": "rotateAfter",
+       "label": "Rotate After"
+      },
+      {
+       "name": "retireAfter",
+       "label": "Retire After"
+      },
+      {
+       "name": "deleteAfter",
+       "label": "Delete After"
+      }
+     ]
+    }
+   ]
+  },
+  "x:DnsManagementProperties": {
+   "sections": [
+    {
+     "title": "DNS Provider",
+     "fields": [
+      {
+       "name": "dnsServerId",
+       "label": "DNS Server"
+      },
+      {
+       "name": "origin",
+       "label": "Zone Origin",
+       "placeholder": "e.g. example.com"
+      }
+     ]
+    },
+    {
+     "title": "Records to Publish",
+     "fields": [
+      {
+       "name": "publishRecords",
+       "label": "Record Types"
+      }
+     ]
+    }
+   ]
+  },
+  "x:Domain": {
+   "sections": [
+    {
+     "title": "Domain",
+     "fields": [
+      {
+       "name": "name",
+       "label": "Domain Name"
+      },
+      {
+       "name": "aliases",
+       "label": "Aliases"
+      },
+      {
+       "name": "isEnabled",
+       "label": "Enabled"
+      },
+      {
+       "name": "memberTenantId",
+       "label": "Tenant"
+      },
+      {
+       "name": "directoryId",
+       "label": "Directory"
+      },
+      {
+       "name": "allowScimProvisioning",
+       "label": "Allow SCIM Provisioning"
+      }
+     ]
+    },
+    {
+     "title": "Email",
+     "fields": [
+      {
+       "name": "catchAllAddress",
+       "label": "Catch-All Address"
+      },
+      {
+       "name": "subAddressing",
+       "label": "Sub-Addressing"
+      },
+      {
+       "name": "allowRelaying",
+       "label": "Allow Relaying"
+      }
+     ]
+    },
+    {
+     "title": "DKIM",
+     "fields": [
+      {
+       "name": "dkimManagement",
+       "label": "DKIM Management"
+      }
+     ]
+    },
+    {
+     "title": "TLS",
+     "fields": [
+      {
+       "name": "certificateManagement",
+       "label": "Certificate Management"
+      }
+     ]
+    },
+    {
+     "title": "DNS",
+     "fields": [
+      {
+       "name": "dnsManagement",
+       "label": "DNS Management"
+      }
+     ]
+    },
+    {
+     "title": "Reports",
+     "fields": [
+      {
+       "name": "reportAddressUri",
+       "label": "Report Address"
+      }
+     ]
+    },
+    {
+     "title": "Details",
+     "fields": [
+      {
+       "name": "description",
+       "label": "Description"
+      },
+      {
+       "name": "logo",
+       "label": "Logo"
+      },
+      {
+       "name": "createdAt",
+       "label": "Created At"
+      }
+     ]
+    }
+   ]
+  },
+  "x:EmailAlias": {
+   "sections": [
+    {
+     "title": "Email Alias",
+     "fields": [
+      {
+       "name": "name",
+       "label": "Local Part"
+      },
+      {
+       "name": "domainId",
+       "label": "Domain"
+      },
+      {
+       "name": "description",
+       "label": "Description"
+      },
+      {
+       "name": "enabled",
+       "label": "Enabled"
+      }
+     ]
+    }
+   ]
+  },
+  "x:EncryptionSettings": {
+   "sections": [
+    {
+     "title": "Encryption Settings",
+     "fields": [
+      {
+       "name": "publicKey",
+       "label": "Public Key"
+      },
+      {
+       "name": "encryptOnAppend",
+       "label": "Encrypt on Append"
+      },
+      {
+       "name": "allowSpamTraining",
+       "label": "Allow Spam Training"
+      }
+     ]
+    }
+   ]
+  },
+  "x:Expression": {
+   "sections": [
+    {
+     "title": "Expression",
+     "fields": [
+      {
+       "name": "match",
+       "label": "Conditions"
+      },
+      {
+       "name": "else",
+       "label": "Default Value"
+      }
+     ]
+    }
+   ]
+  },
+  "x:ExpressionMatch": {
+   "sections": [
+    {
+     "title": "Match",
+     "fields": [
+      {
+       "name": "if",
+       "label": "Condition"
+      },
+      {
+       "name": "then",
+       "label": "Result"
+      }
+     ]
+    }
+   ]
+  },
+  "x:GroupAccount": {
+   "sections": [
+    {
+     "title": "Group",
+     "fields": [
+      {
+       "name": "emailAddress",
+       "label": "Email Address"
+      },
+      {
+       "name": "name",
+       "label": "Name"
+      },
+      {
+       "name": "domainId",
+       "label": "Domain"
+      },
+      {
+       "name": "description",
+       "label": "Description"
+      },
+      {
+       "name": "memberTenantId",
+       "label": "Tenant"
+      }
+     ]
+    },
+    {
+     "title": "Roles & Permissions",
+     "fields": [
+      {
+       "name": "roles",
+       "label": "Roles"
+      },
+      {
+       "name": "permissions",
+       "label": "Permissions"
+      }
+     ]
+    },
+    {
+     "title": "Email",
+     "fields": [
+      {
+       "name": "aliases",
+       "label": "Email Aliases"
+      }
+     ]
+    },
+    {
+     "title": "Quotas",
+     "fields": [
+      {
+       "name": "quotas",
+       "label": "Quotas",
+       "keyLabel": "Quota Type",
+       "valueLabel": "Maximum"
+      }
+     ]
+    },
+    {
+     "title": "Locale & Time Zone",
+     "fields": [
+      {
+       "name": "locale",
+       "label": "Locale"
+      },
+      {
+       "name": "timeZone",
+       "label": "Time Zone"
+      }
+     ]
+    },
+    {
+     "title": "Details",
+     "fields": [
+      {
+       "name": "createdAt",
+       "label": "Created At"
+      },
+      {
+       "name": "usedDiskQuota",
+       "label": "Disk Usage"
+      },
+      {
+       "name": "externalId",
+       "label": "External Identifier"
+      }
+     ]
+    }
+   ]
+  },
+  "x:PasswordCredential": {
+   "sections": [
+    {
+     "title": "Secrets",
+     "fields": [
+      {
+       "name": "secret",
+       "label": "Password"
+      },
+      {
+       "name": "otpAuth",
+       "label": "OTP Authentication URI"
+      }
+     ]
+    },
+    {
+     "title": "Restrictions",
+     "fields": [
+      {
+       "name": "expiresAt",
+       "label": "Expiration Date"
+      },
+      {
+       "name": "allowedIps",
+       "label": "Allowed IPs"
+      }
+     ]
+    }
+   ]
+  },
+  "x:PermissionsList": {
+   "sections": [
+    {
+     "title": "Permissions",
+     "fields": [
+      {
+       "name": "enabledPermissions",
+       "label": "Enabled Permissions"
+      },
+      {
+       "name": "disabledPermissions",
+       "label": "Disabled Permissions"
+      }
+     ]
+    }
+   ]
+  },
+  "x:SecondaryCredential": {
+   "sections": [
+    {
+     "title": "Credential",
+     "fields": [
+      {
+       "name": "createdAt",
+       "label": "Created At"
+      },
+      {
+       "name": "description",
+       "label": "Description",
+       "placeholder": "e.g. My App Password"
+      },
+      {
+       "name": "secret",
+       "label": "Secret"
+      }
+     ]
+    },
+    {
+     "title": "Permissions",
+     "fields": [
+      {
+       "name": "permissions",
+       "label": "Permissions"
+      }
+     ]
+    },
+    {
+     "title": "Restrictions",
+     "fields": [
+      {
+       "name": "expiresAt",
+       "label": "Expiration Date"
+      },
+      {
+       "name": "allowedIps",
+       "label": "Allowed IPs"
+      }
+     ]
+    }
+   ]
+  },
+  "x:SubAddressingCustom": {
+   "sections": [
+    {
+     "title": "Sub-Addressing Rule",
+     "fields": [
+      {
+       "name": "customRule",
+       "label": "Custom Rule Expression"
+      }
+     ]
+    }
+   ]
+  },
+  "x:UserAccount": {
+   "sections": [
+    {
+     "title": "User Account",
+     "fields": [
+      {
+       "name": "emailAddress",
+       "label": "Email Address"
+      },
+      {
+       "name": "name",
+       "label": "Username"
+      },
+      {
+       "name": "domainId",
+       "label": "Domain"
+      },
+      {
+       "name": "description",
+       "label": "Full Name"
+      },
+      {
+       "name": "memberTenantId",
+       "label": "Tenant"
+      }
+     ]
+    },
+    {
+     "title": "Authentication",
+     "fields": [
+      {
+       "name": "credentials",
+       "label": "Credentials"
+      }
+     ]
+    },
+    {
+     "title": "Groups & Roles",
+     "fields": [
+      {
+       "name": "memberGroupIds",
+       "label": "Groups"
+      },
+      {
+       "name": "roles",
+       "label": "Roles"
+      },
+      {
+       "name": "permissions",
+       "label": "Permissions"
+      }
+     ]
+    },
+    {
+     "title": "Email",
+     "fields": [
+      {
+       "name": "aliases",
+       "label": "Email Aliases"
+      }
+     ]
+    },
+    {
+     "title": "Quotas",
+     "fields": [
+      {
+       "name": "quotas",
+       "label": "Quotas",
+       "keyLabel": "Quota Type",
+       "valueLabel": "Maximum"
+      }
+     ]
+    },
+    {
+     "title": "Locale & Time Zone",
+     "fields": [
+      {
+       "name": "locale",
+       "label": "Locale"
+      },
+      {
+       "name": "timeZone",
+       "label": "Time Zone"
+      }
+     ]
+    },
+    {
+     "title": "Encryption",
+     "fields": [
+      {
+       "name": "encryptionAtRest",
+       "label": "Encryption at Rest"
+      }
+     ]
+    },
+    {
+     "title": "Details",
+     "fields": [
+      {
+       "name": "createdAt",
+       "label": "Created At"
+      },
+      {
+       "name": "usedDiskQuota",
+       "label": "Disk Usage"
+      },
+      {
+       "name": "externalId",
+       "label": "External Identifier"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "lists": {
+  "x:Account/Group": {
+   "title": "Groups",
+   "subtitle": "Manage group accounts",
+   "singularName": "group",
+   "pluralName": "groups",
+   "columns": [
+    {
+     "name": "emailAddress",
+     "label": "Email Address"
+    },
+    {
+     "name": "description",
+     "label": "Description"
+    },
+    {
+     "name": "createdAt",
+     "label": "Created At"
+    }
+   ],
+   "filters": [
+    {
+     "type": "text",
+     "field": "text",
+     "label": "Text"
+    },
+    {
+     "type": "text",
+     "field": "name",
+     "label": "Name"
+    },
+    {
+     "type": "objectId",
+     "field": "domainId",
+     "objectName": "x:Domain",
+     "label": "Domain"
+    },
+    {
+     "type": "objectId",
+     "field": "memberTenantId",
+     "objectName": "x:Tenant",
+     "label": "Tenant"
+    }
+   ],
+   "filtersStatic": {
+    "@type": "Group"
+   },
+   "itemActions": [
+    {
+     "type": "view",
+     "label": "View Group",
+     "objectName": "x:Account"
+    },
+    {
+     "type": "query",
+     "label": "Members",
+     "objectName": "x:Account/User",
+     "fieldName": "memberGroupIds"
+    },
+    {
+     "type": "query",
+     "label": "Spam Samples",
+     "objectName": "x:SpamTrainingSample",
+     "fieldName": "accountId"
+    },
+    {
+     "type": "separator"
+    },
+    {
+     "type": "delete",
+     "label": "Delete Group"
+    }
+   ]
+  },
+  "x:Account/User": {
+   "title": "Accounts",
+   "subtitle": "Manage user accounts",
+   "singularName": "user",
+   "pluralName": "users",
+   "columns": [
+    {
+     "name": "emailAddress",
+     "label": "Email Address"
+    },
+    {
+     "name": "description",
+     "label": "Full Name"
+    },
+    {
+     "name": "createdAt",
+     "label": "Created At"
+    }
+   ],
+   "filters": [
+    {
+     "type": "text",
+     "field": "text",
+     "label": "Text"
+    },
+    {
+     "type": "text",
+     "field": "name",
+     "label": "Name"
+    },
+    {
+     "type": "objectId",
+     "field": "domainId",
+     "objectName": "x:Domain",
+     "label": "Domain"
+    },
+    {
+     "type": "objectId",
+     "field": "memberGroupIds",
+     "objectName": "x:Account/Group",
+     "label": "Group"
+    },
+    {
+     "type": "objectId",
+     "field": "memberTenantId",
+     "objectName": "x:Tenant",
+     "label": "Tenant"
+    }
+   ],
+   "filtersStatic": {
+    "@type": "User"
+   },
+   "itemActions": [
+    {
+     "type": "view",
+     "label": "View Account",
+     "objectName": "x:Account"
+    },
+    {
+     "type": "query",
+     "label": "Spam Samples",
+     "objectName": "x:SpamTrainingSample",
+     "fieldName": "accountId"
+    },
+    {
+     "type": "query",
+     "label": "Public Keys",
+     "objectName": "x:PublicKey",
+     "fieldName": "accountId"
+    },
+    {
+     "type": "separator"
+    },
+    {
+     "type": "delete",
+     "label": "Delete Account"
+    }
+   ]
+  },
+  "x:Domain": {
+   "title": "Domains",
+   "subtitle": "Manage email domains and their DNS, DKIM, and TLS certificate settings",
+   "labelProperty": "name",
+   "singularName": "domain",
+   "pluralName": "domains",
+   "columns": [
+    {
+     "name": "name",
+     "label": "Domain Name"
+    },
+    {
+     "name": "isEnabled",
+     "label": "Enabled"
+    },
+    {
+     "name": "certificateManagement",
+     "label": "Certificate Management"
+    },
+    {
+     "name": "dnsManagement",
+     "label": "DNS Management"
+    }
+   ],
+   "filters": [
+    {
+     "type": "text",
+     "field": "text",
+     "label": "Text"
+    },
+    {
+     "type": "text",
+     "field": "name",
+     "label": "Name"
+    },
+    {
+     "type": "objectId",
+     "field": "memberTenantId",
+     "objectName": "x:Tenant",
+     "label": "Tenant"
+    }
+   ],
+   "itemActions": [
+    {
+     "type": "view",
+     "label": "View Zone File",
+     "objectName": "x:Domain/DomainZone"
+    }
+   ]
+  }
+ },
+ "enums": {
+  "DkimSignatureType": [
+   {
+    "name": "Dkim1Ed25519Sha256",
+    "label": "DKIM1 (Ed25519 SHA-256)"
+   },
+   {
+    "name": "Dkim1RsaSha256",
+    "label": "DKIM1 (RSA SHA-256)"
+   },
+   {
+    "name": "Dkim2Ed25519Sha256",
+    "label": "DKIM2 (Ed25519 SHA-256)"
+   },
+   {
+    "name": "Dkim2RsaSha256",
+    "label": "DKIM2 (RSA SHA-256)"
+   }
+  ],
+  "DnsRecordType": [
+   {
+    "name": "dkim",
+    "label": "DKIM public keys"
+   },
+   {
+    "name": "tlsa",
+    "label": "TLSA records"
+   },
+   {
+    "name": "spf",
+    "label": "SPF records"
+   },
+   {
+    "name": "mx",
+    "label": "MX records"
+   },
+   {
+    "name": "dmarc",
+    "label": "DMARC policy"
+   },
+   {
+    "name": "srv",
+    "label": "SRV records"
+   },
+   {
+    "name": "mtaSts",
+    "label": "MTA-STS policy record"
+   },
+   {
+    "name": "tlsRpt",
+    "label": "TLS reporting record"
+   },
+   {
+    "name": "caa",
+    "label": "CAA records"
+   },
+   {
+    "name": "autoConfig",
+    "label": "Autoconfig records"
+   },
+   {
+    "name": "autoConfigLegacy",
+    "label": "Legacy Autoconfig records"
+   },
+   {
+    "name": "autoDiscover",
+    "label": "Microsoft Autodiscover records"
+   }
+  ],
+  "Locale": [
+   {
+    "name": "en-US",
+    "label": "English locale for the USA."
+   },
+   {
+    "name": "aa-DJ",
+    "label": "Afar language locale for Djibouti (Cadu/Laaqo Dialects)."
+   },
+   {
+    "name": "aa-ER",
+    "label": "Afar language locale for Eritrea (Cadu/Laaqo Dialects)."
+   },
+   {
+    "name": "ssy-ER",
+    "label": "Afar language locale for Eritrea (Saaho Dialect)."
+   },
+   {
+    "name": "aa-ET",
+    "label": "Afar language locale for Ethiopia (Cadu/Carra Dialects)."
+   },
+   {
+    "name": "af-ZA",
+    "label": "Afrikaans locale for South Africa."
+   },
+   {
+    "name": "agr-PE",
+    "label": "Awaj\u00fan (agr) locale for Peru."
+   },
+   {
+    "name": "ak-GH",
+    "label": "Akan locale for Ghana."
+   },
+   {
+    "name": "am-ET",
+    "label": "Amharic language locale for Ethiopia."
+   },
+   {
+    "name": "an-ES",
+    "label": "Aragonese locale for Spain."
+   },
+   {
+    "name": "anp-IN",
+    "label": "Angika language locale for India."
+   },
+   {
+    "name": "ar-AE",
+    "label": "Arabic language locale for United Arab Emirates."
+   }
+  ],
+  "Permission": [
+   {
+    "name": "authenticate",
+    "label": "Sign in to the server"
+   },
+   {
+    "name": "authenticateWithAlias",
+    "label": "Sign in using email alias addresses"
+   },
+   {
+    "name": "interactAi",
+    "label": "Interact with AI models"
+   },
+   {
+    "name": "impersonate",
+    "label": "Act on behalf of another user"
+   },
+   {
+    "name": "unlimitedRequests",
+    "label": "Bypass request rate limits"
+   },
+   {
+    "name": "unlimitedUploads",
+    "label": "Bypass upload size and rate limits"
+   },
+   {
+    "name": "fetchAnyBlob",
+    "label": "Retrieve arbitrary blobs, even those not owned by the account"
+   },
+   {
+    "name": "emailSend",
+    "label": "Email: Send emails"
+   },
+   {
+    "name": "emailReceive",
+    "label": "Email: Receive emails"
+   },
+   {
+    "name": "calendarAlarmsSend",
+    "label": "Calendar: Send calendar alarm notifications via email"
+   },
+   {
+    "name": "calendarSchedulingSend",
+    "label": "Calendar: Send calendar invitations and updates via email"
+   },
+   {
+    "name": "calendarSchedulingReceive",
+    "label": "Calendar: Process incoming calendar invitations and replies"
+   }
+  ],
+  "StorageQuota": [
+   {
+    "name": "maxEmails",
+    "label": "Maximum number of emails"
+   },
+   {
+    "name": "maxMailboxes",
+    "label": "Maximum number of mailboxes"
+   },
+   {
+    "name": "maxEmailSubmissions",
+    "label": "Maximum number of email submissions"
+   },
+   {
+    "name": "maxEmailIdentities",
+    "label": "Maximum number of email identities"
+   },
+   {
+    "name": "maxParticipantIdentities",
+    "label": "Maximum number of participant identities"
+   },
+   {
+    "name": "maxSieveScripts",
+    "label": "Maximum number of Sieve scripts"
+   },
+   {
+    "name": "maxPushSubscriptions",
+    "label": "Maximum number of push subscriptions"
+   },
+   {
+    "name": "maxCalendars",
+    "label": "Maximum number of calendars"
+   },
+   {
+    "name": "maxCalendarEvents",
+    "label": "Maximum number of calendar events"
+   },
+   {
+    "name": "maxCalendarEventNotifications",
+    "label": "Maximum number of calendar event notifications"
+   },
+   {
+    "name": "maxAddressBooks",
+    "label": "Maximum number of address books"
+   },
+   {
+    "name": "maxContactCards",
+    "label": "Maximum number of contact cards"
+   },
+   {
+    "name": "maxFiles",
+    "label": "Maximum number of files"
+   },
+   {
+    "name": "maxFolders",
+    "label": "Maximum number of folders"
+   },
+   {
+    "name": "maxMaskedAddresses",
+    "label": "Maximum number of masked email addresses"
+   },
+   {
+    "name": "maxAppPasswords",
+    "label": "Maximum number of app passwords"
+   },
+   {
+    "name": "maxApiKeys",
+    "label": "Maximum number of API keys"
+   },
+   {
+    "name": "maxPublicKeys",
+    "label": "Maximum number of public keys"
+   },
+   {
+    "name": "maxDiskQuota",
+    "label": "Maximum disk space allocated (bytes)"
+   }
+  ],
+  "TimeZone": [
+   {
+    "name": "Africa/Abidjan",
+    "label": "Africa/Abidjan"
+   },
+   {
+    "name": "Africa/Accra",
+    "label": "Africa/Accra"
+   },
+   {
+    "name": "Africa/Addis_Ababa",
+    "label": "Africa/Addis Ababa"
+   },
+   {
+    "name": "Africa/Algiers",
+    "label": "Africa/Algiers"
+   },
+   {
+    "name": "Africa/Asmara",
+    "label": "Africa/Asmara"
+   },
+   {
+    "name": "Africa/Asmera",
+    "label": "Africa/Asmera"
+   },
+   {
+    "name": "Africa/Bamako",
+    "label": "Africa/Bamako"
+   },
+   {
+    "name": "Africa/Bangui",
+    "label": "Africa/Bangui"
+   },
+   {
+    "name": "Africa/Banjul",
+    "label": "Africa/Banjul"
+   },
+   {
+    "name": "Africa/Bissau",
+    "label": "Africa/Bissau"
+   },
+   {
+    "name": "Africa/Blantyre",
+    "label": "Africa/Blantyre"
+   },
+   {
+    "name": "Africa/Brazzaville",
+    "label": "Africa/Brazzaville"
+   }
+  ]
+ },
+ "layouts": [
+  {
+   "name": "Management",
+   "icon": "monitor",
+   "items": [
+    {
+     "link": {
+      "name": "Dashboard",
+      "icon": "layout-dashboard",
+      "viewName": "CustomComponent/Dashboard"
+     }
+    },
+    {
+     "container": {
+      "name": "Directory",
+      "icon": "users",
+      "items": [
+       {
+        "type": "link",
+        "name": "Accounts",
+        "viewName": "x:Account/User"
+       },
+       {
+        "type": "link",
+        "name": "Groups",
+        "viewName": "x:Account/Group"
+       },
+       {
+        "type": "link",
+        "name": "Mailing Lists",
+        "viewName": "x:MailingList"
+       },
+       {
+        "type": "link",
+        "name": "Tenants",
+        "viewName": "x:Tenant"
+       },
+       {
+        "type": "link",
+        "name": "Roles",
+        "viewName": "x:Role"
+       },
+       {
+        "type": "link",
+        "name": "OAuth Clients",
+        "viewName": "x:OAuthClient"
+       }
+      ]
+     }
+    },
+    {
+     "container": {
+      "name": "Domains",
+      "icon": "globe",
+      "items": [
+       {
+        "type": "link",
+        "name": "Domains",
+        "viewName": "x:Domain"
+       },
+       {
+        "type": "link",
+        "name": "DKIM Signatures",
+        "viewName": "x:DkimSignature"
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}
