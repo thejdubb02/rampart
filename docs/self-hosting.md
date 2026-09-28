@@ -85,6 +85,17 @@ server what it can do and hides what it cannot.
   over JMAP only, done as you with your own sign-in and never with an admin token. On any
   other account the page says in one sentence why it has nothing to offer. See
   `account-security.md`.
+- **Require secure delivery and Confirm delivery** in the composer, which need the JMAP
+  submission extensions REQUIRETLS and DSN. The buttons are only there when the server
+  offers them, so an IMAP account never shows either.
+- **Whether a sent message was delivered**, read from the JMAP EmailSubmission that sent it.
+  Stalwart keeps that record for a few days and reports from its delivery queue, so a line
+  appears on your own recent mail while there is something definite to say, and nothing
+  otherwise.
+- **The server's own verdicts**: Stalwart's spam filter findings decide the phishing
+  warnings where it wrote them, and a virus scanner's headers (ClamAV, Amavis, Rspamd,
+  added to Stalwart as a milter) show in Show details. Without them, the phishing checks
+  run on this machine as before and there is simply no virus line.
 
 A capability your server lacks degrades with a reason on screen. It is never an error and
 never a silent nothing.
