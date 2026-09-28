@@ -92,7 +92,7 @@ named in the evidence column.
 | Capability | What it does | Rampart today | Action |
 |---|---|---|---|
 | `urn:ietf:params:jmap:calendars` + `:parse`, `Calendar`/`CalendarEvent` (also CalDAV) | Full server-side calendar: create, list, query events, recurrence, alarms | None used. `Calendar.kt` (369 lines) only parses `VEVENT`/`VALARM` text out of an email's own ICS attachment; no `Calendar/get`, `Calendar/query`, or `CalendarEvent/set` call anywhere in `Jmap.kt` | build (L) - tier 5 on the roadmap; a real calendar view is a second application, correctly deferred behind mail |
-| Calendar scheduling (iTIP over JMAP, `calendar-scheduling` object) | Accepting/declining a meeting talks to the organizer's calendar directly, not by emailing a `.ics` back | **Client-only duplicate**, and deliberately so today. `InvitationReply.kt:42-58` hand-builds a `METHOD:REPLY` VCALENDAR and mails it, which is the correct fallback for a server that might not be Stalwart, but on Stalwart itself this is a request Rampart could make instead of composing a synthetic email | move to server (M) once a Stalwart-only path exists; low priority while there is no calendar view to plug it into |
+| Calendar scheduling (iTIP over JMAP, `calendar-scheduling` object) | Accepting/declining a meeting talks to the organizer's calendar directly, not by emailing a `.ics` back | **Moved to the server where the server will send it** (RAM-94, 2026-09-28, not yet checked live). `InvitationCalendar.kt` sets the participant's status with `sendSchedulingMessages` and Stalwart sends the REPLY; `InvitationReply.kt`'s hand-built email stays the fallback for IMAP, for servers without calendars, and for the cases Stalwart silently sends nothing. `docs/invitations.md` has the detail | done, pending a live check |
 | `principals:availability` (free/busy) | Server can answer "is this person free" for a proposed time | None | skip for now (needs a scheduling UI that doesn't exist yet; revisit alongside the calendar view) |
 | Invitation reading from a message | The half of "calendar" that belongs in a mail client: what, when, where, who, RSVP | Done, entirely client-side by design (works on IMAP too). `InvitationCard.kt`, `Calendar.kt` | done |
 
@@ -176,7 +176,7 @@ renderer plus a few dozen hand-written task flows, not 100 features.
 ## MOVE TO SERVER
 
 1. **Phishing banner should defer to the server's own verdict (M).** `Phishing.kt` reimplements homograph/spoofing detection from scratch on every message; Stalwart's spam filter already scores the same signals into the header Rampart already reads for the spam badge.
-2. **Calendar invitation replies should use JMAP scheduling on Stalwart, not a hand-built `.ics` email (M).** `InvitationReply.kt` composes its own `METHOD:REPLY` and mails it; correct as the universal fallback, but a real request when the account is Stalwart.
+2. **Calendar invitation replies should use JMAP scheduling on Stalwart, not a hand-built `.ics` email (M).** `InvitationReply.kt` composes its own `METHOD:REPLY` and mails it; correct as the universal fallback, but a real request when the account is Stalwart. *Done on 2026-09-28 (RAM-94), see `docs/invitations.md`.*
 
 *(Scheduled send, the obvious third candidate, is not in this list: it already made the move - `Jmap.kt`'s `sendDelayed`/`holdEnvelope` already use Stalwart's `FUTURERELEASE`/`HOLDUNTIL`, gated on `maxDelayedSend`. `parity.md` 2.6 just hasn't caught up to the code yet.)*
 

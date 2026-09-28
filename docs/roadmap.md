@@ -638,6 +638,14 @@ the series is untouched. `CalendarEvents.kt` is the logic and `CalendarEventsTes
 check. Hidden with a sentence on an IMAP account or a server without
 `urn:ietf:params:jmap:calendars`.
 
+**Invitations reach the calendar (RAM-94), built 2026-09-28, not yet checked live.** On a
+server with calendars, Accept, Maybe and Decline change your own status on the event and
+Stalwart sends the reply; a meeting not yet in the calendar is added to the default one. The
+invitation card says whether the meeting is in the calendar and links to it on this page,
+and offers to apply an organiser's update or remove a cancelled meeting when the server has
+not already. The emailed reply stays for IMAP and for every case the server would not send.
+`InvitationCalendar.kt`, and `docs/invitations.md` for what Stalwart 0.16 does and why.
+
 Original note: Stalwart advertises `urn:ietf:params:jmap:calendars` and
 `urn:ietf:params:jmap:principals:availability`, so a calendar on the JMAP side is the same
 shape of work contacts just turned out to be.
