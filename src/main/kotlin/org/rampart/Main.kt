@@ -4941,6 +4941,7 @@ private fun Reader(
                     onGlobalFilters = { saveGlobalFilters(it) },
                     onFilters = { next -> filterAccount?.let { saveFilters(it, next) } },
                     onClose = { settingsOpen = false },
+                    security = settingsAccount()?.let { key -> sessions.firstOrNull { it.key == key } },
                 )
                 return@Row
             }
