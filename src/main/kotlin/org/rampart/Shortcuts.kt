@@ -68,6 +68,12 @@ internal val SHORTCUTS: List<Shortcut> = listOf(
     Shortcut("Ctrl+K", "Every command, by name", "Everything else"),
     Shortcut("?", "This list", "Everything else"),
     Shortcut("Ctrl+,", "Settings", "Everything else"),
+    // The app bar on the right, top to bottom. Ctrl and a digit because every bare letter
+    // is already a mail action, and Ctrl+2 and Ctrl+3 are where Outlook keeps the same two.
+    Shortcut("Ctrl+1", "Rook, beside the mail", "Everything else"),
+    Shortcut("Ctrl+2", "Calendar, beside the mail", "Everything else"),
+    Shortcut("Ctrl+3", "Contacts, beside the mail", "Everything else"),
+    Shortcut("Ctrl+4", "Files, beside the mail", "Everything else"),
 )
 
 /**
