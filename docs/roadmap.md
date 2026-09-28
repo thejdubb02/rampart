@@ -754,6 +754,15 @@ Built from `/api/schema` rather than hand written: 150 objects, 381 schemas, 359
 72 list views. One renderer, every screen, and it survives Stalwart releases. See
 `architecture.md`.
 
+**Started 2026-09-28, on branch `claude/admin-console`, not yet released.** The first
+slice: the schema fetched once per Stalwart version and cached by its hash, one renderer for
+every field type 0.16 uses, a list and a detail page for any object, and editing with
+checks beside each field and a confirm-before-save list of what changed. Wired for Domains
+and Accounts only, in a window of its own behind a separate admin login set under Settings,
+Server admin. Deleting is not offered yet, and lists of nested objects (credentials, email
+aliases) and maps (quotas) are shown but edited in Stalwart's own web console for now.
+Nothing in it has run against a live server yet.
+
 Before that, the user's own account, which is six small files' worth of `x:` types under
 `urn:stalwart:jmap`, gated on the session actually advertising that capability and never
 on a host name: mailbox password, display name, TOTP, app passwords, API keys, public
