@@ -177,8 +177,8 @@ private fun OneAccount(
     if (!script.editable) {
         // Being plain about why, rather than showing an empty list that looks like a bug.
         Note(
-            "The filter script on this server was written by hand rather than by a rule " +
-                "builder, so Rampart shows it as it is instead of rewriting it.",
+            "This filter script contains rules Rampart cannot safely rebuild, so Rampart " +
+                "shows it as it is instead of rewriting it.",
         )
         Spacer(Modifier.height(10.dp))
         RawScript(script.tail)
@@ -567,7 +567,7 @@ private fun RuleRow(rule: Rule, mine: Boolean, onToggle: () -> Unit, onEdit: () 
                 )
             }
         }
-        if (rule.understood && mine) {
+        if (rule.canEditStructured() && mine) {
             TextButton(onClick = onEdit) { Text("Edit") }
         }
         if (mine) {
@@ -576,6 +576,8 @@ private fun RuleRow(rule: Rule, mine: Boolean, onToggle: () -> Unit, onEdit: () 
         Switch(checked = rule.enabled, enabled = mine, onCheckedChange = { onToggle() })
     }
 }
+
+internal fun Rule.canEditStructured(): Boolean = understood && tests.size == 1 && acts.size == 1
 
 /** A rule as one sentence, which is the only form most people ever need to read. */
 internal fun summarise(rule: Rule): String {

@@ -35,22 +35,28 @@ import kotlin.io.path.writeText
  * how to write a file safely.
  */
 internal class JsonStore(private val name: String) {
+    private val lock = Any()
+
     private fun file() = Accounts.file().resolveSibling(name)
 
-    fun read(): JsonObject = runCatching {
+    fun read(): JsonObject = synchronized(lock) { readFile() }
+
+    fun write(change: MutableMap<String, JsonElement>.() -> Unit) = synchronized(lock) {
+        val updated = readFile().toMutableMap().apply(change)
+        val path = file()
+        path.parent?.createDirectories()
+        val temp = Files.createTempFile(path.parent, "$name.", ".new")
+        try {
+            temp.writeText(Json.encodeToString(JsonObject.serializer(), JsonObject(updated)))
+            Files.move(temp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        } finally {
+            Files.deleteIfExists(temp)
+        }
+    }
+
+    private fun readFile(): JsonObject = runCatching {
         val path = file()
         if (!path.exists()) JsonObject(emptyMap())
         else Json.parseToJsonElement(path.readText()).jsonObject
     }.getOrDefault(JsonObject(emptyMap()))
-
-    fun write(change: MutableMap<String, JsonElement>.() -> Unit) {
-        runCatching {
-            val updated = read().toMutableMap().apply(change)
-            val path = file()
-            path.parent?.createDirectories()
-            val temp = path.resolveSibling("$name.new")
-            temp.writeText(Json.encodeToString(JsonObject.serializer(), JsonObject(updated)))
-            Files.move(temp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-        }
-    }
 }

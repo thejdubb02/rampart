@@ -38,8 +38,8 @@ import java.util.UUID
  *
  * Two rules the rest of this file exists to keep:
  *
- * - **Never lose a rule we do not fully understand.** A rule whose JSON contains a field,
- *   comparator or action Rampart does not show is kept exactly as it was and marked
+ * - **Never lose a rule we do not fully understand.** A script whose JSON contains a field,
+ *   comparator or action Rampart does not show is kept exactly as it was and made
  *   read-only, rather than being re-encoded as the nearest thing we do know.
  * - **Never lose what is not ours at all.** Anything in the script beyond the rules the
  *   metadata accounts for, which on this mailbox is a hand written block of delivery
@@ -136,9 +136,16 @@ internal fun scriptOf(text: String): Script {
     if (begin < 0 || end < begin) return Script(emptyList(), text, builderMade = false)
 
     val meta = text.substring(begin + BEGIN.length, end).trim()
-    val rules = runCatching {
-        json.parseToJsonElement(meta).jsonObject["rules"]?.jsonArray.orEmpty().mapNotNull(::ruleOf)
+    val encodedRules = runCatching {
+        json.parseToJsonElement(meta).jsonObject["rules"]?.jsonArray.orEmpty()
     }.getOrNull() ?: return Script(emptyList(), text, builderMade = false)
+    val rules = encodedRules.mapNotNull(::ruleOf)
+
+    // One unsupported part is enough to make the generated section unsafe to rebuild.
+    // Keep the whole script raw so saving an unrelated rule cannot drop executable Sieve.
+    if (rules.size != encodedRules.size || rules.any { !it.understood }) {
+        return Script(emptyList(), text, builderMade = false)
+    }
 
     val body = text.substring(end + END.length)
     return Script(rules, tailOf(body, rules))

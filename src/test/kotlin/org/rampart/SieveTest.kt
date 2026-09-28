@@ -120,9 +120,28 @@ class SieveTest {
             """"conditions":[{"field":"from","comparator":"contains","value":"a.test"}],""" +
             """"actions":[{"type":"redirect","value":"someone@else.test"}],"stopProcessing":false}]}"""
         val script = scriptOf("/* @metadata:begin\n$meta\n@metadata:end */\n")
-        val rule = script.rules.single()
-        assertFalse(rule.understood)
-        assertContains(sieveOf(script), "redirect")
+        assertFalse(script.editable)
+        assertContains(script.tail, meta)
+    }
+
+    @Test
+    fun `an unknown action beside a known one makes the whole script read only`() {
+        val source = """/* @metadata:begin
+            {"version":1,"rules":[{"id":"x","name":"Mixed","enabled":true,"matchType":"all","conditions":[{"field":"from","comparator":"contains","value":"a.test"}],"actions":[{"type":"mark_read"},{"type":"redirect","value":"elsewhere.test"}],"stopProcessing":false}]}
+            @metadata:end */
+
+            require ["imap4flags"];
+            # Rule: Mixed
+            if header :contains "From" "a.test" {
+                addflag "\\Seen";
+                redirect "elsewhere.test";
+            }
+        """.trimIndent()
+
+        val script = scriptOf(source)
+
+        assertFalse(script.editable)
+        assertEquals(source, script.tail)
     }
 
     @Test
@@ -130,9 +149,9 @@ class SieveTest {
         val meta = """{"version":1,"rules":[{"id":"x","name":"List","enabled":true,"matchType":"all",""" +
             """"conditions":[{"field":"list_id","comparator":"contains","value":"announce"}],""" +
             """"actions":[{"type":"move","value":"Lists"}],"stopProcessing":false}]}"""
-        val rule = scriptOf("/* @metadata:begin\n$meta\n@metadata:end */\n").rules.single()
-        assertFalse(rule.understood)
-        assertContains(rule.raw.toString(), "list_id")
+        val script = scriptOf("/* @metadata:begin\n$meta\n@metadata:end */\n")
+        assertFalse(script.editable)
+        assertContains(script.tail, "list_id")
     }
 
     // --- generating -------------------------------------------------------------------

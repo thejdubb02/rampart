@@ -231,7 +231,7 @@ object Updates {
      * against. Deleted on every path, including the one where starting the process throws,
      * because a file left behind every failed attempt is a slow leak in the temp directory.
      */
-    private fun runPowerShell(command: List<String>, timeoutMinutes: Long): Ran? = runCatching {
+    private fun runPowerShell(command: List<String>, timeoutMinutes: Long): Ran? = try {
         updater() ?: return null
         // Asked before PowerShell is started at all. A manifest that is not being served yet
         // is a reason to come back in a minute, not a failed install, and running the command
@@ -265,7 +265,10 @@ object Updates {
         } finally {
             runCatching { Files.deleteIfExists(log) }
         }
-    }.getOrNull()
+    } catch (e: Exception) {
+        lastProblem = whyFailed(e)
+        null
+    }
 
     fun stage(): Boolean {
         val ran = runPowerShell(stageCommand(), timeoutMinutes = 30) ?: return false

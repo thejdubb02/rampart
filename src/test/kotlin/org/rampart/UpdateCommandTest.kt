@@ -103,4 +103,16 @@ class UpdateCommandTest {
         // and the button says so by doing nothing rather than by failing.
         assertFalse(Updates.restartToUpdate())
     }
+
+    @Test
+    fun aFailureBeforePowerShellStartsIsReported() {
+        val previous = System.getProperty("app.dir")
+        try {
+            System.setProperty("app.dir", "\u0000")
+            assertFalse(Updates.stage())
+            assertTrue(Updates.lastProblem?.isNotBlank() == true)
+        } finally {
+            if (previous == null) System.clearProperty("app.dir") else System.setProperty("app.dir", previous)
+        }
+    }
 }

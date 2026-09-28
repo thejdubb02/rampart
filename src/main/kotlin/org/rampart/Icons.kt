@@ -321,6 +321,12 @@ internal object HeavyIcons : IconPack by LineIcons {
      */
     override val key = "heavy"
     override val label = "Heavy"
+    override val Write by lazy { heavy(LineIcons.Write) }
+    override val Settings by lazy { heavy(LineIcons.Settings) }
+    override val Check by lazy { heavy(LineIcons.Check) }
+    override val Download by lazy { heavy(LineIcons.Download) }
+    override val Ask by lazy { heavy(LineIcons.Ask) }
+    override val Resize by lazy { heavy(LineIcons.Resize) }
     override val Inbox by lazy { heavy(LineIcons.Inbox) }
     override val Contacts by lazy { heavy(LineIcons.Contacts) }
     override val Tag by lazy { heavy(LineIcons.Tag) }

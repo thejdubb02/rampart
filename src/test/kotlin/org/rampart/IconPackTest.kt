@@ -53,6 +53,15 @@ class IconPackTest {
         assertEquals(LineIcons.Inbox.viewportWidth, HeavyIcons.Inbox.viewportWidth)
     }
 
+    @Test
+    fun `the heavy set replaces every interface glyph`() {
+        IconPack::class.java.methods
+            .filter { it.returnType.name == "androidx.compose.ui.graphics.vector.ImageVector" }
+            .forEach { getter ->
+                assertTrue(getter.invoke(HeavyIcons) !== getter.invoke(LineIcons), getter.name)
+            }
+    }
+
     /*
      * A hand written SVG path string that does not parse throws when the icon is first built,
      * which for a `val` is class init time and for a `by lazy` one is first use. Touching
