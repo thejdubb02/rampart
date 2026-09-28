@@ -229,6 +229,9 @@ internal interface MailBackend {
 
     fun hasContacts(): Boolean
 
+    /** Whether this server keeps calendars, which is what the phone setup page is for. */
+    fun hasCalendars(): Boolean
+
     fun addressBooks(): List<ContactBook>
 
     /**

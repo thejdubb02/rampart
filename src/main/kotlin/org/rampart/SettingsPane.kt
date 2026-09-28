@@ -119,7 +119,7 @@ internal fun SettingsPane(
     onGlobalFilters: (GlobalFilters) -> Unit,
     onFilters: (Script) -> Unit,
     onClose: () -> Unit,
-    /** The account the Security page manages, the same one the other pages are about. */
+    /** The account the Security and phone pages manage, the same one the other pages are about. */
     security: Session? = null,
     /** Which page opens first. Only ever passed by the screenshot tests. */
     initialPage: String = SettingsPages.first().first,
@@ -148,6 +148,7 @@ internal fun SettingsPane(
                     when (page) {
                         "accounts" -> AccountsPage(accounts, onAddAccount, quotas)
                         "security" -> SecurityPage(security)
+                        "phone" -> PhonePage(security)
                         "notifications" -> NotificationsPage(
                             notifyOnArrival, onNotifyOnArrival, notifyOnOpen, onNotifyOnOpen,
                         )
@@ -201,6 +202,7 @@ internal fun SettingsPane(
 private val SettingsPages: List<Triple<String, String, String>> = listOf(
     Triple("accounts", "Accounts", "General"),
     Triple("security", "Security", "General"),
+    Triple("phone", "Your phone", "General"),
     Triple("notifications", "Notifications", "General"),
     Triple("themes", "Themes", "Appearance"),
     // Kept with the other Mail pages. The nav groups in list order, so a page filed out of

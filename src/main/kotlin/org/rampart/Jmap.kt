@@ -983,6 +983,15 @@ internal class Jmap private constructor(
     override fun hasContacts(): Boolean = capabilities.any { it.endsWith(":contacts") }
 
     /**
+     * Whether this server keeps calendars, the same way [hasContacts] asks about contacts.
+     *
+     * Stalwart 0.16 advertises `urn:ietf:params:jmap:calendars`. Rampart has no calendar view
+     * of its own yet, so this exists only to gate the phone setup page: a phone syncs against
+     * the server's own CalDAV, and there is nothing to point it at without this capability.
+     */
+    override fun hasCalendars(): Boolean = capabilities.any { it.endsWith(":calendars") }
+
+    /**
      * RFC 9425 `Quota/get`, asked for only where the session says it exists.
      *
      * **An advertised capability and a configured limit are different things.** This

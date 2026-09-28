@@ -635,6 +635,8 @@ internal class Imap private constructor(
 
     override fun hasContacts(): Boolean = false
 
+    override fun hasCalendars(): Boolean = false
+
     /**
      * IMAP's own QUOTA extension (RFC 2087), which Angus exposes on the store.
      *

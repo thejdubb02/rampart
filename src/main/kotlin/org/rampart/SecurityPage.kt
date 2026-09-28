@@ -566,9 +566,14 @@ private fun AppPasswordsSection(
     Outcome(result, worked = false)
 }
 
-/** A secret shown the one time it can be, with a copy button and a plain warning. */
+/**
+ * A secret shown the one time it can be, with a copy button and a plain warning.
+ *
+ * Not private: the phone setup page makes an app password the same way this page does, and
+ * shows it under the same once-only rule, so it reuses this rather than a second copy of it.
+ */
 @Composable
-private fun NewSecret(secret: String, title: String, onDone: () -> Unit) {
+internal fun NewSecret(secret: String, title: String, onDone: () -> Unit) {
     val clipboard = LocalClipboardManager.current
     var copied by remember(secret) { mutableStateOf(false) }
     Spacer(Modifier.height(12.dp))
