@@ -3115,7 +3115,8 @@ private fun Reader(
         // Somebody new also goes on the server's address book, so phones see them too.
         scope.launch {
             val recipients = parseAddressList(draft.to) + parseAddressList(draft.cc)
-            withContext(Dispatchers.IO) { runCatching { LearnedContacts.save(account.jmap, key, recipients) } }
+            val mine = identities[key].orEmpty().map { it.email }
+            withContext(Dispatchers.IO) { runCatching { LearnedContacts.save(account.jmap, key, recipients, mine) } }
                 .exceptionOrNull()?.let {
                     report("The message was sent, but a new address did not reach your contacts.", whyFailed(it))
                 }

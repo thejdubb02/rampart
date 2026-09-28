@@ -27,6 +27,25 @@ class LearnedContactsTest {
     }
 
     @Test
+    fun `the account's own address is never saved as a contact`() {
+        val fresh = newRecipients(
+            listOf(to("Me@Example.org"), to("new@example.org")),
+            handled = emptyList(),
+            ownAddresses = listOf("me@example.org"),
+        )
+        assertEquals(listOf("new@example.org"), fresh.map { it.email })
+    }
+
+    @Test
+    fun `a no-reply or postmaster address is never saved as a contact`() {
+        val fresh = newRecipients(
+            listOf(to("noreply@example.org"), to("no-reply@example.org"), to("Postmaster@example.org"), to("new@example.org")),
+            emptyList(),
+        )
+        assertEquals(listOf("new@example.org"), fresh.map { it.email })
+    }
+
+    @Test
     fun `a card on the server is matched ignoring case and white space`() {
         val cards = listOf(Contact(id = "c1", name = "Dana", emails = listOf("  DANA@example.ORG ")))
         assertEquals(emptyList(), notOnAnyCard(listOf(to("dana@example.org")), cards))
