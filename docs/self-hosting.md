@@ -77,6 +77,9 @@ server what it can do and hides what it cannot.
 - **Filters**, which need Sieve. Stalwart has it. Most IMAP providers expose it over
   ManageSieve. Gmail does not, and Gmail's own filters are not Sieve.
 - **Vacation replies**, which need the JMAP vacation response or Sieve.
+- **The calendar**, which needs JMAP for Calendars (`urn:ietf:params:jmap:calendars`).
+  Stalwart has it. IMAP has no calendar at all: a mail account's calendar lives on CalDAV,
+  a separate protocol Rampart does not speak, so an IMAP account gets a sentence saying so.
 - **Instant new-mail push**, which needs JMAP over WebSocket. Without it Rampart polls, so
   the mail still arrives, a little later.
 - **Server-side settings, identities, aliases and the admin console**, which are Stalwart's

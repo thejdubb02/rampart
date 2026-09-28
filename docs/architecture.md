@@ -329,8 +329,14 @@ the reader assumes, which is the real work in step 2.
 
 ## What we are deliberately not doing
 
-Android (Sterna). Calendars, contacts and file storage. OpenPGP implemented in
+Android (Sterna). File storage. OpenPGP implemented in
 process. Certificate pinning. Any app store. Admin on a phone.
+
+Calendars and contacts came off that list: both turned out to be the same small shape of
+work over JMAP as the mail, read and written as the signed-in user, and both are absent with
+a sentence on a server that does not offer them. Contacts shipped first; the calendar was
+built on 2026-09-28. Neither is an application in its own right yet, and CalDAV and CardDAV
+for IMAP accounts are still not being done.
 
 ## Brand
 

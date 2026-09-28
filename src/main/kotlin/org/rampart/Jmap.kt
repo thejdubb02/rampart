@@ -1003,6 +1003,23 @@ internal class Jmap private constructor(
      */
     override fun hasContacts(): Boolean = capabilities.any { it.endsWith(":contacts") }
 
+    /** Whether the session named [uri], for a feature that lives in its own file and asks before calling. */
+    internal fun advertises(uri: String): Boolean = uri in capabilities
+
+    /**
+     * One round trip under [capability], for a feature that builds its own method calls.
+     *
+     * The same path every call here takes, so the credential, the refusal handling and the
+     * round trip count stay in one place rather than being copied into each new feature.
+     */
+    internal fun request(capability: String, vararg invocations: JsonArray): List<JsonArray> = try {
+        call(*invocations, also = capability)
+    } catch (e: JmapError) {
+        throw e
+    } catch (e: Exception) {
+        throw JmapError(plainNetworkError(e, URI.create(apiUrl).host ?: apiUrl))
+    }
+
     /**
      * Whether this server keeps calendars, the same way [hasContacts] asks about contacts.
      *

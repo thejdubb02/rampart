@@ -1143,6 +1143,7 @@ private fun Reader(
     var settingsOpen by remember { mutableStateOf(false) }
     var contactsOpen by remember { mutableStateOf(false) }
     var dashboardOpen by remember { mutableStateOf(false) }
+    var calendarOpen by remember { mutableStateOf(false) }
     /** Null until it has been counted, which is one pass over the local copy. */
     var stats by remember { mutableStateOf<MailStats?>(null) }
     // The server's cards, with the JSON each came from, so a save can be built on top
@@ -2365,9 +2366,9 @@ private fun Reader(
     // Files is a page like Contacts, and closes and opens against the others the same way.
     FilesFollows(
         backends = sessions.map { it.jmap },
-        othersOpen = settingsOpen || contactsOpen || dashboardOpen,
+        othersOpen = settingsOpen || contactsOpen || dashboardOpen || calendarOpen,
         place = listOf(here?.first, here?.second?.id, viewingTag, showingResults),
-    ) { settingsOpen = false; contactsOpen = false; dashboardOpen = false }
+    ) { settingsOpen = false; contactsOpen = false; dashboardOpen = false; calendarOpen = false }
 
     LaunchedEffect(contactsOpen, sessions.size) {
         val key = writingAccount() ?: return@LaunchedEffect
@@ -4415,9 +4416,9 @@ private fun Reader(
                 val key = here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key
                 if (key != null) folderAsk = FolderAsk(key, null, FolderJob.CreateInside)
             }
-            "settings" -> { settingsOpen = true; contactsOpen = false }
-            "contacts" -> { contactsOpen = true; settingsOpen = false; dashboardOpen = false }
-            "dashboard" -> { dashboardOpen = true; settingsOpen = false; contactsOpen = false }
+            "settings" -> { settingsOpen = true; contactsOpen = false; calendarOpen = false }
+            "contacts" -> { contactsOpen = true; settingsOpen = false; dashboardOpen = false; calendarOpen = false }
+            "dashboard" -> { dashboardOpen = true; settingsOpen = false; contactsOpen = false; calendarOpen = false }
             "shortcuts" -> showShortcuts = true
             "assistant" -> chatOpen = !chatOpen
             // Only where there is a conversation. Muting one message is not a thing, and a
@@ -4887,6 +4888,7 @@ private fun Reader(
                         onSearch = {
                             settingsOpen = false
                             contactsOpen = false
+                            calendarOpen = false
                             showingResults = query.isNotBlank()
                             selected = null
                             scope.launch { reload() }
@@ -4903,6 +4905,7 @@ private fun Reader(
                     settingsOpen = false
                     contactsOpen = false
                     dashboardOpen = false
+                    calendarOpen = false
                     openTag(keyword)
                 },
                 onTagColour = { keyword, colour ->
@@ -4916,12 +4919,14 @@ private fun Reader(
                 },
                 dragAt = dragAt,
                 onTagBounds = { keyword, bounds -> tagBounds[keyword] = bounds },
-                onSettings = { settingsOpen = !settingsOpen; if (settingsOpen) { contactsOpen = false; dashboardOpen = false } },
-                onDashboard = { dashboardOpen = !dashboardOpen; if (dashboardOpen) { contactsOpen = false; settingsOpen = false } },
+                onSettings = { settingsOpen = !settingsOpen; if (settingsOpen) { contactsOpen = false; dashboardOpen = false; calendarOpen = false } },
+                onDashboard = { dashboardOpen = !dashboardOpen; if (dashboardOpen) { contactsOpen = false; settingsOpen = false; calendarOpen = false } },
                 inDashboard = dashboardOpen,
                 inSettings = settingsOpen,
-                onContacts = { contactsOpen = !contactsOpen; if (contactsOpen) { settingsOpen = false; dashboardOpen = false } },
+                onContacts = { contactsOpen = !contactsOpen; if (contactsOpen) { settingsOpen = false; dashboardOpen = false; calendarOpen = false } },
                 inContacts = contactsOpen,
+                onCalendar = { calendarOpen = !calendarOpen; if (calendarOpen) { settingsOpen = false; dashboardOpen = false; contactsOpen = false } },
+                inCalendar = calendarOpen,
                 onAddAccount = onAddAccount,
                 collapsed = collapsed,
                 onToggleCollapsed = { collapsed = !collapsed; Settings.setSidebarCollapsed(collapsed) },
@@ -4931,6 +4936,7 @@ private fun Reader(
                     settingsOpen = false
                     contactsOpen = false
                     dashboardOpen = false
+                    calendarOpen = false
                     here = key to mailbox
                 },
                 onWrite = {
@@ -4975,6 +4981,10 @@ private fun Reader(
             VerticalDivider()
             if (FilesPage.open) {
                 FilesPane(writingAccount()?.let { session(it) })
+            } else if (calendarOpen) {
+                val key = (here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key)
+                val open = sessions.firstOrNull { it.key == key }
+                CalendarPane(open?.jmap, open?.let { shortAccountName(it.account.name, it.account.email) }.orEmpty())
             } else if (dashboardOpen) {
                 DashboardPane(
                     stats = stats,
@@ -5902,6 +5912,7 @@ internal fun Sidebar(
     inSettings: Boolean = false,
     inContacts: Boolean = false,
     inDashboard: Boolean = false,
+    inCalendar: Boolean = false,
     /** Whether the assistant panel is showing, so its button says so. */
     asking: Boolean = false,
     onAsk: () -> Unit = {},
@@ -5909,6 +5920,7 @@ internal fun Sidebar(
     onSettings: () -> Unit,
     onContacts: () -> Unit = {},
     onDashboard: () -> Unit = {},
+    onCalendar: () -> Unit = {},
     onAddAccount: () -> Unit,
     onWrite: () -> Unit,
     /** The version line at the bottom is clicked to see what changed. A no-op default so
@@ -6107,6 +6119,7 @@ internal fun Sidebar(
                     )
                 }
             }
+            CalendarSidebarButton(inCalendar, onCalendar, 32.dp)
             SidebarTooltip("Contacts") {
                 IconButton(onClick = onContacts, modifier = Modifier.size(32.dp)) {
                     Icon(
@@ -6165,6 +6178,7 @@ internal fun Sidebar(
                         )
                     }
                 }
+                CalendarSidebarButton(inCalendar, onCalendar, 28.dp)
                 SidebarTooltip("Contacts") {
                     IconButton(onClick = onContacts, modifier = Modifier.size(28.dp)) {
                         Icon(

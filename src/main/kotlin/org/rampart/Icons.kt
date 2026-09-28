@@ -87,6 +87,7 @@ internal interface IconPack {
 
     val Search: ImageVector
     val Dashboard: ImageVector
+    val Calendar: ImageVector
 
     /** An arrow into an open tray, for a package that has been fetched and is waiting. */
     val Download: ImageVector
@@ -210,6 +211,12 @@ internal object LineIcons : IconPack {
     override val Search = icon("Search", "M8.1 2.6a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11M12.2 12.2 15.6 15.6")
     // Three bars of different heights, which is what a chart looks like at 16 pixels.
     override val Dashboard = icon("Dashboard", "M3.4 15V9.6M9 15V3.4M14.6 15v-8")
+    // A page with two rings on top and a rule under them, which is what a calendar looks like at 16 pixels.
+    override val Calendar = icon(
+        "Calendar",
+        "M3.8 4h10.4a1.2 1.2 0 0 1 1.2 1.2v9a1.2 1.2 0 0 1-1.2 1.2H3.8a1.2 1.2 0 0 1-1.2-1.2v-9A1.2 1.2 0 0 1 3.8 4Z" +
+            "M2.6 7.6h12.8M6 2.4v3M12 2.4v3",
+    )
 
     /** An arrow landing in an open tray, for something fetched and waiting to be installed. */
     override val Download = icon("Download", "M9 2.6V10M9 10 5.8 6.8M9 10 12.2 6.8M3.4 12V15H14.6V12")
@@ -332,6 +339,7 @@ internal object HeavyIcons : IconPack by LineIcons {
     override val Tag by lazy { heavy(LineIcons.Tag) }
     override val Attachment by lazy { heavy(LineIcons.Attachment) }
     override val Dashboard by lazy { heavy(LineIcons.Dashboard) }
+    override val Calendar by lazy { heavy(LineIcons.Calendar) }
     override val Search by lazy { heavy(LineIcons.Search) }
     override val Archive by lazy { heavy(LineIcons.Archive) }
     override val Drafts by lazy { heavy(LineIcons.Drafts) }

@@ -627,7 +627,18 @@ keeps the local book. `LearnedContacts.kt`.
 
 ### 2.9b Calendar
 
-**Viable and not scheduled.** Stalwart advertises `urn:ietf:params:jmap:calendars` and
+**Built 2026-09-28, not yet released or checked against a live server.** A Calendar page
+from the sidebar footer: month, week, day and agenda; every calendar on the account with its
+colour and a show or hide toggle; events created, edited and deleted, all-day or timed, with
+a simple repeat (daily, weekly on chosen days, monthly, yearly, with an end). Repeating
+events are expanded here from their JSCalendar rules, exceptions included, and a rule this
+build cannot expand exactly is drawn once with a sentence saying so rather than on the wrong
+days. An edit to one time of a repeating event is written as an override, so the rest of
+the series is untouched. `CalendarEvents.kt` is the logic and `CalendarEventsTest.kt` the
+check. Hidden with a sentence on an IMAP account or a server without
+`urn:ietf:params:jmap:calendars`.
+
+Original note: Stalwart advertises `urn:ietf:params:jmap:calendars` and
 `urn:ietf:params:jmap:principals:availability`, so a calendar on the JMAP side is the same
 shape of work contacts just turned out to be.
 
