@@ -31,6 +31,7 @@ import javafx.embed.swing.JFXPanel
 import javafx.embed.swing.SwingFXUtils
 import javafx.scene.Scene
 import javafx.scene.image.WritableImage
+import javafx.scene.transform.Transform
 import javafx.scene.web.WebView
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -943,8 +944,10 @@ private suspend fun snapshotWebView(panel: JFXPanel): ImageBitmap? = suspendCanc
     Platform.runLater {
         if (!cont.isActive) return@runLater
         val view = panel.scene?.root as? WebView
-        val w = view?.width?.toInt() ?: 0
-        val h = view?.height?.toInt() ?: 0
+        val scale = panelScale(panel)
+        val size = snapshotPixelSize(view?.width ?: 0.0, view?.height ?: 0.0, scale)
+        val w = size.first
+        val h = size.second
         if (view == null || w < 2 || h < 2) {
             cont.resume(null)
             return@runLater
@@ -952,9 +955,16 @@ private suspend fun snapshotWebView(panel: JFXPanel): ImageBitmap? = suspendCanc
         val bitmap = runCatching {
             val params = javafx.scene.SnapshotParameters()
             params.fill = javafx.scene.paint.Color.TRANSPARENT
+            params.transform = Transform.scale(scale.toDouble(), scale.toDouble())
             val image = view.snapshot(params, WritableImage(w, h))
             SwingFXUtils.fromFXImage(image, null)?.toComposeImageBitmap()
         }.getOrNull()
         if (cont.isActive) cont.resume(bitmap)
     }
+}
+
+/** The bitmap uses physical pixels so Compose can map it back onto the panel bounds. */
+internal fun snapshotPixelSize(width: Double, height: Double, scale: Float): Pair<Int, Int> {
+    val outputScale = scale.coerceAtLeast(0.1f)
+    return kotlin.math.ceil(width * outputScale).toInt() to kotlin.math.ceil(height * outputScale).toInt()
 }

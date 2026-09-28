@@ -73,6 +73,13 @@ class SignatureTest {
     }
 
     @Test
+    fun anIdentitySignatureWithoutASeparatorIsNotAddedTwice() {
+        val signature = "Justin Willhite\nWillhite Strategy Group\nStrategy that works\nwillhitestrategy.com"
+        val draft = Draft(from = "me@example.org", body = "Hello\n\nJustin Willhite\nWillhite  Strategy Group\nStrategy that works\nwillhitestrategy.com")
+        assertEquals(draft, signed(draft, signature))
+    }
+
+    @Test
     fun threadingFieldsAndRecipientsSurviveSigning() {
         val draft = Draft(
             from = "justin@willhitestrategy.com",

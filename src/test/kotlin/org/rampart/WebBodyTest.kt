@@ -119,6 +119,12 @@ class WebBodyTest {
     }
 
     @Test
+    fun `a snapshot uses the panel's physical pixel size`() {
+        assertEquals(1000 to 600, snapshotPixelSize(800.0, 480.0, 1.25f))
+        assertEquals(1200 to 720, snapshotPixelSize(800.0, 480.0, 1.5f))
+    }
+
+    @Test
     fun `a document of any size is handed over whole`() {
         // The ceiling a data URL had, and the reason this is a file: a signature with a
         // 700 KB picture in it makes a document of nearly a megabyte, and at that size the

@@ -49,7 +49,7 @@ class HtmlSignatureTest {
 
     @Test
     fun blankLinesSurviveAsBlankLines() {
-        assertEquals("<div>one</div><div><br></div><div>two</div>", htmlOf("one\n\ntwo"))
+        assertEquals("<p>one</p><p>two</p>", htmlOf("one\n\ntwo"))
         assertEquals("", htmlOf("   \n  "))
     }
 

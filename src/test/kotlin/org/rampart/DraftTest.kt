@@ -42,6 +42,29 @@ class DraftTest {
     }
 
     @Test
+    fun htmlParagraphsAndLinksOpenAsParagraphsAndAVisibleLink() {
+        val html = "<p>Hi Susan,</p><p>Visit <a href=\"https://example.org\">our site</a>.</p>"
+        val draft = draftOf(summary, Body(html, null), "justin@willhitestrategy.com")
+        assertEquals("Hi Susan,\n\nVisit [our site](https://example.org).", draft.body)
+        assertEquals("Hi Susan,\n\nVisit our site.", displayMarkup(draft.body).text.text)
+        assertTrue(markupToHtml(draft.body).contains("<a href=\"https://example.org\">our site</a>"))
+        assertEquals("<p>Hi Susan,</p><p>Visit <a href=\"https://example.org\">our site</a>.</p>", markupToHtml(draft.body))
+    }
+
+    @Test
+    fun divsAndDoubleBreaksOpenAsSeparateParagraphs() {
+        assertEquals("One\n\nTwo", htmlToMarkup("<div>One</div><div>Two</div>"))
+        assertEquals("One\n\nTwo", htmlToMarkup("<div>One<br><br>Two</div>"))
+    }
+
+    @Test
+    fun aMarkedHtmlSignatureSeparatorSurvivesRestore() {
+        val html = "<div>Hello</div><div>-- </div><div class=\"signature\" data-signature>Justin</div>"
+        val draft = draftOf(summary, Body(html, null), "justin@willhitestrategy.com")
+        assertTrue(hasSignOff(draft.body), draft.body)
+    }
+
+    @Test
     fun aReopenedDraftKeepsAttachmentsAndThreadingHeaders() {
         val file = Attachment("b1", "quote.pdf", "application/pdf", 1200)
         val logo = Attachment("b2", "logo.png", "image/png", 40, cid = "logo", inline = true)

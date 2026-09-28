@@ -15,7 +15,7 @@ class RichTextTest {
 
     @Test
     fun `a blank line is a break`() {
-        assertEquals("<div>a</div><div><br></div><div>b</div>", markupToHtml("a\n\nb"))
+        assertEquals("<p>a</p><p>b</p>", markupToHtml("a\n\nb"))
     }
 
     @Test

@@ -1677,7 +1677,7 @@ private fun normalizeSignature(value: String) = value.replace(Regex("\\s+"), " "
 internal fun htmlToMarkup(html: String): String {
     val doc = Jsoup.parseBodyFragment(html)
     doc.select("script, style, noscript").remove()
-    return renderChildren(doc.body()).trim()
+    return renderChildren(doc.body()).trim('\n', '\r')
 }
 
 private fun renderChildren(el: Element): String = el.childNodes().joinToString("") { renderNode(it) }
@@ -1716,13 +1716,22 @@ private fun renderElement(el: Element): String {
             "${index + 1}. " + renderChildren(child).trim()
         }.joinToString("\n") + "\n"
         "pre" -> "```\n" + el.wholeText().trim('\n') + "\n```\n"
-        "p", "div", "tr" -> {
-            val inner = renderChildren(el).trimEnd()
-            if (inner.isEmpty()) "\n" else inner + "\n"
+        "p" -> {
+            val inner = blockText(el)
+            if (inner.isEmpty()) "\n\n" else inner + "\n\n"
+        }
+        "div", "tr" -> {
+            val inner = blockText(el)
+            if (inner.isEmpty()) "\n\n" else inner + "\n\n"
         }
         "td", "th" -> renderChildren(el).trim() + " "
         else -> renderChildren(el)
     }
+}
+
+private fun blockText(el: Element): String {
+    val text = renderChildren(el)
+    return if (text.trimEnd() == "--") "-- " else text.trimEnd()
 }
 
 private fun wrapMarker(marker: String, text: String): String {
@@ -1755,7 +1764,7 @@ internal fun signed(
     if (signature.isBlank()) return draft
     // A `-- ` inside the quoted or forwarded original is the other person's sign-off.
     // Only one outside that part means this draft is already signed.
-    if (hasSignOff(draft.body)) return draft
+    if (hasSignOff(draft.body) || containsSignature(draft.body, signature)) return draft
     val quote = if (aboveQuote) quoteStart(draft.body) else -1
     return draft.copy(
         body = if (quote < 0) draft.body.trimEnd() + signatureBlock(signature)
@@ -1780,6 +1789,19 @@ internal fun hasSignOff(body: String): Boolean {
     if (first.contains("Forwarded message")) return false
     return body.substring(quote).lineSequence().drop(1).any { it == "-- " }
 }
+
+/** Whether the editable part already contains the identity's complete signature. */
+internal fun containsSignature(body: String, signature: String): Boolean {
+    val quote = quoteStart(body)
+    val own = if (quote < 0) body else body.take(quote)
+    val wanted = normalizedSignatureLines(signature)
+    if (wanted.isEmpty()) return false
+    val lines = own.lines().map(::normalizeSignature).filter { it.isNotEmpty() }
+    return lines.windowed(wanted.size).any { it == wanted }
+}
+
+private fun normalizedSignatureLines(signature: String): List<String> =
+    signature.lines().map(::normalizeSignature).filter { it.isNotEmpty() }
 
 /**
  * Where the quoted original starts, or -1 when the draft has none.

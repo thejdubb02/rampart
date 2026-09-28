@@ -182,10 +182,16 @@ private fun isFence(line: String): Boolean = line.startsWith("```")
  */
 internal fun markupToHtml(text: String): String {
     val lines = text.trimEnd().ifBlank { return "" }.lines()
+    val hasParagraphs = lines.any { it.isBlank() }
     val out = StringBuilder()
     var i = 0
     while (i < lines.size) {
         val line = lines[i]
+
+        if (line.isBlank() && hasParagraphs) {
+            i++
+            continue
+        }
 
         if (isFence(line)) {
             i++
@@ -248,7 +254,10 @@ internal fun markupToHtml(text: String): String {
             continue
         }
 
-        out.append(if (line.isBlank()) "<div><br></div>" else "<div>" + inlineHtml(line) + "</div>")
+        out.append(
+            if (hasParagraphs) "<p>" + inlineHtml(line) + "</p>"
+            else if (line.isBlank()) "<div><br></div>" else "<div>" + inlineHtml(line) + "</div>"
+        )
         i++
     }
     return out.toString()
@@ -318,8 +327,58 @@ internal fun markupToPlain(text: String): String {
  * buffer holds, and nothing can get out of step with it.
  */
 internal object MarkupStyling : VisualTransformation {
-    override fun filter(text: AnnotatedString): TransformedText =
-        TransformedText(styleMarkup(text.text), OffsetMapping.Identity)
+    override fun filter(text: AnnotatedString): TransformedText = displayMarkup(text.text)
+}
+
+/** Links keep their address in the buffer while the composer draws only the linked text. */
+internal fun displayMarkup(text: String): TransformedText {
+    val hidden = BooleanArray(text.length)
+    var offset = 0
+    for (line in text.lines()) {
+        for (span in spans(line).filter { it.kind == Kind.LINK }) {
+            for (i in span.open) hidden[offset + i] = true
+            for (i in span.close) hidden[offset + i] = true
+        }
+        offset += line.length + when {
+            text.startsWith("\r\n", offset + line.length) -> 2
+            offset + line.length < text.length -> 1
+            else -> 0
+        }
+    }
+    if (hidden.none { it }) return TransformedText(styleMarkup(text), OffsetMapping.Identity)
+
+    val originalToShown = IntArray(text.length + 1)
+    val shownToOriginal = mutableListOf<Int>()
+    val shown = StringBuilder()
+    for (i in text.indices) {
+        originalToShown[i] = shown.length
+        if (!hidden[i]) {
+            shownToOriginal += i
+            shown.append(text[i])
+        }
+    }
+    originalToShown[text.length] = shown.length
+    shownToOriginal += text.length
+    val styled = AnnotatedString.Builder(shown.toString()).apply {
+        var at = 0
+        for (line in text.lines()) {
+            for (span in spans(line).filter { it.kind == Kind.LINK }) {
+                val start = originalToShown[at + span.body.first]
+                val end = originalToShown[at + span.body.last + 1]
+                addStyle(SpanStyle(textDecoration = TextDecoration.Underline), start, end)
+            }
+            at += line.length + when {
+                text.startsWith("\r\n", at + line.length) -> 2
+                at + line.length < text.length -> 1
+                else -> 0
+            }
+        }
+    }.toAnnotatedString()
+    val mapping = object : OffsetMapping {
+        override fun originalToTransformed(offset: Int) = originalToShown[offset.coerceIn(0, text.length)]
+        override fun transformedToOriginal(offset: Int) = shownToOriginal[offset.coerceIn(0, shown.length)]
+    }
+    return TransformedText(styled, mapping)
 }
 
 private val FAINT = SpanStyle(color = Color(0x66808080))
