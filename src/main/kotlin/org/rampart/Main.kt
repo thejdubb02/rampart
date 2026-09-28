@@ -4754,7 +4754,7 @@ private fun Reader(
     CompositionLocalProvider(LocalBodyCover provides bodyCover) {
     // Any of these sits over the message. The live panel would paint through them.
     CoverBody(
-        composing != null || undo != null || undoSend != null || showPalette || showShortcuts ||
+        composing != null || showPalette || showShortcuts ||
             confirm != null || summarisePacket != null || attached != null || folderAsk != null ||
             filterFor != null || changelogDialog != null || tnef != null,
     )
@@ -5125,83 +5125,146 @@ private fun Reader(
                 )
                 return@Row
             }
-            MessageList(
-                emails = emails,
-                selected = selected,
-                loading = loading,
-                title = listHeading(
-                    searching = showingResults,
-                    query = query,
-                    folder = viewingTag?.let { tagsOf(setOf(it)).firstOrNull()?.label ?: it }
-                        ?: here?.second?.name.orEmpty(),
-                ),
-                /*
-                 * Dragging a message onto a tag in the sidebar.
-                 *
-                 * The drop is worked out here from where the pointer was let go, not by the
-                 * tag row noticing a pointer over itself, because the row being dragged
-                 * consumes pointer movement for the length of the drag and nothing
-                 * underneath ever hears about it.
-                 */
-                onDrag = { message, at ->
-                    if (at != null) {
-                        dragging = message
-                        dragAt = at
-                    } else {
-                        val where = dragAt
-                        val hit = where?.let { point ->
-                            tagBounds.entries.firstOrNull { it.value.contains(point) }?.key
+            // The undo card sits over the list, not the message: the message is a native panel
+            // that paints over anything drawn on top of it.
+            Box(Modifier.fillMaxHeight()) {
+                MessageList(
+                    emails = emails,
+                    selected = selected,
+                    loading = loading,
+                    title = listHeading(
+                        searching = showingResults,
+                        query = query,
+                        folder = viewingTag?.let { tagsOf(setOf(it)).firstOrNull()?.label ?: it }
+                            ?: here?.second?.name.orEmpty(),
+                    ),
+                    /*
+                     * Dragging a message onto a tag in the sidebar.
+                     *
+                     * The drop is worked out here from where the pointer was let go, not by the
+                     * tag row noticing a pointer over itself, because the row being dragged
+                     * consumes pointer movement for the length of the drag and nothing
+                     * underneath ever hears about it.
+                     */
+                    onDrag = { message, at ->
+                        if (at != null) {
+                            dragging = message
+                            dragAt = at
+                        } else {
+                            val where = dragAt
+                            val hit = where?.let { point ->
+                                tagBounds.entries.firstOrNull { it.value.contains(point) }?.key
+                            }
+                            val dropped = dragging
+                            if (hit != null && dropped != null) tagMessage(dropped, hit)
+                            dragging = null
+                            dragAt = null
                         }
-                        val dropped = dragging
-                        if (hit != null && dropped != null) tagMessage(dropped, hit)
-                        dragging = null
-                        dragAt = null
+                    },
+                    // Only in the merged list. Everywhere else the folder says which account it
+                    // is, and repeating it on every row would be noise on most screens.
+                    accountLabels = if (unified()) {
+                        sessions.associate { it.key to shortAccountName(it.account.name, it.account.email) }
+                    } else {
+                        emptyMap()
+                    },
+                    picked = picked,
+                    onRefresh = { scope.launch { refreshNow() } },
+                    order = order,
+                    onOrder = { order = it; Settings.setOrder(it) },
+                    rowActions = rowActions,
+                    scheduled = scheduledSends.associate { it.draftId to it.sendAt },
+                    filters = quick,
+                    onFilters = { next ->
+                        quick = next
+                        selected = null
+                        scope.launch { reload() }
+                    },
+                    onClearFilters = {
+                        quick = QuickFilters()
+                        selected = null
+                        scope.launch { reload() }
+                    },
+                    folderTotal = if (here?.first == ALL_ACCOUNTS) {
+                        sessions.sumOf { open -> folderFor("inbox", mailboxes[open.key].orEmpty())?.total ?: 0 }
+                    } else {
+                        here?.second?.total ?: 0
+                    },
+                    attachmentReason = attachmentReason(
+                        imapAccount = here?.first?.let { it != ALL_ACCOUNTS && session(it).jmap is Imap } == true,
+                        mergedWithImap = here?.first == ALL_ACCOUNTS && sessions.any { it.jmap is Imap },
+                    ),
+                    filterNote = filterNote,
+                    loadingMore = loadingMore,
+                    onNeedMore = ::loadMore,
+                    searching = showingResults,
+                    onSelect = { message, ctrl, shift ->
+                        val token = rowToken(message)
+                        picked = pickedAfter(emails.map { rowToken(it) }, picked, anchor, token, ctrl, shift)
+                        if (!shift) anchor = token
+                        if (!ctrl && !shift) selected = message
+                    },
+                )
+                Box(Modifier.matchParentSize(), contentAlignment = Alignment.BottomCenter) {
+                // A small card floating at the bottom, like a phone's own undo notice. Not in the
+                // column above the panes, where it pushed every pane down, and not a full-width
+                // strip across the top, where it covered the toolbar you needed while it was up.
+                if (undoSend != null || undo != null) {
+                    Column(
+                        Modifier.padding(horizontal = 12.dp, vertical = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        undoSend?.let { cancel ->
+                            // The drain here is the real deadline rather than a display choice: the message
+                            // is being held for exactly this long and then it goes. No Dismiss, because
+                            // dismissing the offer would not stop the send, and a button that looks like it
+                            // might is worse than no button.
+                            UndoBar(
+                                text = "Sending.",
+                                seconds = Settings.undoSeconds(),
+                                restartOn = cancel,
+                                onUndo = cancel,
+                            )
+                        }
+                        undo?.let { last ->
+                            UndoBar(
+                                text = movedNotice(last.count, last.what),
+                                seconds = undoBarSeconds,
+                                restartOn = last,
+                                onUndo = {
+                                    scope.launch {
+                                        // Every account is put back, and the notice only clears if they all
+                                        // did. One that failed leaves the offer up rather than pretending.
+                                        val results = withContext(Dispatchers.IO) {
+                                            last.moves.map { move ->
+                                                move to runCatching {
+                                                    session(move.accountKey).jmap.move(move.ids, move.fromMailboxId)
+                                                }
+                                            }
+                                        }
+                                        val failed = results.filter { it.second.isFailure }.map { it.first }
+                                        if (failed.isEmpty()) {
+                                            undo = null
+                                            refreshNow()
+                                        } else {
+                                            undo = Undoable(failed, last.what)
+                                            report(
+                                                "Some messages could not be put back.",
+                                                whyFailed(results.first { it.second.isFailure }.second.exceptionOrNull()!!),
+                                            )
+                                        }
+                                    }
+                                },
+                                // Only this one expires. The move can still be undone by hand afterwards,
+                                // so the offer running out costs nothing.
+                                onExpire = { undo = null },
+                                onDismiss = { undo = null },
+                            )
+                        }
                     }
-                },
-                // Only in the merged list. Everywhere else the folder says which account it
-                // is, and repeating it on every row would be noise on most screens.
-                accountLabels = if (unified()) {
-                    sessions.associate { it.key to shortAccountName(it.account.name, it.account.email) }
-                } else {
-                    emptyMap()
-                },
-                picked = picked,
-                onRefresh = { scope.launch { refreshNow() } },
-                order = order,
-                onOrder = { order = it; Settings.setOrder(it) },
-                rowActions = rowActions,
-                scheduled = scheduledSends.associate { it.draftId to it.sendAt },
-                filters = quick,
-                onFilters = { next ->
-                    quick = next
-                    selected = null
-                    scope.launch { reload() }
-                },
-                onClearFilters = {
-                    quick = QuickFilters()
-                    selected = null
-                    scope.launch { reload() }
-                },
-                folderTotal = if (here?.first == ALL_ACCOUNTS) {
-                    sessions.sumOf { open -> folderFor("inbox", mailboxes[open.key].orEmpty())?.total ?: 0 }
-                } else {
-                    here?.second?.total ?: 0
-                },
-                attachmentReason = attachmentReason(
-                    imapAccount = here?.first?.let { it != ALL_ACCOUNTS && session(it).jmap is Imap } == true,
-                    mergedWithImap = here?.first == ALL_ACCOUNTS && sessions.any { it.jmap is Imap },
-                ),
-                filterNote = filterNote,
-                loadingMore = loadingMore,
-                onNeedMore = ::loadMore,
-                searching = showingResults,
-                onSelect = { message, ctrl, shift ->
-                    val token = rowToken(message)
-                    picked = pickedAfter(emails.map { rowToken(it) }, picked, anchor, token, ctrl, shift)
-                    if (!shift) anchor = token
-                    if (!ctrl && !shift) selected = message
-                },
-            )
+                }
+                }
+            }
             VerticalDivider()
             if (picked.size > 1) {
                 Picked(
@@ -5288,7 +5351,7 @@ private fun Reader(
                 val stacked = thread.size > 1
                 val stackScroll = rememberScrollState()
                 Box(
-                    Modifier.fillMaxSize().background(
+                    Modifier.weight(1f).fillMaxHeight().background(
                         if (stacked) MaterialTheme.colorScheme.surface else Color.Transparent,
                     ),
                 ) {
@@ -5414,63 +5477,6 @@ private fun Reader(
         }
     }
 
-        // A small card floating at the bottom, like a phone's own undo notice. Not in the
-        // column above the panes, where it pushed every pane down, and not a full-width
-        // strip across the top, where it covered the toolbar you needed while it was up.
-        if (undoSend != null || undo != null) {
-            Column(
-                Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                undoSend?.let { cancel ->
-                    // The drain here is the real deadline rather than a display choice: the message
-                    // is being held for exactly this long and then it goes. No Dismiss, because
-                    // dismissing the offer would not stop the send, and a button that looks like it
-                    // might is worse than no button.
-                    UndoBar(
-                        text = "Sending.",
-                        seconds = Settings.undoSeconds(),
-                        restartOn = cancel,
-                        onUndo = cancel,
-                    )
-                }
-                undo?.let { last ->
-                    UndoBar(
-                        text = movedNotice(last.count, last.what),
-                        seconds = undoBarSeconds,
-                        restartOn = last,
-                        onUndo = {
-                            scope.launch {
-                                // Every account is put back, and the notice only clears if they all
-                                // did. One that failed leaves the offer up rather than pretending.
-                                val results = withContext(Dispatchers.IO) {
-                                    last.moves.map { move ->
-                                        move to runCatching {
-                                            session(move.accountKey).jmap.move(move.ids, move.fromMailboxId)
-                                        }
-                                    }
-                                }
-                                val failed = results.filter { it.second.isFailure }.map { it.first }
-                                if (failed.isEmpty()) {
-                                    undo = null
-                                    refreshNow()
-                                } else {
-                                    undo = Undoable(failed, last.what)
-                                    report(
-                                        "Some messages could not be put back.",
-                                        whyFailed(results.first { it.second.isFailure }.second.exceptionOrNull()!!),
-                                    )
-                                }
-                            }
-                        },
-                        // Only this one expires. The move can still be undone by hand afterwards,
-                        // so the offer running out costs nothing.
-                        onExpire = { undo = null },
-                        onDismiss = { undo = null },
-                    )
-                }
-            }
-        }
 
         /*
          * Bottom right, over the mail, the way every webmail does it. Writing a reply and
