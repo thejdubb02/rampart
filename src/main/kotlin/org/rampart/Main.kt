@@ -588,6 +588,7 @@ private fun ApplicationScope.Rampart() {
                         onUnread = { unread = it },
                         windowSize = { windowState.size },
                     )
+                    AdminWindow()
                 }
             }
         }
@@ -5879,6 +5880,7 @@ internal fun Sidebar(
                     )
                 }
             }
+            AdminSidebarButton(32.dp)
             SidebarTooltip("Settings") {
                 IconButton(onClick = onSettings, modifier = Modifier.size(32.dp)) {
                     Icon(
@@ -5941,6 +5943,7 @@ internal fun Sidebar(
                         )
                     }
                 }
+                AdminSidebarButton(28.dp)
                 SidebarTooltip("Settings") {
                     IconButton(onClick = onSettings, modifier = Modifier.size(28.dp)) {
                         Icon(
