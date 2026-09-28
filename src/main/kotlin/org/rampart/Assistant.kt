@@ -224,7 +224,7 @@ object Assistant {
     ): String? = when {
         account != null && folder != null && folder in deniedFolders(account) ->
             "$folder is set to never leave this machine. Change that in Settings if this message should be readable."
-        config.mode == AssistantMode.OFF -> "The assistant is switched off."
+        config.mode == AssistantMode.OFF -> "Rook is switched off."
         config.mode == AssistantMode.BYOK && Secrets.loadNamed(KEY).isNullOrBlank() ->
             "No key has been added yet."
         blocked(config) -> "This month has reached the ${money(config.ceiling)} limit you set."

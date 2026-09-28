@@ -369,7 +369,7 @@ private fun DescribeRule(
 ) {
     val config = remember { Assistant.config() }
     if (config.mode == AssistantMode.OFF) {
-        Note("Rules can be described in words. Turn the assistant on in Settings to do that.")
+        Note("Rules can be described in words. Turn Rook on in Settings to do that.")
         return
     }
 

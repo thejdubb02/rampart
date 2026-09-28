@@ -83,7 +83,7 @@ internal val COMMANDS: List<Command> = listOf(
     Command("New folder", null, "new-folder"),
     // Both of these act on what is open, like Reply does, and both were reachable only by
     // finding the right button.
-    Command("The assistant", null, "assistant"),
+    Command("Ask Rook", null, "assistant"),
     Command("Mute this conversation", null, "mute"),
     Command("Settings", "Ctrl+,", "settings"),
     Command("Keyboard shortcuts", "?", "shortcuts"),

@@ -1,5 +1,6 @@
 package org.rampart
 
+import androidx.compose.ui.draw.shadow
 import kotlinx.serialization.json.JsonObject
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
@@ -5413,10 +5414,14 @@ private fun Reader(
         }
     }
 
-        // Over the panes, not in the column above them. In the column it pushed every
-        // pane down for as long as it was up.
+        // A small card floating at the bottom, like a phone's own undo notice. Not in the
+        // column above the panes, where it pushed every pane down, and not a full-width
+        // strip across the top, where it covered the toolbar you needed while it was up.
         if (undoSend != null || undo != null) {
-            Column(Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
+            Column(
+                Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 undoSend?.let { cancel ->
                     // The drain here is the real deadline rather than a display choice: the message
                     // is being held for exactly this long and then it goes. No Dismiss, because
@@ -6048,15 +6053,9 @@ internal fun Sidebar(
                     )
                 }
             }
-            SidebarTooltip("The assistant") {
+            SidebarTooltip("Ask Rook") {
                 IconButton(onClick = onAsk, modifier = Modifier.size(32.dp)) {
-                    Icon(
-                        RampartIcons.Ask,
-                        contentDescription = "The assistant",
-                        tint = if (asking) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.size(16.dp),
-                    )
+                    RookAvatar(size = 16.dp, ring = asking)
                 }
             }
             SidebarTooltip("Settings") {
@@ -6110,15 +6109,9 @@ internal fun Sidebar(
                         )
                     }
                 }
-                SidebarTooltip("The assistant") {
+                SidebarTooltip("Ask Rook") {
                     IconButton(onClick = onAsk, modifier = Modifier.size(28.dp)) {
-                        Icon(
-                            RampartIcons.Ask,
-                            contentDescription = "The assistant",
-                            tint = if (asking) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.size(16.dp),
-                        )
+                        RookAvatar(size = 16.dp, ring = asking)
                     }
                 }
                 SidebarTooltip("Settings") {
@@ -8662,11 +8655,11 @@ internal fun String.asFullLocalTime(): String = runCatching {
 }.getOrDefault(this)
 
 /**
- * What the assistant said about this thread, or the button that would ask it to.
+ * What Rook said about this thread, or the button that would ask it to.
  *
  * Its own card rather than a line among the message buttons above, so a paragraph nobody
- * wrote cannot be mistaken for one somebody did: no name beside it, no date, a heading
- * that says plainly what it is.
+ * wrote cannot be mistaken for one somebody did: no person's name beside it, no date, a
+ * heading that says plainly what it is.
  */
 @Composable
 private fun SummaryCard(summarise: SummariseActions) {
@@ -8678,7 +8671,7 @@ private fun SummaryCard(summarise: SummariseActions) {
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "Summary, from the assistant",
+                "Summary, from Rook",
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.outline,
@@ -8833,9 +8826,14 @@ internal fun UndoBar(
         left.animateTo(0f, tween(durationMillis = seconds * 1000, easing = LinearEasing))
         onExpire?.invoke()
     }
+    val card = RoundedCornerShape(10.dp)
     Row(
-        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(start = 14.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+        Modifier.widthIn(max = 520.dp)
+            .shadow(8.dp, card)
+            .clip(card)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, card)
+            .padding(start = 16.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))

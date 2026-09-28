@@ -1,6 +1,7 @@
 package org.rampart
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -16,6 +17,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.platform.Font
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.Image
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -95,6 +97,35 @@ internal fun Avatar(
                 fontWeight = FontWeight.Bold,
                 fontSize = (size.value * 0.36f).sp,
                 fontFamily = Archivo,
+            )
+        }
+    }
+}
+
+/**
+ * Rook's round face, bundled with the app rather than fetched, so it never has a
+ * fallback to fall back to.
+ *
+ * [ring] draws a thin border in the theme's primary colour, for the one place this
+ * is also a toggle button: the sidebar shows it when the assistant panel is open, the
+ * same way the other footer icons change colour to show which one is active.
+ */
+@Composable
+internal fun RookAvatar(size: Dp, file: String = "rook-avatar-96.png", ring: Boolean = false) {
+    val image = artImage(file)
+    Box(
+        modifier = Modifier.size(size).clip(CircleShape)
+            .then(
+                if (ring) Modifier.border(1.5.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                else Modifier,
+            ),
+    ) {
+        if (image != null) {
+            Image(
+                image,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
             )
         }
     }

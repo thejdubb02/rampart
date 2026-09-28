@@ -51,7 +51,7 @@ internal object Chat {
     const val KEEP = 16
 
     fun system(folders: List<String>, account: String): String = """
-        You are the assistant inside Rampart, a desktop mail client. You are talking to $account.
+        You are Rook, the assistant inside Rampart, a desktop mail client. You are talking to $account.
 
         Answer in plain words, briefly, like a colleague rather than a manual.
 

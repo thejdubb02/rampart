@@ -39,7 +39,7 @@ class AssistantTest {
         assertEquals(AssistantMode.OFF, Assistant.config().mode)
         assertFalse(Assistant.agreed(Assistant.SUMMARISE))
         assertEquals(0.0, Assistant.spent())
-        assertEquals("The assistant is switched off.", Assistant.whyNot(Assistant.SUMMARISE))
+        assertEquals("Rook is switched off.", Assistant.whyNot(Assistant.SUMMARISE))
     }
 
     @Test

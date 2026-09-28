@@ -19,3 +19,19 @@ instead of outlines.
 
 Lettering is Archivo ExtraBold, converted to outlines, so nothing here needs the
 font installed. `tools/make_brand.py` regenerates the whole set.
+
+## Rook
+
+Rook is the assistant's character: a small crow in a Rampart-red scarf. The files are
+in `rook/`, and the copy in Nextcloud lives in `Rampart/Rook`.
+
+| File | Use |
+|---|---|
+| `Rook_Avatar_128.png` | round avatar, small, on a dark circle |
+| `Rook_Avatar_512.png` | round avatar, large, on a dark circle; source for the app's avatar art |
+| `Rook_Full_1024.png` | full body, transparent background |
+| `Rook_Original.jpg` | the source image the rest are cut from |
+
+The app's own copies, downscaled for use in the UI, are in
+`src/main/resources/art/`: `rook-avatar-96.png` and `rook-avatar-256.png` from the
+round avatar, `rook-full-512.png` from the full body.

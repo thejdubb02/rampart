@@ -590,7 +590,7 @@ internal fun Composer(
                 Assistant.record(Assistant.COMPOSE, reply.tokensIn, reply.tokensOut, config)
                 apply(TextFieldValue(reply.text))
             } catch (e: Exception) {
-                val title = "The assistant could not write that."
+                val title = "Rook could not write that."
                 aiError = title
                 aiDetail = faultDetail(e, title)
             } finally {
@@ -624,7 +624,7 @@ internal fun Composer(
                 Assistant.record(Assistant.COMPOSE, reply.tokensIn, reply.tokensOut, config)
                 apply(TextFieldValue(reply.text))
             } catch (e: Exception) {
-                val title = "The assistant could not write that."
+                val title = "Rook could not write that."
                 aiError = title
                 aiDetail = faultDetail(e, title)
             } finally {

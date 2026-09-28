@@ -212,7 +212,7 @@ private val SettingsPages: List<Triple<String, String, String>> = listOf(
     Triple("identities", "Identities and signatures", "Mail"),
     Triple("away", "Away reply", "Mail"),
     Triple("tracking", "Open tracking", "Mail"),
-    Triple("assistant", "Assistant", "Mail"),
+    Triple("assistant", "Rook", "Mail"),
     Triple("diagnostics", "Diagnostics", "Rampart"),
     Triple("about", "About", "Rampart"),
 )
@@ -1254,10 +1254,10 @@ private fun AssistantPage(accounts: List<AccountMailboxes>) {
     }
 
     Section(
-        "Assistant",
-        "A model can summarise a long thread, draft a reply or say what a message looks " +
-            "like. It is off, and every one of those is a button somebody presses: nothing " +
-            "here runs on a timer, on arrival, or while you scroll.",
+        "Rook",
+        "Rook, your mail assistant, can summarise a long thread, draft a reply or say what " +
+            "a message looks like. It is off, and every one of those is a button somebody " +
+            "presses: nothing here runs on a timer, on arrival, or while you scroll.",
     )
     Text(
         "To summarise a message, its text has to be sent to whatever model you point this " +

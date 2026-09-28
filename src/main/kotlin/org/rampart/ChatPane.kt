@@ -1,5 +1,6 @@
 package org.rampart
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -34,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
@@ -80,14 +82,16 @@ internal fun ChatPane(
             Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Assistant", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+            RookAvatar(size = 22.dp, file = "rook-avatar-256.png")
+            Spacer(Modifier.width(8.dp))
+            Text("Rook", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
             if (said.isNotEmpty()) {
                 TextButton(onClick = onClear) { Text("Clear", style = MaterialTheme.typography.bodySmall) }
             }
             IconButton(onClick = onClose, modifier = Modifier.size(28.dp)) {
                 Icon(
                     RampartIcons.Close,
-                    contentDescription = "Close the assistant",
+                    contentDescription = "Close Rook",
                     tint = MaterialTheme.colorScheme.outline,
                     modifier = Modifier.size(15.dp),
                 )
@@ -209,12 +213,30 @@ internal fun ChatPane(
  */
 @Composable
 private fun Opening() {
+    val portrait = artImage("rook-full-512.png")
     Column(Modifier.padding(top = 14.dp)) {
-        Text(
-            "Ask about your mail, and it can act on it.",
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Spacer(Modifier.height(8.dp))
+        if (portrait != null) {
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Image(
+                    portrait,
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.size(96.dp),
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Hi, I'm Rook. Ask me about your mail, and I can act on it.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            Spacer(Modifier.height(14.dp))
+        } else {
+            Text(
+                "Ask about your mail, and it can act on it.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Spacer(Modifier.height(8.dp))
+        }
         listOf(
             "What came in from the hotel this week?",
             "Archive everything from that newsletter.",
@@ -258,6 +280,12 @@ private fun SaidLine(line: Said) {
             color = MaterialTheme.colorScheme.outline,
             fontWeight = FontWeight.Medium,
         )
-        else -> Text(line.text, style = MaterialTheme.typography.bodyMedium)
+        // Rook's own words. The avatar is what tells them apart from a receipt at a
+        // glance, since both sit on the left.
+        else -> Row(verticalAlignment = Alignment.Top) {
+            RookAvatar(size = 18.dp)
+            Spacer(Modifier.width(8.dp))
+            Text(line.text, style = MaterialTheme.typography.bodyMedium)
+        }
     }
 }
