@@ -355,7 +355,10 @@ internal fun sieveOf(script: Script): String {
         .append(END).append("\n\n")
 
     val live = script.rules.filter { it.enabled && it.tests.isNotEmpty() && it.acts.isNotEmpty() }
-    val needs = required(live)
+    // The mute rules in the tail need their capabilities declared up here too, because
+    // Sieve takes `require` only before the first command. Rebuilding this line from the
+    // rules alone would make the server refuse the next save of any account with a mute.
+    val needs = (required(live) + muteNeeds(script.tail)).distinct()
     if (needs.isNotEmpty()) {
         out.append("require [").append(needs.joinToString(", ") { sieveQuote(it) }).append("];\n\n")
     }

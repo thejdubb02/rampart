@@ -63,3 +63,29 @@ Two cases, both reported rather than swallowed:
 - An account whose filter script was written by hand rather than by a builder. Rampart
   cannot rebuild one of those without guessing at what it said, so it leaves it alone and
   shows it as text.
+
+## Muted conversations are rules too
+
+Muting a conversation on an account with Sieve writes a rule rather than a line in a local
+file, so it holds with Rampart closed and in every other client. A reply names the
+conversation it belongs to: References carries the first message's Message-ID, and a direct
+answer carries it in In-Reply-To. The rule matches that one id in either header, marks the
+message read and files it by the Archive role:
+
+    # Rampart mute: thread Tabc123
+    if header :contains ["References", "In-Reply-To"] "<root@example.org>" {
+        fileinto :flags "\\Seen" :specialuse "\\Archive" "Archive";
+    }
+    # Rampart mute end
+
+The rules sit below everything a builder wrote, in the part of the script both clients
+keep verbatim, because the builder's model has no field for an arbitrary header and a rule
+it could not read would make the whole script read-only. The two marker comments are how
+unmute removes exactly its own block. The capabilities it needs are added to the `require`
+at the top, since Sieve takes them nowhere else, and the builder keeps them there when it
+rebuilds that line. `ServerMute.kt` has the detail.
+
+Only the active script is written. A mailbox whose filters were switched off is not
+switched back on for the sake of one conversation; a new script is made instead. Accounts
+without Sieve keep the old local mute, and the menu says in one sentence that it works only
+while Rampart is open on this computer.
