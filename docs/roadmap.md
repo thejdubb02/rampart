@@ -618,6 +618,13 @@ advertised:
 Still to come: several address books rather than only the default one, and reading a
 contact's picture.
 
+**Learned addresses reach the server (RAM-92).** The first send to an address no card has
+yet also saves a card for it in the default address book, so Bulwark and phones know the
+people you write to. Compared against every card's addresses, ignoring case, so nobody gets
+a second card. Each address is taken to the server once and written down, so a card deleted
+on purpose does not come back on the next reply. JMAP accounts with contacts only; IMAP
+keeps the local book. `LearnedContacts.kt`.
+
 ### 2.9b Calendar
 
 **Viable and not scheduled.** Stalwart advertises `urn:ietf:params:jmap:calendars` and
