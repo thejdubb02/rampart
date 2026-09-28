@@ -285,7 +285,7 @@ internal class Imap private constructor(
      * are skipped: they are a different fetch, and treating one as the body is how a
      * PDF or a forwarded message replaces the text the person meant to read.
      */
-    override fun body(id: String): Body = useFolder(folderOf(id), Folder.READ_ONLY) { folder ->
+    override fun body(id: String): Body = useMessageFolder(id, Folder.READ_ONLY) { folder ->
         val message = folder.getMessageByUID(uidOf(id)) as? MimeMessage
             ?: throw JmapError("That message is not on the server any more.")
         fill(folder, message)
@@ -395,7 +395,7 @@ internal class Imap private constructor(
      */
     override fun thread(threadId: String): List<Summary> {
         val uid = uidOf(threadId)
-        return useFolder(folderOf(threadId), Folder.READ_ONLY) { folder ->
+        return useMessageFolder(threadId, Folder.READ_ONLY) { folder ->
             val group = if (store.hasCapability("THREAD=REFERENCES")) {
                 runCatching { threadGroup(folder, uid) }.getOrDefault(listOf(uid))
             } else {
@@ -534,15 +534,19 @@ internal class Imap private constructor(
         if (!folder.exists()) throw JmapError("There is no folder called \"$mailboxId\" on this server.")
         folder.open(Folder.READ_WRITE)
         try {
-            val appended = runCatching { folder.appendUIDMessages(arrayOf(message)) }.getOrNull()
+            val messageId = message.getHeader("Message-ID")?.firstOrNull()?.takeIf { it.isNotBlank() }
+                ?: "<${java.util.UUID.randomUUID()}@rampart.invalid>".also {
+                    message.setHeader("Message-ID", it)
+                    message.saveChanges()
+                }
+            val appended = folder.appendUIDMessages(arrayOf(message))
             val uid = appended?.firstOrNull()?.uid
-            if (uid != null) return imapId(uid, folder.fullName)
-            // No UIDPLUS. The message is there and we cannot be told its number, so the
-            // newest one is the best available answer and is right unless something else
-            // appended in between.
-            folder.appendMessages(arrayOf(message))
-            val last = folder.getMessage(folder.messageCount)
-            return imapId(folder.getUID(last), folder.fullName)
+            if (uid != null) return imapId(uid, folder.uidValidity, folder.fullName)
+            // APPEND already succeeded when UIDPLUS supplied no UID. The unique Message-ID
+            // finds that same copy without sending it a second time.
+            val found = folder.search(HeaderTerm("Message-ID", messageId)).lastOrNull()
+                ?: throw JmapError("The message was appended, but the server did not reveal its UID.")
+            return imapId(folder.getUID(found), folder.uidValidity, folder.fullName)
         } finally {
             runCatching { folder.close(false) }
         }
@@ -551,8 +555,8 @@ internal class Imap private constructor(
     // ---- attachments ----------------------------------------------------------------
 
     override fun attachments(emailId: String): List<Attachment> =
-        useFolder(folderOf(emailId), Folder.READ_ONLY) { folder ->
-            val message = folder.getMessageByUID(uidOf(emailId)) as? MimeMessage ?: return@useFolder emptyList()
+        useMessageFolder(emailId, Folder.READ_ONLY) { folder ->
+            val message = folder.getMessageByUID(uidOf(emailId)) as? MimeMessage ?: return@useMessageFolder emptyList()
             fill(folder, message)
             attachmentsOf(message, emailId)
         }
@@ -561,8 +565,8 @@ internal class Imap private constructor(
         val emailId = attachment.blobId.substringBeforeLast('#')
         val at = attachment.blobId.substringAfterLast('#').toIntOrNull() ?: return null
         if (attachment.size > limit) return null
-        return useFolder(folderOf(emailId), Folder.READ_ONLY) { folder ->
-            val message = folder.getMessageByUID(uidOf(emailId)) as? MimeMessage ?: return@useFolder null
+        return useMessageFolder(emailId, Folder.READ_ONLY) { folder ->
+            val message = folder.getMessageByUID(uidOf(emailId)) as? MimeMessage ?: return@useMessageFolder null
             partAt(message, at)?.inputStream?.use { it.readBytes() }
         }
     }
@@ -585,9 +589,9 @@ internal class Imap private constructor(
      * message in one FETCH, and a half-read message is not a message anybody can use.
      */
     override fun raw(emailId: String, limit: Long): String? =
-        useFolder(folderOf(emailId), Folder.READ_ONLY) { folder ->
-            val message = folder.getMessageByUID(uidOf(emailId)) as? MimeMessage ?: return@useFolder null
-            if (message.size > limit) return@useFolder null
+        useMessageFolder(emailId, Folder.READ_ONLY) { folder ->
+            val message = folder.getMessageByUID(uidOf(emailId)) as? MimeMessage ?: return@useMessageFolder null
+            if (message.size > limit) return@useMessageFolder null
             java.io.ByteArrayOutputStream().also { message.writeTo(it) }.toString(Charsets.UTF_8)
         }
 
@@ -738,6 +742,14 @@ internal class Imap private constructor(
         }
     }
 
+    private fun <T> useMessageFolder(id: String, mode: Int, block: (IMAPFolder) -> T): T =
+        useFolder(folderOf(id), mode) { folder ->
+            if (folder.uidValidity != uidValidityOf(id)) {
+                throw JmapError("This folder was replaced on the server. Refresh it before opening the message.")
+            }
+            block(folder)
+        }
+
     /**
      * Summaries for a batch of messages, in one command rather than one per field each.
      *
@@ -777,10 +789,10 @@ internal class Imap private constructor(
         return Summary(
             // The UID, not the sequence number. A sequence number is only meaningful while
             // the folder is open and shifts under you the moment anything is deleted.
-            id = runCatching { imapId(folder.getUID(message), folder.fullName) }.getOrDefault(""),
+            id = runCatching { imapId(folder.getUID(message), folder.uidValidity, folder.fullName) }.getOrDefault(""),
             // Its own id. IMAP has no thread id to give, and the reader asks for the thread
             // of every message it opens, so this has to point back at something real.
-            threadId = runCatching { imapId(folder.getUID(message), folder.fullName) }.getOrDefault(""),
+            threadId = runCatching { imapId(folder.getUID(message), folder.uidValidity, folder.fullName) }.getOrDefault(""),
             from = sender?.personal?.takeIf { it.isNotBlank() } ?: sender?.address.orEmpty(),
             fromEmail = sender?.address.orEmpty(),
             subject = runCatching { message.subject }.getOrNull().orEmpty(),
@@ -797,7 +809,8 @@ internal class Imap private constructor(
     }
 
     private fun messagesByUid(folder: IMAPFolder, ids: List<String>): Array<Message> {
-        val uids = LongArray(ids.size) { uidOf(ids[it]) }
+        val current = ids.filter { uidValidityOf(it) == folder.uidValidity }
+        val uids = LongArray(current.size) { uidOf(current[it]) }
         // The array has a null slot for a UID the folder no longer holds. Passing those
         // through to STORE or EXPUNGE is an error on some servers.
         return folder.getMessagesByUID(uids).filterNotNull().toTypedArray()
@@ -817,7 +830,7 @@ internal class Imap private constructor(
  * unambiguous without escaping, and the id stays printable, which matters because it is
  * also the primary key in the local store.
  */
-internal fun imapId(uid: Long, mailboxId: String): String = "$uid $mailboxId"
+internal fun imapId(uid: Long, uidValidity: Long, mailboxId: String): String = "$uid $uidValidity $mailboxId"
 
 /**
  * Everything a row in the list shows, asked for in one go.
@@ -851,15 +864,18 @@ private val summaryFields = FetchProfile().apply {
 /** The UID half, or -1 when this is not one of ours, which finds no message. */
 internal fun uidOf(id: String): Long = id.substringBefore(' ').toLongOrNull() ?: -1L
 
+/** The UIDVALIDITY half, or -1 when this is not one of ours. */
+internal fun uidValidityOf(id: String): Long = id.substringAfter(' ', "").substringBefore(' ').toLongOrNull() ?: -1L
+
 /** The folder half. Empty when the id carries none, which opens nothing. */
-internal fun folderOf(id: String): String = id.substringAfter(' ', "")
+internal fun folderOf(id: String): String = id.substringAfter(' ', "").substringAfter(' ', "")
 
 /**
  * Ids grouped by the folder they are in, so one call can act on a selection spanning
  * several, which is what a search result or a unified inbox is.
  */
 internal fun byFolder(ids: List<String>): Map<String, List<String>> =
-    ids.filter { folderOf(it).isNotEmpty() && uidOf(it) >= 0 }.groupBy(::folderOf)
+    ids.filter { folderOf(it).isNotEmpty() && uidOf(it) >= 0 && uidValidityOf(it) >= 0 }.groupBy(::folderOf)
 
 /**
  * The role a server declares for a folder, or one guessed from its name.

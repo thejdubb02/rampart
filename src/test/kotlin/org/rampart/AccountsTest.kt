@@ -194,6 +194,28 @@ class SignInWalkTest {
 
 class JmapTest {
     @Test
+    fun `ordinary mail calls do not require submission`() {
+        val mail = kotlinx.serialization.json.buildJsonArray {
+            add(kotlinx.serialization.json.JsonPrimitive("Email/get"))
+            add(kotlinx.serialization.json.buildJsonArray {})
+            add(kotlinx.serialization.json.JsonPrimitive("m"))
+        }
+        val submission = kotlinx.serialization.json.buildJsonArray {
+            add(kotlinx.serialization.json.JsonPrimitive("EmailSubmission/set"))
+            add(kotlinx.serialization.json.buildJsonArray {})
+            add(kotlinx.serialization.json.JsonPrimitive("s"))
+        }
+        val identity = kotlinx.serialization.json.buildJsonArray {
+            add(kotlinx.serialization.json.JsonPrimitive("Identity/get"))
+            add(kotlinx.serialization.json.buildJsonArray {})
+            add(kotlinx.serialization.json.JsonPrimitive("i"))
+        }
+        assertFalse(capabilitiesFor(arrayOf(mail)).any { it.contains("submission") })
+        assertTrue(capabilitiesFor(arrayOf(mail, submission)).any { it.contains("submission") })
+        assertTrue(capabilitiesFor(arrayOf(identity)).any { it.contains("submission") })
+    }
+
+    @Test
     fun `a plain http server is refused rather than leaking the password`() {
         val thrown = kotlin.runCatching { Jmap.connect("http://mail.example.org", "you@example.org", "hunter2") }
         val error = thrown.exceptionOrNull()
@@ -207,6 +229,15 @@ class JmapTest {
  * to keep a password, Rampart keeps it nowhere at all rather than inventing a place.
  */
 class SecretsTest {
+    @Test
+    fun `mail keys use a distinct credential identity per account`() {
+        val first = Secrets.mailKeyAccount(SavedAccount("First", "mail.example", "first@example.com"))
+        val second = Secrets.mailKeyAccount(SavedAccount("Second", "mail.example", "second@example.com"))
+        assertFalse(first == second)
+        assertEquals("First (local mail)", first.name)
+        assertEquals("db:first@example.com", first.email)
+    }
+
     @Test
     fun `with no credential store, nothing is stored and nothing comes back`() {
         if (Secrets.available()) return

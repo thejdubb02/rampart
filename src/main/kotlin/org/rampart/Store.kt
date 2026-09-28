@@ -5,6 +5,7 @@ import kotlinx.serialization.json.Json
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
+import java.security.MessageDigest
 import java.sql.Connection
 import java.sql.DriverManager
 import kotlin.io.path.createDirectories
@@ -91,8 +92,11 @@ internal class Store(private val connection: Connection) : AutoCloseable {
     companion object {
         /** Where an account's copy lives. Beside the accounts file, which is already ours. */
         fun file(account: String): Path {
-            val safe = account.filter { it.isLetterOrDigit() || it == '-' || it == '_' }.ifBlank { "default" }
-            return Accounts.file().parent.resolve("mail-$safe.db")
+            val normalized = account.trim().lowercase()
+            val prefix = normalized.filter { it.isLetterOrDigit() || it == '-' || it == '_' }.take(24).ifBlank { "account" }
+            val hash = MessageDigest.getInstance("SHA-256").digest(normalized.toByteArray(StandardCharsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
+            return Accounts.file().parent.resolve("mail-$prefix-$hash.db")
         }
 
         /**
@@ -150,6 +154,9 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             )
             """,
             "CREATE INDEX IF NOT EXISTS message_mailbox ON message (mailbox, receivedAt DESC)",
+            "CREATE TABLE IF NOT EXISTS mailbox_message (message_id TEXT NOT NULL, mailbox_id TEXT NOT NULL, " +
+                "PRIMARY KEY (message_id, mailbox_id))",
+            "CREATE INDEX IF NOT EXISTS mailbox_message_mailbox ON mailbox_message (mailbox_id, message_id)",
             // The bodies are separate: a list needs none of them, and keeping them out of
             // the row the list reads is the difference between a fast query and a slow one.
             "CREATE TABLE IF NOT EXISTS body (id TEXT PRIMARY KEY, html TEXT, text TEXT)",
@@ -212,7 +219,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
     }
 
     /** Remembers that a message went out tracked. */
-    fun track(tracked: Tracked) {
+    @Synchronized fun track(tracked: Tracked) {
         connection.prepareStatement(
             "INSERT OR REPLACE INTO tracked (id, messageId, recipient, subject, sentAt) VALUES (?, ?, ?, ?, ?)",
         ).use { s ->
@@ -239,7 +246,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
      * a batch, because the count of rows changed is what distinguishes an insert from an
      * ignore, and a batch is not required to report that per row.
      */
-    fun recordFetches(fetches: List<Fetch>): List<Fetch> {
+    @Synchronized fun recordFetches(fetches: List<Fetch>): List<Fetch> {
         if (fetches.isEmpty()) return emptyList()
         val inserted = ArrayList<Fetch>(fetches.size)
         connection.prepareStatement(
@@ -264,7 +271,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
      * every message this account ever tracked, on every poll, to find out about the few
      * ids that just arrived.
      */
-    fun trackedByIds(ids: List<String>): Map<String, Tracked> {
+    @Synchronized fun trackedByIds(ids: List<String>): Map<String, Tracked> {
         if (ids.isEmpty()) return emptyMap()
         val placeholders = ids.joinToString(",") { "?" }
         return connection.prepareStatement(
@@ -293,7 +300,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
     }
 
     /** Everything sent tracked, newest first, with what has been fetched for each. */
-    fun tracking(limit: Int = 500): List<Pair<Tracked, List<Fetch>>> {
+    @Synchronized fun tracking(limit: Int = 500): List<Pair<Tracked, List<Fetch>>> {
         val sent = connection.prepareStatement(
             "SELECT id, messageId, recipient, subject, sentAt FROM tracked ORDER BY sentAt DESC LIMIT ?",
         ).use { s ->
@@ -344,8 +351,17 @@ internal class Store(private val connection: Connection) : AutoCloseable {
      * One transaction, because a hundred inserts each committing on their own is the
      * difference between a refresh you do not notice and one you do.
      */
-    fun put(mailbox: String, messages: List<Summary>) {
+    @Synchronized fun put(mailbox: String, messages: List<Summary>) {
         if (messages.isEmpty()) return
+        val indexedBodies = messages.associate { message ->
+            message.id to connection.prepareStatement("SELECT html, text FROM body WHERE id = ?").use { s ->
+                s.setString(1, message.id)
+                s.executeQuery().use { rows ->
+                    if (!rows.next()) null else rows.getString("text").orEmpty() + " " +
+                        rows.getString("html")?.let { org.jsoup.Jsoup.parse(it).text() }.orEmpty()
+                }
+            }
+        }
         val was = connection.autoCommit
         connection.autoCommit = false
         try {
@@ -389,7 +405,17 @@ internal class Store(private val connection: Connection) : AutoCloseable {
                     s.setString(1, m.id)
                     s.setString(2, m.from + " " + m.fromEmail)
                     s.setString(3, m.subject)
-                    s.setString(4, m.preview)
+                    s.setString(4, indexedBodies[m.id]?.trim()?.takeIf { it.isNotBlank() } ?: m.preview)
+                    s.addBatch()
+                }
+                s.executeBatch()
+            }
+            connection.prepareStatement(
+                "INSERT OR IGNORE INTO mailbox_message (message_id, mailbox_id) VALUES (?,?)",
+            ).use { s ->
+                messages.forEach { m ->
+                    s.setString(1, m.id)
+                    s.setString(2, mailbox)
                     s.addBatch()
                 }
                 s.executeBatch()
@@ -419,7 +445,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
      * gets nothing back, which is wrong in a way that is obvious, rather than the
      * whole folder, which looks like the toggle worked.
      */
-    fun messages(
+    @Synchronized fun messages(
         mailbox: String,
         limit: Int = 100,
         from: Int = 0,
@@ -431,7 +457,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         val known = knownSenders.map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct()
         if (filters.knownSender && known.isEmpty()) return emptyList()
         val where = ArrayList<String>()
-        where += "mailbox = ?"
+        where += "id IN (SELECT message_id FROM mailbox_message WHERE mailbox_id = ?)"
         if (filters.unread) where += "seen = 0"
         if (filters.starred) where += "flagged = 1"
         if (filters.knownSender) where += "lower(senderEmail) IN (${holders(known.size)})"
@@ -467,7 +493,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
      * typing `re: invoice` means those words, and unescaped it is a column filter followed
      * by a syntax error.
      */
-    fun search(text: String, limit: Int = 100): List<Summary> {
+    @Synchronized fun search(text: String, limit: Int = 100): List<Summary> {
         // A leading Re: or Fwd: comes off first, using the same rule the subject sort
         // uses, because pasting a subject line into search is the commonest way to look
         // for a conversation and every word in it being required would find nothing.
@@ -498,7 +524,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
      * a folder you have already opened. What is here is what has been read, which is what
      * a person has actually seen and tagged.
      */
-    fun keywords(): Set<String> = keywordCounts().keys
+    @Synchronized fun keywords(): Set<String> = keywordCounts().keys
 
     /**
      * Every keyword in the local copy and how many messages carry it.
@@ -511,7 +537,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
      * Case-insensitive, because another client storing `invoices` where this one wrote
      * `Invoices` is one tag with two spellings, not two tags with half the mail each.
      */
-    fun keywordCounts(): Map<String, Int> = connection.prepareStatement(
+    @Synchronized fun keywordCounts(): Map<String, Int> = connection.prepareStatement(
         "SELECT keywords FROM message WHERE keywords <> ''",
     ).use { s ->
         s.executeQuery().use { rows ->
@@ -532,7 +558,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
      * keyword is padded on both sides before matching so `work` does not also find
      * `workshop`.
      */
-    fun withKeyword(keyword: String, limit: Int = 200): List<Summary> =
+    @Synchronized fun withKeyword(keyword: String, limit: Int = 200): List<Summary> =
         connection.prepareStatement(
             "SELECT * FROM message WHERE ' ' || keywords || ' ' LIKE ? " +
                 "ORDER BY receivedAt DESC LIMIT ?",
@@ -555,7 +581,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
      * names, because the role is what finds them and the name is whatever the server calls
      * it in whatever language.
      */
-    fun stats(
+    @Synchronized fun stats(
         inbox: String,
         sent: List<String>,
         junk: List<String>,
@@ -584,7 +610,8 @@ internal class Store(private val connection: Connection) : AutoCloseable {
     private fun receivedAtIn(mailboxes: List<String>, since: String): List<String> {
         if (mailboxes.isEmpty()) return emptyList()
         return connection.prepareStatement(
-            "SELECT receivedAt FROM message WHERE mailbox IN (${holders(mailboxes.size)}) AND receivedAt >= ?",
+            "SELECT receivedAt FROM message WHERE id IN (SELECT message_id FROM mailbox_message " +
+                "WHERE mailbox_id IN (${holders(mailboxes.size)})) AND receivedAt >= ?",
         ).use { s ->
             mailboxes.forEachIndexed { at, box -> s.setString(at + 1, box) }
             s.setString(mailboxes.size + 1, since)
@@ -593,7 +620,8 @@ internal class Store(private val connection: Connection) : AutoCloseable {
     }
 
     private fun unreadIn(mailbox: String): List<String> =
-        connection.prepareStatement("SELECT receivedAt FROM message WHERE mailbox = ? AND seen = 0").use { s ->
+        connection.prepareStatement("SELECT receivedAt FROM message WHERE id IN " +
+            "(SELECT message_id FROM mailbox_message WHERE mailbox_id = ?) AND seen = 0").use { s ->
             s.setString(1, mailbox)
             s.executeQuery().use { rows -> buildList { while (rows.next()) add(rows.getString(1)) } }
         }
@@ -613,7 +641,8 @@ internal class Store(private val connection: Connection) : AutoCloseable {
                    (SELECT sender FROM message m2 WHERE m2.senderEmail = m.senderEmail
                     ORDER BY m2.receivedAt DESC LIMIT 1) name
             FROM message m
-            WHERE mailbox IN (${holders(mailboxes.size)}) AND receivedAt >= ? AND senderEmail <> ''
+            WHERE id IN (SELECT message_id FROM mailbox_message WHERE mailbox_id IN (${holders(mailboxes.size)}))
+                AND receivedAt >= ? AND senderEmail <> ''
             GROUP BY senderEmail ORDER BY n DESC LIMIT ?
             """.trimIndent(),
         ).use { s ->
@@ -642,14 +671,16 @@ internal class Store(private val connection: Connection) : AutoCloseable {
      */
     private fun awaiting(inbox: String, sent: List<String>, mine: Set<String>, limit: Int = 12): List<Summary> {
         val answered = if (sent.isEmpty()) emptySet() else connection.prepareStatement(
-            "SELECT DISTINCT thread FROM message WHERE mailbox IN (${holders(sent.size)}) AND thread <> ''",
+            "SELECT DISTINCT thread FROM message WHERE id IN (SELECT message_id FROM mailbox_message " +
+                "WHERE mailbox_id IN (${holders(sent.size)})) AND thread <> ''",
         ).use { s ->
             sent.forEachIndexed { at, box -> s.setString(at + 1, box) }
             s.executeQuery().use { rows -> buildSet { while (rows.next()) add(rows.getString(1)) } }
         }
         val lowered = mine.map { it.lowercase() }.toSet()
         return connection.prepareStatement(
-            "SELECT * FROM message WHERE mailbox = ? ORDER BY receivedAt DESC LIMIT 400",
+            "SELECT * FROM message WHERE id IN (SELECT message_id FROM mailbox_message WHERE mailbox_id = ?) " +
+                "ORDER BY receivedAt DESC LIMIT 400",
         ).use { s ->
             s.setString(1, inbox)
             s.executeQuery().use { rows ->
@@ -679,13 +710,15 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         if (sent.isEmpty()) return emptyList()
         val arrived = HashMap<String, String>()
         connection.prepareStatement(
-            "SELECT thread, MIN(receivedAt) at FROM message WHERE mailbox = ? AND thread <> '' GROUP BY thread",
+            "SELECT thread, MIN(receivedAt) at FROM message WHERE id IN " +
+                "(SELECT message_id FROM mailbox_message WHERE mailbox_id = ?) AND thread <> '' GROUP BY thread",
         ).use { s ->
             s.setString(1, inbox)
             s.executeQuery().use { rows -> while (rows.next()) arrived[rows.getString(1)] = rows.getString(2) }
         }
         return connection.prepareStatement(
-            "SELECT thread, MIN(receivedAt) at FROM message WHERE mailbox IN (${holders(sent.size)}) " +
+            "SELECT thread, MIN(receivedAt) at FROM message WHERE id IN (SELECT message_id FROM mailbox_message " +
+                "WHERE mailbox_id IN (${holders(sent.size)})) " +
                 "AND thread <> '' GROUP BY thread",
         ).use { s ->
             sent.forEachIndexed { at, box -> s.setString(at + 1, box) }
@@ -708,7 +741,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
 
     private fun holders(n: Int) = List(n) { "?" }.joinToString(",")
 
-    fun putBody(id: String, body: Body) {
+    @Synchronized fun putBody(id: String, body: Body) {
         putKept(id, body, emptyList(), emptyMap(), null, null, null)
     }
 
@@ -719,7 +752,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
      * readable. It is not treated as a finished cache: [kept] is null for it, so the next
      * open fetches the message once and stores it whole.
      */
-    fun body(id: String): Body? = kept(id)?.body ?: connection.prepareStatement(
+    @Synchronized fun body(id: String): Body? = kept(id)?.body ?: connection.prepareStatement(
         "SELECT html, text FROM body WHERE id = ?",
     ).use { s ->
         s.setString(1, id)
@@ -728,7 +761,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         }
     }
 
-    fun putKept(
+    @Synchronized fun putKept(
         id: String,
         body: Body,
         attachments: List<Attachment>,
@@ -740,6 +773,9 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         usedAt: Long = System.currentTimeMillis(),
     ) {
         val fitting = picturesWithin(pictures, pictureCap)
+        val was = connection.autoCommit
+        connection.autoCommit = false
+        try {
         connection.prepareStatement(
             "INSERT INTO body (id, html, text) VALUES (?,?,?) " +
                 "ON CONFLICT(id) DO UPDATE SET html=excluded.html, text=excluded.text",
@@ -779,10 +815,23 @@ internal class Store(private val connection: Connection) : AutoCloseable {
                 }
             }
         }
+        val searchable = body.text.orEmpty() + " " + body.html?.let { org.jsoup.Jsoup.parse(it).text() }.orEmpty()
+        connection.prepareStatement("UPDATE search SET body = ? WHERE id = ?").use { s ->
+            s.setString(1, searchable.trim())
+            s.setString(2, id)
+            s.executeUpdate()
+        }
         evictPictures()
+        connection.commit()
+        } catch (e: Exception) {
+            connection.rollback()
+            throw e
+        } finally {
+            connection.autoCommit = was
+        }
     }
 
-    fun kept(id: String): Kept? = connection.prepareStatement(
+    @Synchronized fun kept(id: String): Kept? = connection.prepareStatement(
         "SELECT body, attachments, blobId, mailState, calendar FROM kept WHERE id = ?",
     ).use { s ->
         s.setString(1, id)
@@ -805,7 +854,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
     }
 
     /** The account state this copy was saved under, so a later open can see that nothing moved. */
-    fun setKeptState(id: String, state: String) {
+    @Synchronized fun setKeptState(id: String, state: String) {
         connection.prepareStatement("UPDATE kept SET mailState = ? WHERE id = ?").use { s ->
             s.setString(1, state)
             s.setString(2, id)
@@ -843,7 +892,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
      * The per-message cap stops one letter filling the file. This stops a year of
      * letters doing it. The text of a message is kept either way.
      */
-    fun evictPictures(cap: Long = PICTURE_ACCOUNT_CAP) {
+    @Synchronized fun evictPictures(cap: Long = PICTURE_ACCOUNT_CAP) {
         val rows = connection.prepareStatement(
             "SELECT id, blob, LENGTH(bytes) AS n, used FROM kept_picture",
         ).use { s ->
@@ -874,10 +923,11 @@ internal class Store(private val connection: Connection) : AutoCloseable {
      * Rows older than the page stay. They were not fetched, so their absence from
      * this answer says nothing about whether the server still has them.
      */
-    fun pruneToPage(mailbox: String, page: List<Summary>) {
+    @Synchronized fun pruneToPage(mailbox: String, page: List<Summary>) {
         if (page.isEmpty()) return
         val cached = connection.prepareStatement(
-            "SELECT id, receivedAt FROM message WHERE mailbox = ?",
+            "SELECT id, receivedAt FROM message WHERE id IN " +
+                "(SELECT message_id FROM mailbox_message WHERE mailbox_id = ?)",
         ).use { s ->
             s.setString(1, mailbox)
             s.executeQuery().use { rows ->
@@ -886,17 +936,17 @@ internal class Store(private val connection: Connection) : AutoCloseable {
                 }
             }
         }
-        forget(idsMissingFromPage(cached, page.map { DatedId(it.id, it.receivedAt) }))
+        forgetFrom(mailbox, idsMissingFromPage(cached, page.map { DatedId(it.id, it.receivedAt) }))
     }
 
     /** What the server's state was when this folder was last read, so a refresh can skip. */
-    fun cursor(mailbox: String): String? =
+    @Synchronized fun cursor(mailbox: String): String? =
         connection.prepareStatement("SELECT state FROM cursor WHERE mailbox = ?").use { s ->
             s.setString(1, mailbox)
             s.executeQuery().use { if (it.next()) it.getString("state") else null }
         }
 
-    fun setCursor(mailbox: String, state: String) {
+    @Synchronized fun setCursor(mailbox: String, state: String) {
         connection.prepareStatement(
             "INSERT INTO cursor (mailbox, state) VALUES (?,?) ON CONFLICT(mailbox) DO UPDATE SET state=excluded.state",
         ).use { s ->
@@ -907,10 +957,11 @@ internal class Store(private val connection: Connection) : AutoCloseable {
     }
 
     /** Takes messages out, for mail that was filed or deleted elsewhere. */
-    fun forget(ids: List<String>) {
+    @Synchronized fun forget(ids: List<String>) {
         if (ids.isEmpty()) return
         val marks = ids.joinToString(",") { "?" }
         listOf(
+            "DELETE FROM mailbox_message WHERE message_id IN ($marks)",
             "DELETE FROM message WHERE id IN ($marks)",
             "DELETE FROM body WHERE id IN ($marks)",
             "DELETE FROM search WHERE id IN ($marks)",
@@ -924,16 +975,35 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         }
     }
 
+    private fun forgetFrom(mailbox: String, ids: List<String>) {
+        if (ids.isEmpty()) return
+        connection.prepareStatement("DELETE FROM mailbox_message WHERE mailbox_id = ? AND message_id = ?").use { s ->
+            ids.forEach { id ->
+                s.setString(1, mailbox)
+                s.setString(2, id)
+                s.addBatch()
+            }
+            s.executeBatch()
+        }
+        val orphaned = ids.filter { id ->
+            connection.prepareStatement("SELECT 1 FROM mailbox_message WHERE message_id = ? LIMIT 1").use { s ->
+                s.setString(1, id)
+                !s.executeQuery().next()
+            }
+        }
+        forget(orphaned)
+    }
+
     /** Empties a folder's copy, for when the server says it has moved on more than a page. */
-    fun clear(mailbox: String) {
-        connection.prepareStatement("SELECT id FROM message WHERE mailbox = ?").use { s ->
+    @Synchronized fun clear(mailbox: String) {
+        connection.prepareStatement("SELECT message_id FROM mailbox_message WHERE mailbox_id = ?").use { s ->
             s.setString(1, mailbox)
-            val ids = s.executeQuery().use { rows -> buildList { while (rows.next()) add(rows.getString("id")) } }
-            forget(ids)
+            val ids = s.executeQuery().use { rows -> buildList { while (rows.next()) add(rows.getString("message_id")) } }
+            forgetFrom(mailbox, ids)
         }
     }
 
-    override fun close() = connection.close()
+    @Synchronized override fun close() = connection.close()
 }
 
 private val keptJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }

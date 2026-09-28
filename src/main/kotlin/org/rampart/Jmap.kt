@@ -44,6 +44,16 @@ private const val SIEVE = "urn:ietf:params:jmap:sieve"
 private const val CONTACTS = "urn:ietf:params:jmap:contacts"
 private const val QUOTA = "urn:ietf:params:jmap:quota"
 
+internal fun capabilitiesFor(invocations: Array<out JsonArray>): List<String> = buildList {
+    add(CORE)
+    add(MAIL)
+    val needsSubmission = invocations.any {
+        val method = it[0].str().orEmpty()
+        method.startsWith("EmailSubmission/") || method.startsWith("Identity/")
+    }
+    if (needsSubmission) add(SUBMISSION)
+}
+
 /**
  * About where a server stops taking an HTML signature.
  *
@@ -1235,7 +1245,7 @@ internal class Jmap private constructor(
         responses[1][1].jsonObject["created"]?.jsonObject?.get("sub")
             ?: throw JmapError(refusal(responses[1][1].jsonObject, "notCreated", "The server would not send the message"))
         if (ready.trackingPixel.isNotEmpty() && sentMailboxId != null) {
-            replaceSentCopy(ready, identity, sentMailboxId, created.jsonObject["id"].require("id"))
+            return replaceSentCopy(ready, identity, sentMailboxId, created.jsonObject["id"].require("id"))
         }
         return null
     }
@@ -1262,8 +1272,8 @@ internal class Jmap private constructor(
      * in Sent that merely still has a pixel in it. Losing the record of what was sent would
      * be a far worse outcome than a self-open.
      */
-    private fun replaceSentCopy(sent: Draft, identity: Identity, sentMailboxId: String, trackedId: String) {
-        runCatching {
+    private fun replaceSentCopy(sent: Draft, identity: Identity, sentMailboxId: String, trackedId: String): String? {
+        return runCatching {
             val clean = sent.copy(trackingPixel = "")
             val made = call(
                 invoke("Email/set", "c") {
@@ -1276,9 +1286,14 @@ internal class Jmap private constructor(
                     }
                 },
             )[0][1].jsonObject
-            made["created"]?.jsonObject?.get("clean") ?: return
-            call(invoke("Email/set", "d") { putJsonArray("destroy") { add(trackedId) } })
-        }
+            made["created"]?.jsonObject?.get("clean")
+                ?: throw JmapError(refusal(made, "notCreated", "The server would not clean the Sent copy"))
+            val removed = call(invoke("Email/set", "d") { putJsonArray("destroy") { add(trackedId) } })[0][1].jsonObject
+            if (removed["destroyed"]?.jsonArray?.any { it.str() == trackedId } != true) {
+                throw JmapError(refusal(removed, "notDestroyed", "The server would not replace the Sent copy"))
+            }
+            null
+        }.getOrElse { "Sent, but the tracking pixel could not be removed from the copy in Sent Items." }
     }
 
     /** JMAP reports a refused create per id, so the reason is inside the response, not the status code. */
@@ -1389,7 +1404,7 @@ internal class Jmap private constructor(
         Diagnostics.count(Metric.LIST_COMMANDS)
         val body = buildJsonObject {
             putJsonArray("using") {
-                add(CORE); add(MAIL); add(SUBMISSION)
+                capabilitiesFor(invocations).forEach { add(it) }
                 also?.let { add(it) }
             }
             put("methodCalls", JsonArray(invocations.toList()))

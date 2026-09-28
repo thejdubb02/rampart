@@ -104,11 +104,14 @@ object Secrets {
      */
     fun mailKey(account: SavedAccount): String? {
         if (!available()) return null
-        val key = SavedAccount("${'$'}{account.name} (local mail)", account.server, "db:${'$'}{account.email}")
+        val key = mailKeyAccount(account)
         load(key)?.let { return it }
         val made = java.security.SecureRandom().generateSeed(32).joinToString("") { "%02x".format(it) }
         return if (store(key, made) == null) made else null
     }
+
+    internal fun mailKeyAccount(account: SavedAccount) =
+        SavedAccount("${account.name} (local mail)", account.server, "db:${account.email}")
 
     /**
      * The token Rampart uses to read opens back from the companion server.

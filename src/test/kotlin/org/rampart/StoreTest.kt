@@ -1,7 +1,9 @@
 package org.rampart
 
+import java.lang.reflect.Modifier
 import java.nio.file.Files
 import java.nio.file.Path
+import java.sql.DriverManager
 import kotlin.io.path.deleteIfExists
 import kotlin.io.path.readBytes
 import kotlin.test.Test
@@ -29,6 +31,18 @@ class StoreTest {
         } finally {
             path.deleteIfExists()
         }
+    }
+
+    @Test
+    fun `store operations serialize access to their shared connection`() {
+        val operations = Store::class.java.declaredMethods.filter {
+            Modifier.isPublic(it.modifiers) && !Modifier.isStatic(it.modifiers)
+        }
+        assertTrue(operations.isNotEmpty())
+        assertTrue(
+            operations.all { Modifier.isSynchronized(it.modifiers) },
+            "unsynchronized operations: ${operations.filterNot { Modifier.isSynchronized(it.modifiers) }.map { it.name }}",
+        )
     }
 
     @Test
@@ -69,6 +83,16 @@ class StoreTest {
     }
 
     @Test
+    fun `one message can belong to two folders`() = withStore { store ->
+        store.put("inbox", listOf(messages[0]))
+        store.put("important", listOf(messages[0]))
+        assertEquals(listOf("a"), store.messages("inbox").map { it.id })
+        assertEquals(listOf("a"), store.messages("important").map { it.id })
+        store.clear("inbox")
+        assertEquals(listOf("a"), store.messages("important").map { it.id })
+    }
+
+    @Test
     fun `unread only, and paging`() = withStore { store ->
         store.put("inbox", messages)
         assertEquals(listOf("b"), store.messages("inbox", unreadOnly = true).map { it.id })
@@ -83,6 +107,13 @@ class StoreTest {
         assertEquals(listOf("b"), store.search("invoice").map { it.id })
         assertEquals(listOf("a"), store.search("Dana").map { it.id })
         assertEquals(listOf("c"), store.search("photos").map { it.id })
+    }
+
+    @Test
+    fun `search finds the fetched body beyond its preview`() = withStore { store ->
+        store.put("inbox", listOf(messages[0]))
+        store.putKept("a", Body("<p>hidden marmalade phrase</p>", null), emptyList(), emptyMap(), null, null, null)
+        assertEquals(listOf("a"), store.search("marmalade").map { it.id })
     }
 
     @Test
@@ -162,6 +193,38 @@ class StoreTest {
         store.forget(listOf("m"))
         assertNull(store.kept("m"))
         assertNull(store.body("m"))
+    }
+
+    @Test
+    fun `a failed kept replacement leaves the previous copy whole`() {
+        val path = Files.createTempDirectory("rampart-store").resolve("mail.db")
+        try {
+            Store.open(path, null).use { store ->
+                val old = Body("<p>old</p>", "old")
+                store.putKept("m", old, emptyList(), mapOf("old" to byteArrayOf(1)), null, null, null)
+                DriverManager.getConnection("jdbc:sqlite:$path").use { connection ->
+                    connection.createStatement().use {
+                        it.execute(
+                            "CREATE TRIGGER reject_picture BEFORE INSERT ON kept_picture " +
+                                "BEGIN SELECT RAISE(ABORT, 'full'); END",
+                        )
+                    }
+                }
+                assertTrue(
+                    runCatching {
+                        store.putKept(
+                            "m", Body("<p>new</p>", "new"), emptyList(),
+                            mapOf("new" to byteArrayOf(2)), null, null, null,
+                        )
+                    }.isFailure,
+                )
+                val kept = store.kept("m")
+                assertEquals(old, kept?.body)
+                assertContentEquals(byteArrayOf(1), kept?.pictures?.get("old"))
+            }
+        } finally {
+            path.deleteIfExists()
+        }
     }
 
     @Test
@@ -285,6 +348,11 @@ class StoreTest {
     fun `an account key cannot escape the config directory`() {
         assertEquals(Accounts.file().parent, Store.file("../../etc/passwd").parent)
         assertFalse(Store.file("../../etc/passwd").toString().contains(".."))
+    }
+
+    @Test
+    fun `account punctuation cannot collide in a cache filename`() {
+        assertFalse(Store.file("a.b@example.com@mail.example") == Store.file("ab@example.com@mail.example"))
     }
 
     /*
