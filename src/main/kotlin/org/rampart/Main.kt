@@ -2260,10 +2260,10 @@ private fun Reader(
                 val echoed = found.fresh.isEmpty() && found.state == ownState[open.key]
                 if ((here?.first == open.key || unified()) && !showingResults && !echoed) reload()
                 /*
-                 * A muted conversation is quietened here, on the way in.
+                 * A conversation muted on this computer only is quietened here, on the way in.
                  *
-                 * This is the only place it can happen: nothing on the server knows what a
-                 * thread is the way this does, so a mute applies when Rampart next sees the
+                 * The fallback for accounts without Sieve, whose mute cannot be a rule on the
+                 * server (see [ServerMute]), so it applies when Rampart next sees the
                  * message rather than at delivery. Quietly, and never reported: a failed
                  * hush is the message staying in the inbox, which is the state it was
                  * already in.
@@ -2515,6 +2515,19 @@ private fun Reader(
         showingResults = false
         viewingTag = null
         reload()
+    }
+    // Whether the server holds a mute for this conversation. Its own effect, so the first
+    // read of an account's filters does not hold up the rest of opening the message.
+    LaunchedEffect(selected) {
+        val message = selected ?: return@LaunchedEffect
+        val key = accountOf(message) ?: return@LaunchedEffect
+        val onServer = withContext(Dispatchers.IO) {
+            runCatching { ServerMute.muted(session(key).jmap, key, message.threadId) }
+        }
+        onServer.exceptionOrNull()?.let {
+            report("Rampart could not read this account's filters to see if the conversation is muted.", whyFailed(it))
+        }
+        if (onServer.getOrDefault(false)) conversationMuted = true
     }
     LaunchedEffect(selected) {
         val message = selected ?: return@LaunchedEffect
@@ -3089,6 +3102,14 @@ private fun Reader(
             Settings.rememberTracking(trackingDomain(it), draft.tracked)
         }
         var book = books[key] ?: AddressBook.read(AddressBook.file(key))
+        // Somebody new also goes on the server's address book, so phones see them too.
+        scope.launch {
+            val recipients = parseAddressList(draft.to) + parseAddressList(draft.cc)
+            withContext(Dispatchers.IO) { runCatching { LearnedContacts.save(account.jmap, key, recipients) } }
+                .exceptionOrNull()?.let {
+                    report("The message was sent, but a new address did not reach your contacts.", whyFailed(it))
+                }
+        }
         draft.recipients.forEach { book = noted(book, it) }
         books = books + (key to book)
         runCatching { AddressBook.write(book, AddressBook.file(key)) }
@@ -3530,9 +3551,28 @@ private fun Reader(
      */
     fun muteConversation(message: Summary, on: Boolean) {
         val key = accountOf(message) ?: return
-        Muted.set(key, message.threadId, on)
-        conversationMuted = on
-        if (on) fileConversation(message, "archive", "Muted")
+        val backend = session(key).jmap
+        if (!backend.hasSieve()) {
+            Muted.set(key, message.threadId, on)
+            conversationMuted = on
+            if (on) fileConversation(message, "archive", "Muted")
+            return
+        }
+        // On the server, so it holds with Rampart closed. See [ServerMute].
+        scope.launch {
+            val done = withContext(Dispatchers.IO) {
+                runCatching { ServerMute.set(backend, key, message, on, mailboxes[key].orEmpty()) }
+            }
+            done.exceptionOrNull()?.let {
+                val what = if (on) "muted" else "unmuted"
+                report("The conversation could not be $what on the server.", whyFailed(it))
+                return@launch
+            }
+            if (!on) Muted.set(key, message.threadId, false)
+            if (selected?.threadId != message.threadId) return@launch
+            conversationMuted = on
+            if (on) fileConversation(message, "archive", "Muted")
+        }
     }
 
     /*
@@ -3796,6 +3836,11 @@ private fun Reader(
                     count = all.size,
                     unread = all.count { !it.seen },
                     muted = conversationMuted,
+                    muteNote = muteNote(
+                        canServer = sessions.firstOrNull { it.key == accountOf(message) }?.jmap?.hasSieve() == true,
+                        onServer = ServerMute.knownMuted(accountOf(message).orEmpty(), message.threadId),
+                        muted = conversationMuted,
+                    ),
                     onRead = { read -> readConversation(message, read) },
                     onArchive = { fileConversation(message, "archive", "Archived") },
                     onTrash = { fileConversation(message, "trash", "Deleted") },
@@ -7410,6 +7455,8 @@ internal data class ConversationActions(
     val count: Int,
     val unread: Int,
     val muted: Boolean,
+    /** One sentence on where the mute lives, from [muteNote]. Null says nothing. */
+    val muteNote: String? = null,
     val onRead: (Boolean) -> Unit,
     val onArchive: () -> Unit,
     val onTrash: () -> Unit,
