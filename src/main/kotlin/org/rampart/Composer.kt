@@ -394,6 +394,8 @@ internal fun Composer(
      * Null where there is nowhere to fetch it from, and the row then only removes.
      */
     onDragFile: ((Attachment) -> java.io.File)? = null,
+    /** The account's files, for attaching one already on the server. Null hides From Files. */
+    fromFiles: FileStore? = null,
     /** Addresses to offer while a recipient is being typed. */
     book: List<Person> = emptyList(),
     /** Filling the window rather than sitting in the corner of it. */
@@ -731,6 +733,9 @@ internal fun Composer(
                             },
                             enabled = !sending && !attaching,
                         ) { Text(if (attaching) "Attaching" else "Attach", maxLines = 1) }
+                    }
+                    AttachFromFilesButton(fromFiles, enabled = !sending && !attaching) { added ->
+                        draft = draft.copy(attachments = draft.attachments + added)
                     }
                     TextButton(onClick = { draft = draft.copy(receipt = !draft.receipt) }) {
                         Text(if (draft.receipt) "Receipt on" else "Receipt", maxLines = 1)

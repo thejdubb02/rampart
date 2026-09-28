@@ -108,7 +108,7 @@ named in the evidence column.
 
 | Capability | What it does | Rampart today | Action |
 |---|---|---|---|
-| `urn:ietf:params:jmap:filenode` (JMAP File Storage) + WebDAV | Server-side file storage: folders, nodes, quota, sort options - the session shows `maxSizeFileNodeName`, `fileNodeQuerySortOptions`, etc. all live | None at all. Grepped `FileNode`, `filenode` across every `.kt` file: zero hits | build (L) - tier 5, "three more applications wearing a mail client's clothes" per `roadmap.md`; correctly behind mail and calendar |
+| `urn:ietf:params:jmap:filenode` (JMAP File Storage) + WebDAV | Server-side file storage: folders, nodes, quota, sort options - the session shows `maxSizeFileNodeName`, `fileNodeQuerySortOptions`, etc. all live | Started on the branch `claude/files`, unreleased: `Files.kt`, `FilesPane.kt`, and `docs/files.md` for what the server does | build (L) - tier 5, "three more applications wearing a mail client's clothes" per `roadmap.md`; correctly behind mail and calendar |
 
 ## Sharing
 
