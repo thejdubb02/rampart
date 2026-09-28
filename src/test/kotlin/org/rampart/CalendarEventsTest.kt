@@ -260,13 +260,49 @@ class CalendarEventsTest {
         assertEquals("PT1H15M", o["duration"]!!.jsonPrimitive.content)
         assertEquals("""{"c1":true}""", o["calendarIds"].toString())
         assertEquals("Cafe", o["locations"]!!.jsonObject.values.single().jsonObject["name"]!!.jsonPrimitive.content)
-        val rule = o["recurrenceRules"]!!.jsonArray.single().jsonObject
+        // Singular `recurrenceRule`, one object, not the array `recurrenceRules` RFC 8984 names:
+        // a live Stalwart 0.16 server refuses the array with invalidProperties.
+        val rule = o["recurrenceRule"]!!.jsonObject
         assertEquals("weekly", rule["frequency"]!!.jsonPrimitive.content)
         assertEquals(listOf("mo", "we"), rule["byDay"]!!.jsonArray.map { it.jsonObject["day"]!!.jsonPrimitive.content })
         assertEquals("4", rule["count"]!!.jsonPrimitive.content)
         // Read back, it is the same event.
         val back = assertNotNull(calendarEventOf(JsonObject(o + ("id" to JsonPrimitive("e")))))
         assertEquals(SimpleRepeat(Frequency.WEEKLY, weekdays = setOf(DayOfWeek.WEDNESDAY, DayOfWeek.MONDAY), count = 4), SimpleRepeat.of(back.rules))
+    }
+
+    @Test
+    fun `a weekly event is created in the shape Stalwart actually accepts`() {
+        // Pins the exact bug: "New event", title "Rampart test event", Weekly, Save built a
+        // `recurrenceRules` array, and a live Stalwart 0.16 server answered CalendarEvent/set
+        // with notCreated, invalidProperties, on that one property, every time.
+        val draft = EventDraft(
+            title = "Rampart test event",
+            calendarId = "b",
+            start = at("2026-09-28T09:00"),
+            end = at("2026-09-28T10:00"),
+            allDay = false,
+            repeat = SimpleRepeat(Frequency.WEEKLY),
+            timeZone = ZoneId.of("America/Los_Angeles"),
+        )
+        val o = newEventObject(draft, uid = "fixed-uid")
+        assertEquals(
+            """{"@type":"RecurrenceRule","frequency":"weekly"}""",
+            o["recurrenceRule"].toString(),
+        )
+        assertFalse(o.containsKey("recurrenceRules"), "the array form is refused by a live server")
+    }
+
+    @Test
+    fun `the singular recurrenceRule Stalwart sends back is read as a repeat`() {
+        // What CalendarEvent/get actually answers with, captured against a live server: one
+        // object under the singular key, not an array under the plural one.
+        val e = event(
+            """{"id":"e","start":"2026-09-28T09:00:00","timeZone":"America/Los_Angeles","duration":"PT1H",
+               "recurrenceRule":{"frequency":"weekly"}}""",
+        )
+        assertEquals(listOf(RecurrenceRule(Frequency.WEEKLY)), e.rules)
+        assertTrue(e.exact)
     }
 
     @Test
@@ -277,7 +313,7 @@ class CalendarEventsTest {
         assertEquals("P5D", o["duration"]!!.jsonPrimitive.content)
         assertEquals("true", o["showWithoutTime"]!!.jsonPrimitive.content)
         assertFalse(o.containsKey("timeZone"), "a floating event carries no zone")
-        assertFalse(o.containsKey("recurrenceRules"))
+        assertFalse(o.containsKey("recurrenceRule"))
     }
 
     @Test
@@ -293,8 +329,8 @@ class CalendarEventsTest {
         assertEquals("geo:1,2", loc["coordinates"]!!.jsonPrimitive.content)
         assertEquals(JsonNull, eventPatch(e, draft.copy(location = ""))["locations"])
         // A rule the picker could not show is left out of the patch altogether, so it survives.
-        assertFalse(eventPatch(e, draft.copy(repeat = null)).containsKey("recurrenceRules"))
-        assertEquals(JsonNull, eventPatch(e, draft)["recurrenceRules"])
+        assertFalse(eventPatch(e, draft.copy(repeat = null)).containsKey("recurrenceRule"))
+        assertEquals(JsonNull, eventPatch(e, draft)["recurrenceRule"])
     }
 
     @Test

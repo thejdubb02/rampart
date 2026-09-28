@@ -164,16 +164,24 @@ internal fun CalendarPane(backend: MailBackend?, accountName: String) {
         expandAll(events.filter { e -> e.calendarIds.isEmpty() || e.calendarIds.any { it !in hidden } }, range.first, range.second, viewer)
     }
 
-    /** Runs a write off the window's thread, shows its failure in words, and reloads either way. */
+    /**
+     * Runs a write off the window's thread, and shows its failure in words.
+     *
+     * Reloading only on success matters, not just tidiness: the events effect below clears
+     * [fault] whenever its own read succeeds, so reloading after a failed write raced that
+     * effect and the write's own error banner was wiped a moment after it appeared, which is
+     * why a refused CalendarEvent/set used to look like it had done nothing and said nothing.
+     * On failure nothing changed on the server, so there is nothing to reload for either.
+     */
     fun write(what: String, job: (CalendarClient) -> Unit) {
         scope.launch {
             try {
                 withContext(Dispatchers.IO) { job(client) }
                 fault = null
+                reload++
             } catch (e: Exception) {
                 fault = what to whyFailed(e)
             }
-            reload++
         }
     }
 

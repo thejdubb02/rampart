@@ -223,6 +223,21 @@ internal fun dayCode(day: DayOfWeek): String = DAY_CODES.entries.first { it.valu
 /** Parts of RFC 8984's RecurrenceRule this file does not expand, so a rule naming one is not exact. */
 private val UNSUPPORTED_PARTS = listOf("bySetPosition", "byYearDay", "byWeekNo", "byHour", "byMinute", "bySecond")
 
+/**
+ * The event's recurrence rules, in whichever of two shapes the object holds them.
+ *
+ * RFC 8984 names the property `recurrenceRules`, an array, and that is what this file used
+ * to read and write. Stalwart 0.16 does not: checked against a live server, it refuses a
+ * created event that carries `recurrenceRules` with `invalidProperties`, and what it sends
+ * back on CalendarEvent/get is `recurrenceRule`, singular, one object rather than an array.
+ * Both are read here, so a server that later moves to the array form still works; only the
+ * singular form is ever written, because that is the one shape this build's own server takes.
+ */
+private fun recurrenceRulesOf(o: JsonObject): List<RecurrenceRule> =
+    (o["recurrenceRules"] as? JsonArray)?.mapNotNull { (it as? JsonObject)?.let(::recurrenceRuleOf) }
+        ?: (o["recurrenceRule"] as? JsonObject)?.let(::recurrenceRuleOf)?.let(::listOf)
+        ?: emptyList()
+
 internal fun recurrenceRuleOf(o: JsonObject): RecurrenceRule? {
     val frequency = when (o["frequency"].text()?.lowercase()) {
         "daily" -> Frequency.DAILY
@@ -268,7 +283,7 @@ internal fun calendarEventOf(o: JsonObject): CalendarEvent? {
     val id = o["id"].text() ?: return null
     val start = localStamp(o["start"].text()) ?: return null
     val allDay = o["showWithoutTime"].flag()
-    val rules = (o["recurrenceRules"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let(::recurrenceRuleOf) }
+    val rules = recurrenceRulesOf(o)
     val overrides = (o["recurrenceOverrides"] as? JsonObject).orEmpty().mapNotNull { (key, value) ->
         val at = localStamp(key) ?: return@mapNotNull null
         at to ((value as? JsonObject) ?: JsonObject(emptyMap()))
@@ -647,8 +662,10 @@ private fun draftProperties(draft: EventDraft, existing: JsonObject?): Map<Strin
         put("duration", JsonPrimitive(EventLength.between(draft.start, draft.end).text()))
     }
     put("locations", locationsFor(draft.location, existing))
+    // Written as `recurrenceRule`, singular: see recurrenceRulesOf for why. The picker only
+    // ever produces one rule, so there is nothing lost by never writing the array form.
     draft.repeat?.let { repeat ->
-        put("recurrenceRules", repeat.rule()?.let { JsonArray(listOf(it)) } ?: JsonNull)
+        put("recurrenceRule", repeat.rule() ?: JsonNull)
     }
 }
 
