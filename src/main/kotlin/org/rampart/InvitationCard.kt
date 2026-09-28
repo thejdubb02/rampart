@@ -42,6 +42,8 @@ internal fun InvitationCard(
     me: String,
     /** Null while an answer is being sent, so the buttons cannot be pressed twice. */
     onAnswer: ((Rsvp) -> Unit)?,
+    /** How to reach this account's calendar, or null where there is none to reach. */
+    context: InvitationContext? = null,
 ) {
     val cancelled = invitation.method.equals("CANCEL", ignoreCase = true)
     val isReply = invitation.method.equals("REPLY", ignoreCase = true)
@@ -81,6 +83,10 @@ internal fun InvitationCard(
             "Guests",
             if (shown.isEmpty()) "" else shown.joinToString(", ") + if (more > 0) " and $more more" else "",
         )
+
+        // Whether the meeting is in the calendar, on a server that keeps one. Before the
+        // early returns, because a reply and a cancellation have something to say about it too.
+        InvitationCalendarLine(invitation, context)
 
         if (isReply) {
             // The whole content of a reply is the answer, so it is said plainly rather than
