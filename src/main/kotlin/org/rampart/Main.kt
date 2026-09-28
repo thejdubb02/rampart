@@ -2360,6 +2360,13 @@ private fun Reader(
         }
     }
 
+    // Files is a page like Contacts, and closes and opens against the others the same way.
+    FilesFollows(
+        backends = sessions.map { it.jmap },
+        othersOpen = settingsOpen || contactsOpen || dashboardOpen,
+        place = listOf(here?.first, here?.second?.id, viewingTag, showingResults),
+    ) { settingsOpen = false; contactsOpen = false; dashboardOpen = false }
+
     LaunchedEffect(contactsOpen, sessions.size) {
         val key = writingAccount() ?: return@LaunchedEffect
         if (contacts.isNotEmpty() && !contactsOpen) return@LaunchedEffect
@@ -4282,6 +4289,7 @@ private fun Reader(
                 materializeAttachment { dir -> session(key).jmap.download(attachment, dir) }
             },
             onDragFailed = { report("That file could not be dragged out.", it) },
+            saveToFiles = key?.let { filesOf(session(it).jmap) },
             onOpenMessage = { attachment ->
                 if (key != null) openAttached(key, attachment)
             },
@@ -4561,6 +4569,7 @@ private fun Reader(
                     ?: throw JmapError("Pick an account before dragging a file out.")
                 materializeAttachment { dir -> session(accountKey).jmap.download(attachment, dir) }
             },
+            fromFiles = key?.let { filesOf(session(it).jmap) },
             onSave = { draft ->
                 val account = key?.let(::session)
                 val drafts = folderFor("drafts", mailboxes[key].orEmpty())
@@ -4915,7 +4924,9 @@ private fun Reader(
                 )
             }
             VerticalDivider()
-            if (dashboardOpen) {
+            if (FilesPage.open) {
+                FilesPane(writingAccount()?.let { session(it) })
+            } else if (dashboardOpen) {
                 DashboardPane(
                     stats = stats,
                     unavailable = if (sessions.any { it.store != null }) "" else
@@ -6048,6 +6059,7 @@ internal fun Sidebar(
                     )
                 }
             }
+            FilesSidebarButton(32.dp)
             SidebarTooltip("The assistant") {
                 IconButton(onClick = onAsk, modifier = Modifier.size(32.dp)) {
                     Icon(
@@ -6110,6 +6122,7 @@ internal fun Sidebar(
                         )
                     }
                 }
+                FilesSidebarButton(28.dp)
                 SidebarTooltip("The assistant") {
                     IconButton(onClick = onAsk, modifier = Modifier.size(28.dp)) {
                         Icon(
@@ -7691,6 +7704,8 @@ internal fun Message(
     onDragFile: ((Attachment) -> java.io.File)? = null,
     /** Shown when that temp file could not be written. */
     onDragFailed: (String) -> Unit = {},
+    /** The account's files, for Save to Files beside each attachment. Null hides it. */
+    saveToFiles: FileStore? = null,
     /**
      * A forwarded message opened from an attachment.
      *
@@ -8162,7 +8177,7 @@ internal fun Message(
                         Spacer(Modifier.height(10.dp))
                         FileRows(
                             fileList, ::openFile, images, savedTo, onOpenMessage, onOpenTnef,
-                            onDragFile, onDragFailed,
+                            onDragFile, onDragFailed, saveToFiles,
                         )
                     }
 
@@ -8488,7 +8503,7 @@ internal fun Message(
                         Spacer(Modifier.height(14.dp))
                         FileRows(
                             fileList, ::openFile, images, savedTo, onOpenMessage, onOpenTnef,
-                            onDragFile, onDragFailed,
+                            onDragFile, onDragFailed, saveToFiles,
                         )
                     }
                     Spacer(Modifier.height(40.dp))
@@ -8553,6 +8568,7 @@ private fun FileRows(
     onOpenTnef: ((Attachment) -> Unit)?,
     onDragFile: ((Attachment) -> java.io.File)?,
     onDragFailed: (String) -> Unit,
+    saveToFiles: FileStore? = null,
 ) {
     files.forEach { attachment ->
         // The button stays a button. The drag source uses the same movement
@@ -8599,6 +8615,7 @@ private fun FileRows(
             val openPacked = onOpenTnef?.takeIf { isTnef(attachment.type, attachment.name) }
             val previewLabel = Settings.attachmentClickBehavior() == "preview" &&
                 fileGlyph(attachment.type) == FileGlyph.IMAGE
+            SaveToFilesButton(attachment, saveToFiles)
             TextButton(onClick = { onOpen(attachment) }) {
                 Text(
                     when {

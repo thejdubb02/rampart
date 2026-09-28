@@ -389,7 +389,13 @@ internal fun nameProblem(name: String): String? {
 internal fun fileTypeFor(type: String): String? =
     type.trim().takeIf { it.contains('/') && it.encodeToByteArray().size in 1..256 }
 
-/** Throws unless [written] is inside [folder]. */
+/**
+ * Throws unless [written] is inside [folder].
+ *
+ * A file's name came from whoever put it there, which on a shared folder is somebody else.
+ * [uniqueIn] already keeps only the last component of it and strips what Windows cannot
+ * hold; this is the second check, on the path that was actually written.
+ */
 internal fun requireInside(folder: Path, written: Path) {
     val root = folder.toAbsolutePath().normalize()
     val path = written.toAbsolutePath().normalize()
