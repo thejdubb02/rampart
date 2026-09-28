@@ -4446,6 +4446,7 @@ private fun Reader(
             onFull = { composeFull = it },
             trackingReady = trackingServer.isNotBlank(),
             trackedBefore = { domain -> domain in Settings.trackedDomains() },
+            sendExtensions = sessions.firstOrNull { it.key == key }?.jmap?.submissionExtensions.orEmpty(),
             onSend = { draft ->
                 val account = key?.let(::session)
                 val boxes = mailboxes[key].orEmpty()

@@ -276,6 +276,8 @@ internal class Jmap private constructor(
      * `urn:stalwart:jmap` under `primaryAccounts` and nothing else does.
      */
     val managementAccountId: String? = null,
+    /** What the server's submission capability says it will take on an envelope. */
+    override val submissionExtensions: Set<String> = emptySet(),
 ) : MailBackend {
     companion object {
         fun connect(server: String, user: String, password: String): Jmap = try {
@@ -328,6 +330,13 @@ internal class Jmap private constructor(
                 maxUpload = maxUpload,
                 capabilities = capabilities,
                 managementAccountId = management,
+                // RFC 8621 puts the list on the account, not the session; the session's own
+                // entry for submission is an empty object. The session is read as well in
+                // case a server puts it there instead.
+                submissionExtensions = submissionExtensionsIn(
+                    ((session["accounts"] as? JsonObject)?.get(account) as? JsonObject)
+                        ?.get("accountCapabilities")?.let { it as? JsonObject }?.get(SUBMISSION),
+                ).ifEmpty { submissionExtensionsIn((session["capabilities"] as? JsonObject)?.get(SUBMISSION)) },
             )
         }
 
@@ -1239,6 +1248,14 @@ internal class Jmap private constructor(
         // Only on the way out. A draft keeps the base64 in it, which is what makes the
         // picture still visible when the draft is reopened.
         val ready = withInlineSignature(draft)
+        refusedOption(ready, submissionExtensions)?.let { throw JmapError(it) }
+        val envelope = submissionEnvelope(
+            from = identity.email,
+            recipients = ready.recipients,
+            requireTls = ready.requireTls,
+            confirmDelivery = ready.confirmDelivery,
+            extensions = submissionExtensions,
+        )
         val responses = call(
             invoke("Email/set", "e") {
                 putJsonObject("create") {
@@ -1250,6 +1267,8 @@ internal class Jmap private constructor(
                     putJsonObject("sub") {
                         put("emailId", "#m")
                         put("identityId", identity.id)
+                        // Left off entirely unless an option needs it; see [submissionEnvelope].
+                        envelope?.let { put("envelope", it) }
                     }
                 }
                 putJsonObject("onSuccessUpdateEmail") {

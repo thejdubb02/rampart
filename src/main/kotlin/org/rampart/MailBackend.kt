@@ -165,6 +165,19 @@ internal interface MailBackend {
      */
     fun send(draft: Draft, identity: Identity, draftsMailboxId: String, sentMailboxId: String?): String?
 
+    /**
+     * The submission extensions the server offers, upper-cased, such as REQUIRETLS and DSN.
+     * Empty where there is no such list, which is every IMAP account.
+     */
+    val submissionExtensions: Set<String> get() = emptySet()
+
+    /**
+     * What happened to a sent message on its way out, or null when the server has no record
+     * of sending it. See [deliveryReport] for why null is the ordinary answer. Throws when
+     * the server could not be asked, which is a different thing from having nothing to say.
+     */
+    fun delivery(emailId: String): DeliveryReport? = null
+
     // ---- things a server may simply not have ---------------------------------------
 
     /**
