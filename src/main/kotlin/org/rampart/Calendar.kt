@@ -39,6 +39,12 @@ internal data class Invitation(
     val ends: EventTime?,
     /** The recurrence as a sentence, or empty when the meeting happens once. */
     val repeats: String,
+    /**
+     * Which one time of a repeating meeting this message is about, or null when it is about
+     * the whole meeting. A cancellation that carries one calls off that time only, and
+     * removing the whole series from a calendar because of it would be wrong.
+     */
+    val recurrenceId: EventTime? = null,
 )
 
 /** Somebody on the invitation, whether they called it or were asked to it. */
@@ -110,6 +116,7 @@ internal fun invitationIn(ics: String): Invitation? {
         starts = starts,
         ends = ends,
         repeats = first("RRULE")?.let { repeatText(it.value) }.orEmpty(),
+        recurrenceId = first("RECURRENCE-ID")?.let(::timeOf),
     )
 }
 
