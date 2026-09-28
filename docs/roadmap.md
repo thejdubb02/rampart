@@ -740,6 +740,12 @@ Calendar, contacts and files. Stalwart serves all three over JMAP and Bulwark do
 three well. They are three more applications wearing a mail client's clothes, and Rampart
 is a mail client until mail is finished.
 
+**Files was started on 2026-09-28, on the branch `claude/files`: not released, and not yet
+checked against a live server.** A Files page from the sidebar (folders, upload by button
+and by drop, download, open, new folder, rename, move, delete), Save to Files beside an
+attachment and From Files in the composer. What the server does, and why an attachment is
+copied through Blob/upload rather than by its own blobId, is in `docs/files.md`.
+
 ---
 
 ## Tier 6, the Stalwart admin console
