@@ -1560,6 +1560,35 @@ internal class Jmap private constructor(
     internal fun manage(vararg invocations: JsonArray): List<JsonArray> =
         call(*invocations, also = STALWART_CAPABILITY)
 
+    // ---- file storage (Files.kt) ------------------------------------------------------
+
+    /** Whether this account has JMAP file storage, which is what shows the Files page. */
+    internal val hasFileStorage: Boolean get() = FILENODE in capabilities
+
+    /**
+     * The account's files, or null where the server offers no file storage.
+     *
+     * Files.kt builds every request and reads every answer. This only lends it the signed
+     * request path, with the file storage capability named for those calls and no others,
+     * for the reason given on [call].
+     */
+    internal fun fileStore(): FileStore? {
+        if (!hasFileStorage) return null
+        val jmap = this
+        return FileStore(
+            object : FilesTransport {
+                override val accountId: String get() = jmap.accountId
+                override val canSliceBlobs: Boolean get() = BLOB in capabilities
+                override fun fileCall(vararg invocations: JsonArray): List<JsonArray> =
+                    call(*invocations, also = FILENODE)
+                override fun blobCall(vararg invocations: JsonArray): List<JsonArray> =
+                    call(*invocations, also = BLOB)
+                override fun upload(file: Path): Attachment = jmap.upload(file)
+                override fun download(attachment: Attachment, into: Path): Path = jmap.download(attachment, into)
+            },
+        )
+    }
+
     /**
      * Signs every later request with a new password. Stalwart drops its cached sign-in the
      * moment a credential changes, so after a password change, or a switch to an app
