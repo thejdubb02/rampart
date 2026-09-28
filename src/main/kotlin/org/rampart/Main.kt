@@ -4665,6 +4665,7 @@ private fun Reader(
                 onSelectTag = { keyword ->
                     settingsOpen = false
                     contactsOpen = false
+                    dashboardOpen = false
                     openTag(keyword)
                 },
                 onTagColour = { keyword, colour ->
@@ -4689,7 +4690,12 @@ private fun Reader(
                 onToggleCollapsed = { collapsed = !collapsed; Settings.setSidebarCollapsed(collapsed) },
                 onViewChangelog = { changelogDialog = unseenChanges(changelog(), Settings.changelogSeen()) },
                 folderMenu = { key, box, job -> folderAsk = FolderAsk(key, box, job) },
-                onSelect = { key, mailbox -> here = key to mailbox },
+                onSelect = { key, mailbox ->
+                    settingsOpen = false
+                    contactsOpen = false
+                    dashboardOpen = false
+                    here = key to mailbox
+                },
                 onWrite = {
                     val account = writingAccount()
                     val from = identities[account].orEmpty().firstOrNull()?.email
