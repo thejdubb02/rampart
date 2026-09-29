@@ -126,6 +126,13 @@ internal val SYNCED_SETTINGS: Map<String, SyncShape> = mapOf(
     "trackedDomains" to SyncShape.LIST_OF_TEXT,
     "changelogSuppressed" to SyncShape.TEXT,
     "quietHours" to SyncShape.TEXT,
+    // How dates and times are written. They follow the person, not the computer.
+    "language" to SyncShape.TEXT,
+    "listDate" to SyncShape.TEXT,
+    "dateOrder" to SyncShape.TEXT,
+    "timeFormat" to SyncShape.TEXT,
+    "timeZone" to SyncShape.TEXT,
+    "weekStart" to SyncShape.TEXT,
 )
 
 /**

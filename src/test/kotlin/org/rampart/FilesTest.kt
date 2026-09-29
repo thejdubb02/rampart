@@ -362,7 +362,7 @@ class FilesTest {
     fun `size and date are drawn the way the rest of the app draws them`() {
         assertEquals("2.0 KB", sizeLabel(FileNode("n", null, "x", false, "B", 2048)))
         assertEquals("", sizeLabel(FileNode("f", null, "x", true)))
-        assertEquals("3 Sep 2026, 10:00", modifiedLabel("2026-09-03T10:00:00Z", ZoneId.of("UTC"), Locale.US))
+        assertEquals("September 3, 2026, 10:00 AM", modifiedLabel("2026-09-03T10:00:00Z", ZoneId.of("UTC"), Locale.US))
         assertEquals("not a date", modifiedLabel("not a date"))
     }
 }

@@ -5,8 +5,7 @@ import java.time.Instant
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
-import java.time.format.DateTimeFormatter
-import java.util.Locale
+import java.time.format.TextStyle
 
 /**
  * Putting a message away until later.
@@ -67,7 +66,7 @@ internal enum class SnoozeUntil(val label: String) {
      * today" at eleven at night otherwise means a message that is already due and comes
      * straight back, which reads as the button not working.
      */
-    fun dueAt(now: ZonedDateTime, zone: ZoneId = now.zone): ZonedDateTime {
+    fun dueAt(now: ZonedDateTime, zone: ZoneId = now.zone, weekStart: DayOfWeek = Regional.firstDayOfWeek()): ZonedDateTime {
         val here = now.withZoneSameInstant(zone)
         val morning = LocalTime.of(9, 0)
         return when (this) {
@@ -76,7 +75,7 @@ internal enum class SnoozeUntil(val label: String) {
             // Saturday morning, and next Saturday if it is already the weekend: somebody
             // asking on a Saturday means the one coming, not the hour they are in.
             WEEKEND -> here.with(morning).nextOrSame(DayOfWeek.SATURDAY, here)
-            NEXT_WEEK -> here.with(morning).nextOrSame(DayOfWeek.MONDAY, here)
+            NEXT_WEEK -> here.with(morning).nextOrSame(weekStart, here)
         }.let { if (it.isAfter(here)) it else it.plusWeeks(1) }
     }
 }
@@ -93,16 +92,14 @@ private fun ZonedDateTime.nextOrSame(day: DayOfWeek, after: ZonedDateTime): Zone
  * Shown on the row and in the reader, because a folder full of messages with no due date on
  * them is a folder nobody trusts to give them back.
  */
-internal fun snoozeText(until: Instant, now: ZonedDateTime): String {
+internal fun snoozeText(until: Instant, now: ZonedDateTime, region: Region = Regional.current()): String {
+    // The clock stays in [now]'s zone. The words and the hour style come from [region].
     val due = until.atZone(now.zone)
+    val clock = formatTime(region, due)
     return when {
-        due.toLocalDate() == now.toLocalDate() -> "back at " + due.format(CLOCK)
-        due.toLocalDate() == now.toLocalDate().plusDays(1) -> "back tomorrow at " + due.format(CLOCK)
-        due.isBefore(now.plusDays(7)) -> "back " + due.format(WEEKDAY) + " at " + due.format(CLOCK)
-        else -> "back on " + due.format(DATE)
+        due.toLocalDate() == now.toLocalDate() -> "back at $clock"
+        due.toLocalDate() == now.toLocalDate().plusDays(1) -> "back tomorrow at $clock"
+        due.isBefore(now.plusDays(7)) -> "back " + due.dayOfWeek.getDisplayName(TextStyle.FULL, region.locale) + " at $clock"
+        else -> "back on " + formatFull(region, due.toLocalDate())
     }
 }
-
-private val CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm", Locale.UK)
-private val WEEKDAY: DateTimeFormatter = DateTimeFormatter.ofPattern("EEEE", Locale.UK)
-private val DATE: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMMM", Locale.UK)

@@ -99,8 +99,7 @@ import java.awt.Desktop
 import java.net.URI
 import java.time.LocalDateTime
 import java.time.ZonedDateTime
-import java.time.format.DateTimeFormatter
-import java.util.Locale
+import java.time.format.TextStyle
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 
@@ -261,7 +260,7 @@ internal fun replyTo(
         to = to.joinToString(", "),
         cc = cc.joinToString(", "),
         subject = if (subject.startsWith("Re:", ignoreCase = true)) subject else "Re: $subject",
-        body = "\n\nOn ${summary.receivedAt.asLocalTime()}, ${summary.from} wrote:\n$quoted",
+        body = "\n\nOn ${summary.receivedAt.asWrittenTime()}, ${summary.from} wrote:\n$quoted",
         inReplyTo = answered,
         references = body?.references.orEmpty() + listOfNotNull(answered),
         replying = true,
@@ -349,7 +348,7 @@ internal fun forwardOf(summary: Summary, body: Body?, from: String): Draft {
         body = buildString {
             append("\n\n---------- Forwarded message ----------\n")
             append("From: ${summary.from} <${summary.fromEmail}>\n")
-            append("Date: ${summary.receivedAt.asLocalTime()}\n")
+            append("Date: ${summary.receivedAt.asWrittenTime()}\n")
             append("Subject: ${summary.subject.trim()}\n\n")
             append(plainTextOf(body))
         },
@@ -1656,8 +1655,12 @@ private fun Entry(
     }
 }
 
-private val SCHEDULE_CLOCK: DateTimeFormatter =
-    DateTimeFormatter.ofPattern("EEE d MMM, HH:mm", Locale.UK)
+/** The short label beside a named send time: the weekday, the date and the clock. */
+private fun scheduledAt(at: ZonedDateTime): String {
+    val region = Regional.current()
+    val day = at.dayOfWeek.getDisplayName(TextStyle.SHORT, region.locale)
+    return "$day ${formatShort(region, at.toLocalDate())}, ${formatTime(region, at)}"
+}
 
 /**
  * A few named times, or a date and a clock the person types.
@@ -1668,7 +1671,8 @@ private val SCHEDULE_CLOCK: DateTimeFormatter =
  */
 @Composable
 private fun ScheduleDialog(onDismiss: () -> Unit, onConfirm: (Long) -> Unit) {
-    val now = remember { ZonedDateTime.now() }
+    val zone = Regional.zone()
+    val now = remember(zone) { ZonedDateTime.now(zone) }
     val hour = remember(now) { inOneHour(now) }
     val evening = remember(now) { thisEvening(now) }
     val morning = remember(now) { tomorrowMorning(now) }
@@ -1714,7 +1718,7 @@ private fun ScheduleDialog(onDismiss: () -> Unit, onConfirm: (Long) -> Unit) {
         },
         confirmButton = {
             TextButton(onClick = {
-                when (val parsed = parseSchedule(date, time, ZonedDateTime.now())) {
+                when (val parsed = parseSchedule(date, time, ZonedDateTime.now(zone))) {
                     is ScheduleWhen.At -> onConfirm(parsed.millis)
                     is ScheduleWhen.Problem -> problem = parsed.message
                 }
@@ -1734,7 +1738,7 @@ private fun ScheduleChoice(label: String, at: ZonedDateTime, onPick: (Long) -> U
         ) {
             Text(label)
             Text(
-                at.format(SCHEDULE_CLOCK),
+                scheduledAt(at),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.outline,
             )

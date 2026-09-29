@@ -21,8 +21,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import java.time.Instant
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.util.Locale
+
 
 /*
  * The top of a person's history, over the ordinary message list. See PersonHistory.kt for
@@ -30,14 +29,12 @@ import java.util.Locale
  * every row action works on them exactly as it does in a folder.
  */
 
-private val HISTORY_DAY = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.UK)
-
 /** A stored instant as a day, in the reader's zone, or null for one that will not read. */
-internal fun historyDay(instant: String?, zone: ZoneId = ZoneId.systemDefault()): String? =
-    instant?.let { runCatching { Instant.parse(it).atZone(zone).format(HISTORY_DAY) }.getOrNull() }
+internal fun historyDay(instant: String?, zone: ZoneId = Regional.zone()): String? =
+    instant?.let { runCatching { formatFull(Regional.current(), Instant.parse(it).atZone(zone).toLocalDate()) }.getOrNull() }
 
 /** The counts line: how many each way, and the span of time they cover. */
-internal fun historySummary(stats: PersonStats, zone: ZoneId = ZoneId.systemDefault()): String {
+internal fun historySummary(stats: PersonStats, zone: ZoneId = Regional.zone()): String {
     fun messages(n: Int) = if (n == 1) "1 message" else "%,d messages".format(n)
     val counts = "${messages(stats.received)} from them, ${messages(stats.sent)} to them"
     val first = historyDay(stats.first, zone)

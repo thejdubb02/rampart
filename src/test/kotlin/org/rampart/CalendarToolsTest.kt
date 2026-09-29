@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import java.time.LocalDate
 import java.time.ZoneId
+import java.util.Locale
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -19,6 +20,18 @@ import kotlin.test.assertTrue
 class CalendarToolsTest {
     private val london = ZoneId.of("Europe/London")
     private val today = LocalDate.of(2026, 9, 29)
+
+    /** Day first and 24-hour, so the agenda still reads "14:30" and "3 October". */
+    private val words = regionFrom(
+        language = "en",
+        listDate = "smart",
+        dateOrder = "dmy",
+        timeFormat = "24",
+        timeZone = "Europe/London",
+        weekStart = "monday",
+        systemLocale = Locale.UK,
+        systemZone = london,
+    )
 
     private fun args(json: String): JsonObject = Json.parseToJsonElement(json).jsonObject
 
@@ -41,6 +54,7 @@ class CalendarToolsTest {
         },
         zone = london,
         today = today,
+        region = words,
     )
 
     @Test

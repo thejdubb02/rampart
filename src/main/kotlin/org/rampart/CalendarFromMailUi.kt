@@ -85,7 +85,7 @@ internal fun AddToCalendar(context: MailCalendar, summary: Summary, body: Body?)
     var form by remember(summary.id) { mutableStateOf<EventForm?>(null) }
     var packet by remember(summary.id) { mutableStateOf<String?>(null) }
     var agreed by remember { mutableStateOf(Assistant.agreed(CALENDAR_FEATURE)) }
-    val zone = remember { ZoneId.systemDefault() }
+    val zone = Regional.zone()
 
     fun ask(sending: String) {
         val config = Assistant.config()
@@ -408,7 +408,7 @@ internal fun HelpMeSchedule(
     onInsert: (String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    val zone = remember { ZoneId.systemDefault() }
+    val zone = Regional.zone()
     var running by remember { mutableStateOf(false) }
     var open by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }

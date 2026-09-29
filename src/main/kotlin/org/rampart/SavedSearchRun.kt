@@ -31,7 +31,7 @@ internal fun runConditionSearch(
     server: ((JsonObject) -> List<Summary>)?,
     store: Store?,
     limit: Int = SAVED_SEARCH_PAGE,
-    zone: ZoneId = ZoneId.systemDefault(),
+    zone: ZoneId = Regional.zone(),
 ): SavedRun {
     var serverError: String? = null
     if (server != null) {
@@ -96,7 +96,7 @@ internal fun countConditionSearch(
     except: List<String>,
     store: Store?,
     knownSenders: Set<String> = emptySet(),
-    zone: ZoneId = ZoneId.systemDefault(),
+    zone: ZoneId = Regional.zone(),
 ): SavedCount {
     val local = localWhere(search.condition, except, zone) as? LocalQuery.Sql ?: return SavedCount(0, emptyList())
     val rows = store?.let { runCatching { it.matchingForCount(local) }.getOrNull() }.orEmpty()

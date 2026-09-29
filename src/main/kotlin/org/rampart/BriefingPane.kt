@@ -70,7 +70,7 @@ internal fun openBriefing(
 ) {
     val job = view.job
     if (job.running) return
-    val day = LocalDate.now().toString()
+    val day = LocalDate.now(Regional.zone()).toString()
     scope.launch {
         if (!refresh) {
             val kept = withContext(Dispatchers.IO) {
@@ -181,7 +181,7 @@ private fun briefingLine(brief: Brief?, accountName: String): String {
     val who = accountName.ifBlank { "this account" }
     if (brief == null) return "Unread mail from the last two days, for $who."
     val at = runCatching {
-        java.time.format.DateTimeFormatter.ofPattern("HH:mm").withZone(java.time.ZoneId.systemDefault()).format(Instant.parse(brief.made))
+        Regional.time(Instant.parse(brief.made))
     }.getOrDefault("")
     return "Made ${if (at.isBlank()) "today" else "at $at"} from ${brief.looked} unread messages, for $who. Refresh reads them again."
 }

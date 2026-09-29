@@ -60,9 +60,7 @@ import kotlinx.coroutines.withContext
 import java.awt.Cursor
 import java.time.LocalDate
 import java.time.LocalDateTime
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.util.Locale
+import java.time.format.TextStyle
 
 /*
  * The slim bar down the right edge of the window, and the panel it opens beside the mail.
@@ -424,11 +422,12 @@ private fun PanelNote(text: String) {
 }
 
 /** How a day is headed in the agenda: "Tomorrow" for the one after today, then the date. */
-private fun dayHeading(date: LocalDate, today: LocalDate): String =
-    if (date == today.plusDays(1)) "Tomorrow" else date.format(AGENDA_DAY)
-
-/** The year is left off: the panel never looks further ahead than a week. */
-private val AGENDA_DAY = DateTimeFormatter.ofPattern("EEEE d MMMM", Locale.UK)
+private fun dayHeading(date: LocalDate, today: LocalDate): String {
+    if (date == today.plusDays(1)) return "Tomorrow"
+    // The year is left off: the panel never looks further ahead than a week.
+    val region = Regional.current()
+    return date.dayOfWeek.getDisplayName(TextStyle.FULL, region.locale) + " " + formatMonthDay(region, date)
+}
 
 /**
  * The calendar beside the mail: what is left of today and the week after it.
@@ -441,14 +440,14 @@ internal fun AgendaPanel(backend: MailBackend?, accountName: String, onOpenCalen
     val client = remember(backend) {
         (backend as? Jmap)?.takeIf { it.advertises(CALENDARS) }?.let(::CalendarClient)
     }
-    val viewer = remember { ZoneId.systemDefault() }
+    val viewer = Regional.zone()
     var reload by remember { mutableIntStateOf(0) }
     var shown by remember(client) { mutableStateOf<Agenda<Occurrence>?>(null) }
     var loading by remember(client) { mutableStateOf(false) }
     var fault by remember(client) { mutableStateOf<Pair<String, String?>?>(null) }
     var today by remember { mutableStateOf(LocalDate.now(viewer)) }
 
-    LaunchedEffect(client, reload) {
+    LaunchedEffect(client, reload, viewer) {
         val calendar = client ?: return@LaunchedEffect
         loading = true
         try {

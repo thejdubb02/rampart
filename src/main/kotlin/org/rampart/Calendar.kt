@@ -1,11 +1,13 @@
 package org.rampart
 
+import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
+import java.time.format.TextStyle
 import java.util.Locale
 
 /**
@@ -72,7 +74,7 @@ internal data class EventTime(val instant: ZonedDateTime?, val allDay: Boolean, 
  * the series first and each override after it, and showing the override would tell somebody
  * about one Tuesday in March instead of about the meeting.
  */
-internal fun invitationIn(ics: String): Invitation? {
+internal fun invitationIn(ics: String, region: Region = Regional.current()): Invitation? {
     val lines = unfold(ics)
     var method = ""
     var inEvent = false
@@ -115,7 +117,7 @@ internal fun invitationIn(ics: String): Invitation? {
         attendees = props.filter { it.name == "ATTENDEE" }.map(::inviteeOf),
         starts = starts,
         ends = ends,
-        repeats = first("RRULE")?.let { repeatText(it.value) }.orEmpty(),
+        repeats = first("RRULE")?.let { repeatText(it.value, region) }.orEmpty(),
         recurrenceId = first("RECURRENCE-ID")?.let(::timeOf),
     )
 }
@@ -130,7 +132,8 @@ internal fun invitationIn(ics: String): Invitation? {
 internal fun whenText(
     starts: EventTime?,
     ends: EventTime?,
-    zone: ZoneId = ZoneId.systemDefault(),
+    zone: ZoneId = Regional.zone(),
+    region: Region = Regional.current(),
 ): String {
     val from = starts?.instant ?: return ""
     val here = if (starts.allDay) from else from.withZoneSameInstant(zone)
@@ -140,22 +143,18 @@ internal fun whenText(
         // DTEND on an all-day event is the day after the last one, which is correct in the
         // protocol and wrong on a screen: a one day meeting would read as two.
         val last = to?.toLocalDate()?.minusDays(1)
-        return if (last == null || !last.isAfter(here.toLocalDate())) dayText(here)
-        else dayText(here) + " to " + dayText(last.atStartOfDay(here.zone))
+        return if (last == null || !last.isAfter(here.toLocalDate())) dayText(here, region)
+        else dayText(here, region) + " to " + dayText(last.atStartOfDay(here.zone), region)
     }
-    val start = dayText(here) + ", " + here.format(CLOCK)
+    val start = dayText(here, region) + ", " + formatTime(region, here)
     return when {
         to == null -> start
-        to.toLocalDate() == here.toLocalDate() -> start + " to " + to.format(CLOCK)
-        else -> start + " to " + dayText(to) + ", " + to.format(CLOCK)
+        to.toLocalDate() == here.toLocalDate() -> start + " to " + formatTime(region, to)
+        else -> start + " to " + dayText(to, region) + ", " + formatTime(region, to)
     }
 }
 
-private val CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm", Locale.UK)
-private val DAY: DateTimeFormatter = DateTimeFormatter.ofPattern("EEEE d MMMM yyyy", Locale.UK)
-private val UNTIL_DAY: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.UK)
-
-private fun dayText(at: ZonedDateTime) = at.format(DAY)
+private fun dayText(at: ZonedDateTime, region: Region) = formatDayTitle(region, at.toLocalDate())
 
 /** One property line, split into its name, its parameters and its value. */
 private data class Property(val name: String, val params: Map<String, String>, val value: String)
@@ -324,7 +323,7 @@ private fun weeksExpanded(duration: String): String {
  * cannot read becomes the bare word "Repeats", never nothing and never an exception: a
  * recurring meeting shown as a single occurrence is a worse lie than a vague one.
  */
-private fun repeatText(rule: String): String {
+private fun repeatText(rule: String, region: Region): String {
     val parts = rule.split(';').mapNotNull { piece ->
         val at = piece.indexOf('=')
         if (at <= 0) null else piece.substring(0, at).trim().uppercase() to piece.substring(at + 1).trim()
@@ -338,35 +337,38 @@ private fun repeatText(rule: String): String {
     }
     val interval = parts["INTERVAL"]?.toIntOrNull()?.takeIf { it > 1 }
     val head = if (interval == null) "Repeats every $every" else "Repeats every $interval ${every}s"
-    val days = parts["BYDAY"]?.split(',')?.mapNotNull { dayName(it.trim()) }.orEmpty()
+    val days = parts["BYDAY"]?.split(',')?.mapNotNull { dayName(it.trim(), region.locale) }.orEmpty()
     val on = if (days.isEmpty()) "" else " on " + joinWithAnd(days)
     val tail = when {
         parts["COUNT"]?.toIntOrNull() != null -> ", ${parts["COUNT"]} times"
-        parts["UNTIL"] != null -> untilText(parts.getValue("UNTIL"))
+        parts["UNTIL"] != null -> untilText(parts.getValue("UNTIL"), region)
         else -> ""
     }
     return head + on + tail
 }
 
-private fun untilText(until: String): String {
+private fun untilText(until: String, region: Region): String {
     val raw = until.trim()
     val date = runCatching {
         if (raw.length == 8) LocalDate.parse(raw, DATE)
         else LocalDateTime.parse(raw.removeSuffix("Z"), STAMP).toLocalDate()
     }.getOrNull() ?: return ""
-    return ", until " + date.format(UNTIL_DAY)
+    return ", until " + formatFull(region, date)
 }
 
 /** BYDAY carries an optional ordinal, as in `2TU` for the second Tuesday. */
-private fun dayName(code: String): String? = when (code.takeLast(2).uppercase()) {
-    "MO" -> "Monday"
-    "TU" -> "Tuesday"
-    "WE" -> "Wednesday"
-    "TH" -> "Thursday"
-    "FR" -> "Friday"
-    "SA" -> "Saturday"
-    "SU" -> "Sunday"
-    else -> null
+private fun dayName(code: String, locale: Locale): String? {
+    val day = when (code.takeLast(2).uppercase()) {
+        "MO" -> DayOfWeek.MONDAY
+        "TU" -> DayOfWeek.TUESDAY
+        "WE" -> DayOfWeek.WEDNESDAY
+        "TH" -> DayOfWeek.THURSDAY
+        "FR" -> DayOfWeek.FRIDAY
+        "SA" -> DayOfWeek.SATURDAY
+        "SU" -> DayOfWeek.SUNDAY
+        else -> return null
+    }
+    return day.getDisplayName(TextStyle.FULL, locale)
 }
 
 private fun joinWithAnd(words: List<String>): String = when (words.size) {

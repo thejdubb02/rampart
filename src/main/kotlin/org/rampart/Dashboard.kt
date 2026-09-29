@@ -4,8 +4,7 @@ import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.util.Locale
+
 
 /**
  * How the mailbox is actually going, on one screen.
@@ -144,6 +143,4 @@ internal fun unreadByAge(receivedAt: List<String>, now: Instant): List<Counted> 
 }
 
 /** The day a chart's axis shows, short because there are thirty of them across. */
-internal fun axisDay(day: LocalDate): String = day.format(AXIS)
-
-private val AXIS: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMM", Locale.UK)
+internal fun axisDay(day: LocalDate): String = Regional.shortDate(day)

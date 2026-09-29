@@ -200,6 +200,58 @@ object Settings {
     fun setArchiveBy(value: String) = write { put("archiveBy", JsonPrimitive(value)) }
 
     /**
+     * Which language the interface will use once translations exist.
+     *
+     * Translations are RAM-49, and this selector is where they will appear. Today the
+     * interface is English only. "auto" follows the computer, which already decides the
+     * month names, day names and number formats of the dates below. Anything that is not
+     * "en" is read as "auto".
+     */
+    fun language(): String = languageToken(text("language"))
+
+    fun setLanguage(value: String) = write { put("language", JsonPrimitive(value)) }.also { Regional.invalidate() }
+
+    /** "smart" or "full". Anything else is smart, which is how the message list already reads. */
+    fun listDate(): String = listDateToken(text("listDate"))
+
+    fun setListDate(value: String) = write { put("listDate", JsonPrimitive(value)) }.also { Regional.invalidate() }
+
+    /** "auto", "mdy", "dmy" or "ymd". Anything else is automatic, which follows the language. */
+    fun dateOrder(): String = dateOrderToken(text("dateOrder"))
+
+    fun setDateOrder(value: String) = write { put("dateOrder", JsonPrimitive(value)) }.also { Regional.invalidate() }
+
+    /** "auto", "12" or "24". Anything else is automatic, which follows the language. */
+    fun timeFormat(): String = timeFormatToken(text("timeFormat"))
+
+    fun setTimeFormat(value: String) = write { put("timeFormat", JsonPrimitive(value)) }.also { Regional.invalidate() }
+
+    /**
+     * "auto", or a zone id. An id this Java does not know is read as automatic, and the
+     * id is not lowercased: zone ids are case sensitive.
+     */
+    fun timeZone(): String = timeZoneToken(text("timeZone"))
+
+    fun setTimeZone(value: String) = write { put("timeZone", JsonPrimitive(value)) }.also { Regional.invalidate() }
+
+    /** "auto", "sunday", "monday" or "saturday". Anything else is automatic. */
+    fun weekStart(): String = weekStartToken(text("weekStart"))
+
+    fun setWeekStart(value: String) = write { put("weekStart", JsonPrimitive(value)) }.also { Regional.invalidate() }
+
+    /** The six regional choices in one read, still raw, so an unknown value can fall back. */
+    internal fun regionalRaw(): RegionalRaw {
+        val saved = read()
+        fun value(key: String) = saved[key]?.jsonPrimitive?.contentOrNull.orEmpty()
+        return RegionalRaw(
+            value("language"), value("listDate"), value("dateOrder"),
+            value("timeFormat"), value("timeZone"), value("weekStart"),
+        )
+    }
+
+    private fun text(key: String): String? = read()[key]?.jsonPrimitive?.contentOrNull
+
+    /**
      * Whether the sign-off goes above the quoted original rather than under all of it.
      *
      * On by default, which is where Gmail and Outlook put it: a reply's sign-off sits under

@@ -5,7 +5,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import java.time.LocalDate
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
 import java.util.Locale
 
@@ -57,9 +56,6 @@ internal fun calendarPrompt(today: LocalDate, zone: ZoneId): String = """
 /** The most event cards one turn may put on screen. */
 internal const val MOST_PROPOSED = 3
 
-private val AGENDA_DATE: DateTimeFormatter = DateTimeFormatter.ofPattern("EEEE d MMMM yyyy", Locale.UK)
-private val AGENDA_CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("H:mm", Locale.UK)
-
 /**
  * The calendar tools for one turn of the conversation.
  *
@@ -73,6 +69,7 @@ internal class CalendarTools(
     private val day: (LocalDate) -> List<Occurrence>,
     private val zone: ZoneId,
     private val today: LocalDate,
+    private val region: Region = Regional.current(),
 ) {
     val proposed = mutableListOf<EventForm>()
 
@@ -96,10 +93,10 @@ internal class CalendarTools(
         } catch (e: JmapError) {
             return "Could not read the calendar: ${e.message ?: "the server gave no reason."}"
         }
-        val heading = date.format(AGENDA_DATE)
+        val heading = formatDayTitle(region, date)
         if (found.isEmpty()) return "Nothing is on the calendar on $heading."
         return "On $heading:\n" + found.joinToString("\n") { o ->
-            val time = if (o.allDay) "all day" else "${o.start.format(AGENDA_CLOCK)} to ${o.end.format(AGENDA_CLOCK)}"
+            val time = if (o.allDay) "all day" else "${formatTime(region, o.start)} to ${formatTime(region, o.end)}"
             val place = if (o.location.isBlank()) "" else " at ${o.location}"
             "$time  ${o.title.ifBlank { "(no title)" }}$place"
         }
@@ -132,7 +129,7 @@ internal class CalendarTools(
 internal fun calendarToolsFor(
     backend: MailBackend?,
     accountName: String,
-    zone: ZoneId = ZoneId.systemDefault(),
+    zone: ZoneId = Regional.zone(),
     today: LocalDate = LocalDate.now(zone),
 ): CalendarTools {
     val client = eventCalendarFor(backend)

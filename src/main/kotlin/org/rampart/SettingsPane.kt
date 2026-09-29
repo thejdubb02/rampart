@@ -66,6 +66,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.isTraySupported
 import androidx.compose.foundation.Image
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import kotlin.math.roundToInt
 
 /**
@@ -193,6 +196,7 @@ internal fun SettingsPane(
                             "notifications" -> NotificationsPage(
                                 notifyOnArrival, onNotifyOnArrival, notifyOnOpen, onNotifyOnOpen, accounts,
                             )
+                            "region" -> RegionPage()
                             "reading" -> ReadingPage(onUndoBarSeconds, onMessageMode, onMessageScale)
                             "filters" -> FiltersPage(
                                 script = filters,
@@ -251,6 +255,7 @@ internal val SettingsPages: List<Triple<String, String, String>> = listOf(
     Triple("encryption", "Encryption", "General"),
     Triple("phone", "Your phone", "General"),
     Triple("notifications", "Notifications", "General"),
+    Triple("region", "Language, Region & Time", "General"),
     Triple("themes", "Themes", "Appearance"),
     // Kept with the other Mail pages. The nav groups in list order, so a page filed out of
     // sequence makes its heading appear twice.
@@ -2036,6 +2041,185 @@ internal fun updateFailureMessage(reason: UpdateCheckFailure): String = when (re
     UpdateCheckFailure.HTTP_OTHER -> "GitHub returned an unexpected response."
     UpdateCheckFailure.NETWORK -> "The network could not be reached."
     UpdateCheckFailure.PARSE -> "GitHub returned update information Rampart could not read."
+}
+
+/**
+ * Language, date format, time format, and the zone and week every screen follows.
+ *
+ * The language row is where translations will appear (RAM-49). Until then it only
+ * chooses the names and number shapes the rows under it use.
+ */
+@Composable
+private fun RegionPage() {
+    Section(
+        "Language, Region & Time",
+        "Language, date format, time format, and other regional preferences",
+    )
+
+    Text("Language", style = MaterialTheme.typography.bodyMedium)
+    Note("Auto follows this computer. English is the only language the interface has today.")
+    var language by remember { mutableStateOf(Settings.language()) }
+    Choice(language == "auto", "Auto") {
+        language = "auto"
+        Settings.setLanguage("auto")
+    }
+    Choice(language == "en", "English") {
+        language = "en"
+        Settings.setLanguage("en")
+    }
+
+    Spacer(Modifier.height(18.dp))
+    Text("Date format", style = MaterialTheme.typography.bodyMedium)
+    Note("How a date is written in the message list. Smart shows a time for today, the day and a time for this week, and the full date after that.")
+    var listDate by remember { mutableStateOf(Settings.listDate()) }
+    Choice(listDate == "smart", "Smart") {
+        listDate = "smart"
+        Settings.setListDate("smart")
+    }
+    Choice(listDate == "full", "Always full date") {
+        listDate = "full"
+        Settings.setListDate("full")
+    }
+    val zone = Regional.zone()
+    val now = ZonedDateTime.now(zone)
+    val today = now.toLocalDate()
+    fun preview(day: LocalDate) = Regional.listStamp(day.atTime(now.toLocalTime()).atZone(zone).toInstant(), now.toInstant())
+    Column(Modifier.padding(start = 40.dp, top = 4.dp)) {
+        PreviewLine("Today", preview(today))
+        PreviewLine("This week", preview(today.minusDays(1)))
+        PreviewLine("Older", preview(today.minusDays(8)))
+    }
+
+    Spacer(Modifier.height(18.dp))
+    Text("Date order", style = MaterialTheme.typography.bodyMedium)
+    Note("Automatic follows the language.")
+    var dateOrder by remember { mutableStateOf(Settings.dateOrder()) }
+    Choice(dateOrder == "auto", "Automatic") {
+        dateOrder = "auto"
+        Settings.setDateOrder("auto")
+    }
+    Choice(dateOrder == "mdy", "Month/Day/Year") {
+        dateOrder = "mdy"
+        Settings.setDateOrder("mdy")
+    }
+    Choice(dateOrder == "dmy", "Day/Month/Year") {
+        dateOrder = "dmy"
+        Settings.setDateOrder("dmy")
+    }
+    Choice(dateOrder == "ymd", "Year-Month-Day") {
+        dateOrder = "ymd"
+        Settings.setDateOrder("ymd")
+    }
+
+    Spacer(Modifier.height(18.dp))
+    Text("Time format", style = MaterialTheme.typography.bodyMedium)
+    Note("Automatic follows the language. 12-hour looks like 3:45 PM. 24-hour looks like 15:45.")
+    var timeFormat by remember { mutableStateOf(Settings.timeFormat()) }
+    Choice(timeFormat == "auto", "Automatic") {
+        timeFormat = "auto"
+        Settings.setTimeFormat("auto")
+    }
+    Choice(timeFormat == "12", "12-hour") {
+        timeFormat = "12"
+        Settings.setTimeFormat("12")
+    }
+    Choice(timeFormat == "24", "24-hour") {
+        timeFormat = "24"
+        Settings.setTimeFormat("24")
+    }
+
+    Spacer(Modifier.height(18.dp))
+    Text("Time zone", style = MaterialTheme.typography.bodyMedium)
+    Note("Automatic follows this computer. Mail and calendar times are shown in the zone you pick.")
+    var zoneChoice by remember { mutableStateOf(Settings.timeZone()) }
+    var zoneQuery by remember { mutableStateOf("") }
+    val zones = remember { ZoneId.getAvailableZoneIds().sorted() }
+    Choice(zoneChoice == "auto", "Automatic (${ZoneId.systemDefault().id})") {
+        zoneChoice = "auto"
+        Settings.setTimeZone("auto")
+    }
+    if (zoneChoice != "auto") {
+        Choice(true, zoneChoice) {
+            zoneChoice = zoneChoice
+        }
+    }
+    Spacer(Modifier.height(6.dp))
+    Entry(zoneQuery, "London or New_York") { zoneQuery = it }
+    val matches = if (zoneQuery.isBlank()) emptyList()
+    else zones.filter { it.contains(zoneQuery, ignoreCase = true) && it != zoneChoice }
+    matches.take(30).forEach { id ->
+        Choice(zoneChoice == id, id) {
+            zoneChoice = id
+            Settings.setTimeZone(id)
+        }
+    }
+    if (matches.size > 30) {
+        Note("Keep typing to narrow the list.")
+    } else if (zoneQuery.isNotBlank() && matches.isEmpty() && zoneChoice == "auto") {
+        Note("No zone matches that.")
+    }
+    val shown = if (zoneChoice == "auto") ZoneId.systemDefault()
+    else runCatching { ZoneId.of(zoneChoice) }.getOrDefault(ZoneId.systemDefault())
+    val here = ZonedDateTime.now(shown)
+    val region = Regional.current()
+    Text(
+        "Now: ${formatTime(region, here)} ${formatZone(region, here)}",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.outline,
+        modifier = Modifier.padding(start = 40.dp, top = 4.dp),
+    )
+
+    Spacer(Modifier.height(18.dp))
+    Text("First day of week", style = MaterialTheme.typography.bodyMedium)
+    Note("Calendars and date pickers start the week on this day.")
+    var weekStart by remember { mutableStateOf(Settings.weekStart()) }
+    Choice(weekStart == "auto", "Automatic") {
+        weekStart = "auto"
+        Settings.setWeekStart("auto")
+    }
+    Choice(weekStart == "sunday", "Sunday") {
+        weekStart = "sunday"
+        Settings.setWeekStart("sunday")
+    }
+    Choice(weekStart == "monday", "Monday") {
+        weekStart = "monday"
+        Settings.setWeekStart("monday")
+    }
+    Choice(weekStart == "saturday", "Saturday") {
+        weekStart = "saturday"
+        Settings.setWeekStart("saturday")
+    }
+}
+
+@Composable
+private fun Note(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.outline,
+        modifier = Modifier.padding(top = 2.dp, bottom = 6.dp),
+    )
+}
+
+@Composable
+private fun PreviewLine(label: String, value: String) {
+    Text(
+        "$label: $value",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.outline,
+    )
+}
+
+@Composable
+private fun Choice(selected: Boolean, label: String, onPick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onPick).padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = onPick)
+        Spacer(Modifier.width(8.dp))
+        Text(label, style = MaterialTheme.typography.bodyMedium)
+    }
 }
 
 @Composable

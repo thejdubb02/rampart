@@ -2861,7 +2861,7 @@ private fun Reader(
             val folder = boxes.firstOrNull { it.name.equals(SNOOZE_FOLDER, ignoreCase = true) }?.id
                 ?: io { session(key).jmap.createMailbox(SNOOZE_FOLDER) }?.also { refreshFolders(key) }
                 ?: run { report("This account would not make a $SNOOZE_FOLDER folder."); return@launch }
-            val due = until.dueAt(ZonedDateTime.now()).toInstant()
+            val due = until.dueAt(ZonedDateTime.now(Regional.zone())).toInstant()
             val from = sourceFolder(key)
             if (changed(key) { session(key).jmap.setKeyword(listOf(message.id), snoozeKeyword(due), true) } == null) return@launch
             if (changed(key) { session(key).jmap.move(listOf(message.id), folder) } == null) {
@@ -3568,11 +3568,12 @@ private fun Reader(
         }
 
         override fun trackingToday(): String {
-            val start = java.time.LocalDate.now().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant()
+            val zone = Regional.zone()
+            val start = java.time.LocalDate.now(zone).atStartOfDay(zone).toInstant()
             val lines = session(key).store?.tracking().orEmpty().flatMap { (tracked, events) ->
                 events.filter { it.at >= start && classify(it, tracked.sentAt) == Opened.READ }.map { event ->
                     val action = if (event.event == "click") "clicked ${event.url}" else "opened"
-                    "${tracked.recipient} $action ${tracked.subject.ifBlank { "(no subject)" }} at ${WHEN.format(event.at)}"
+                    "${tracked.recipient} $action ${tracked.subject.ifBlank { "(no subject)" }} at ${Regional.dateTime(event.at)}"
                 }
             }
             return if (lines.isEmpty()) "No person opens or clicks were recorded today." else lines.joinToString("\n")
@@ -3630,8 +3631,8 @@ private fun Reader(
                             config = config,
                             key = Secrets.loadNamed(Assistant.KEY),
                             system = Chat.system(folders, who) + "\n\n" + settingsPrompt() +
-                                "\n\n" + calendarPrompt(java.time.LocalDate.now(), java.time.ZoneId.systemDefault()) +
-                                "\n\n" + taskPrompt(java.time.LocalDate.now(), java.time.ZoneId.systemDefault(), open != null) +
+                                "\n\n" + calendarPrompt(java.time.LocalDate.now(Regional.zone()), Regional.zone()) +
+                                "\n\n" + taskPrompt(java.time.LocalDate.now(Regional.zone()), Regional.zone(), open != null) +
                                 open?.let { "\n\n" + Chat.openMessage(it, openText) }.orEmpty() +
                                 rookFileContext(attached),
                             history = history,

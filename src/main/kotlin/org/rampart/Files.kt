@@ -20,7 +20,6 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 /*
@@ -413,10 +412,10 @@ internal fun sizeLabel(node: FileNode): String = if (node.isFolder) "" else huma
  */
 internal fun modifiedLabel(
     modified: String,
-    zone: ZoneId = ZoneId.systemDefault(),
-    locale: Locale = Locale.getDefault(),
+    zone: ZoneId = Regional.zone(),
+    locale: Locale = Regional.locale(),
 ): String = runCatching {
-    DateTimeFormatter.ofPattern("d MMM yyyy, HH:mm", locale).withZone(zone).format(Instant.parse(modified))
+    formatDateTime(shownIn(Regional.current(), locale, zone), Instant.parse(modified))
 }.getOrDefault(modified)
 
 /**

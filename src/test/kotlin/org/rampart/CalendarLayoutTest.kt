@@ -6,6 +6,7 @@ import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
+import java.util.Locale
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -15,9 +16,21 @@ import kotlin.test.assertTrue
 class CalendarLayoutTest {
     private val day = LocalDate.parse("2026-09-16")
 
+    /** Day first and English, so the titles stay the sentences this file was written against. */
+    private val words = regionFrom(
+        language = "en",
+        listDate = "smart",
+        dateOrder = "dmy",
+        timeFormat = "24",
+        timeZone = "Europe/London",
+        weekStart = "monday",
+        systemLocale = Locale.UK,
+        systemZone = ZoneId.of("Europe/London"),
+    )
+
     @Test
     fun `a month is six whole weeks from the Monday on or before the first`() {
-        val (first, until) = visibleRange(CalendarView.MONTH, day)
+        val (first, until) = visibleRange(CalendarView.MONTH, day, DayOfWeek.MONDAY)
         assertEquals(LocalDate.parse("2026-08-31"), first)
         assertEquals(DayOfWeek.MONDAY, first.dayOfWeek)
         assertEquals(42, until.toEpochDay() - first.toEpochDay())
@@ -25,7 +38,7 @@ class CalendarLayoutTest {
 
     @Test
     fun `week, day and agenda cover what they say`() {
-        assertEquals(LocalDate.parse("2026-09-14") to LocalDate.parse("2026-09-21"), visibleRange(CalendarView.WEEK, day))
+        assertEquals(LocalDate.parse("2026-09-14") to LocalDate.parse("2026-09-21"), visibleRange(CalendarView.WEEK, day, DayOfWeek.MONDAY))
         assertEquals(day to day.plusDays(1), visibleRange(CalendarView.DAY, day))
         assertEquals(day to day.plusDays(30), visibleRange(CalendarView.AGENDA, day))
     }
@@ -39,11 +52,11 @@ class CalendarLayoutTest {
 
     @Test
     fun `titles read as words`() {
-        assertEquals("September 2026", rangeTitle(CalendarView.MONTH, day))
+        assertEquals("September 2026", rangeTitle(CalendarView.MONTH, day, DayOfWeek.MONDAY, words))
         // The JDK writes September short as "Sep" or "Sept" depending on its version, so only the shape is checked.
-        val week = rangeTitle(CalendarView.WEEK, day)
+        val week = rangeTitle(CalendarView.WEEK, day, DayOfWeek.MONDAY, words)
         assertTrue(week.startsWith("14 Sep") && " to 20 Sep" in week && week.endsWith(" 2026"), week)
-        assertEquals("Wednesday 16 September 2026", rangeTitle(CalendarView.DAY, day))
+        assertEquals("Wednesday 16 September 2026", rangeTitle(CalendarView.DAY, day, DayOfWeek.MONDAY, words))
     }
 
     @Test

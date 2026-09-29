@@ -62,18 +62,16 @@ import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
-import java.time.ZoneId
 import java.time.format.TextStyle
-import java.util.Locale
 
 /** When it is, for the details dialog: the day as well as the time. */
 private fun whenLong(o: Occurrence): String = when {
     o.allDay -> {
         val last = o.end.toLocalDate().minusDays(1)
-        if (!last.isAfter(o.start.toLocalDate())) "${o.start.format(DAY_TITLE)}, all day"
-        else "${o.start.format(DAY_TITLE)} to ${last.format(DAY_TITLE)}, all day"
+        if (!last.isAfter(o.start.toLocalDate())) "${Regional.dayTitle(o.start.toLocalDate())}, all day"
+        else "${Regional.dayTitle(o.start.toLocalDate())} to ${Regional.dayTitle(last)}, all day"
     }
-    else -> "${o.start.format(DAY_TITLE)}, ${timeText(o)}"
+    else -> "${Regional.dayTitle(o.start.toLocalDate())}, ${timeText(o)}"
 }
 
 /** What the editor is open on. */
@@ -117,9 +115,9 @@ internal fun CalendarPane(backend: MailBackend?, accountName: String) {
     }
 
     val scope = rememberCoroutineScope()
-    val viewer = remember { ZoneId.systemDefault() }
+    val viewer = Regional.zone()
     var view by remember { mutableStateOf(CalendarView.MONTH) }
-    var anchor by remember { mutableStateOf(LocalDate.now()) }
+    var anchor by remember { mutableStateOf(LocalDate.now(viewer)) }
     var calendars by remember(client) { mutableStateOf<List<CalendarInfo>>(emptyList()) }
     var hidden by remember(client) { mutableStateOf<Set<String>>(emptySet()) }
     var events by remember(client) { mutableStateOf<List<CalendarEvent>>(emptyList()) }
@@ -145,7 +143,7 @@ internal fun CalendarPane(backend: MailBackend?, accountName: String) {
             fault = "Could not read your calendars." to whyFailed(e)
         }
     }
-    LaunchedEffect(client, range, reload) {
+    LaunchedEffect(client, range, reload, viewer) {
         loading = true
         try {
             // A day either side, because the query is in UTC and the window is in local time.
@@ -235,7 +233,7 @@ internal fun CalendarPane(backend: MailBackend?, accountName: String) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(rangeTitle(view, anchor), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                 if (loading) Spinner(size = 18.dp, thickness = 2.dp, modifier = Modifier.padding(end = 10.dp))
-                TextButton(onClick = { anchor = LocalDate.now() }) { Text("Today") }
+                TextButton(onClick = { anchor = LocalDate.now(viewer) }) { Text("Today") }
                 IconButton(onClick = { anchor = stepped(view, anchor, forward = false) }, modifier = Modifier.size(32.dp)) {
                     Icon(RampartIcons.Back, contentDescription = "Earlier", modifier = Modifier.size(16.dp))
                 }
@@ -413,7 +411,8 @@ private fun Chip(text: String, colour: Color, onClick: () -> Unit, modifier: Mod
 
 private fun luminance(c: Color): Double = 0.2126 * c.red + 0.7152 * c.green + 0.0722 * c.blue
 
-private fun weekdayHeaders(days: List<LocalDate>) = days.map { it.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.UK) }
+private fun weekdayHeaders(days: List<LocalDate>) =
+    days.map { it.dayOfWeek.getDisplayName(TextStyle.SHORT, Regional.locale()) }
 
 @Composable
 private fun MonthGrid(
@@ -429,7 +428,7 @@ private fun MonthGrid(
     val byDay = remember(occurrences) {
         buildMap<LocalDate, MutableList<Occurrence>> { occurrences.forEach { o -> o.days().forEach { getOrPut(it) { mutableListOf() } += o } } }
     }
-    val today = LocalDate.now()
+    val today = LocalDate.now(Regional.zone())
     val line = MaterialTheme.colorScheme.outlineVariant
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth()) {
@@ -476,7 +475,7 @@ private fun MonthGrid(
                             Column {
                                 showing.forEach { o ->
                                     Chip(
-                                        if (o.allDay) o.title.ifBlank { "(untitled)" } else "${o.start.format(CALENDAR_CLOCK)} ${o.title.ifBlank { "(untitled)" }}",
+                                        if (o.allDay) o.title.ifBlank { "(untitled)" } else "${Regional.time(o.start)} ${o.title.ifBlank { "(untitled)" }}",
                                         colourOf(o),
                                         onClick = { onOpen(o) },
                                         solid = o.allDay,
@@ -511,7 +510,7 @@ private fun TimeGrid(
     onDay: (LocalDate) -> Unit,
     onEmpty: ((LocalDateTime, Boolean) -> Unit)?,
 ) {
-    val today = LocalDate.now()
+    val today = LocalDate.now(Regional.zone())
     val line = MaterialTheme.colorScheme.outlineVariant
     val scroll = rememberScrollState()
     val hourPx = with(LocalDensity.current) { HOUR.toPx() }
@@ -523,7 +522,7 @@ private fun TimeGrid(
             Spacer(Modifier.width(GUTTER))
             days.forEach { day ->
                 Text(
-                    "${day.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.UK)} ${day.dayOfMonth}",
+                    "${day.dayOfWeek.getDisplayName(TextStyle.SHORT, Regional.locale())} ${day.dayOfMonth}",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = if (day == today) FontWeight.Bold else FontWeight.Normal,
                     color = if (day == today) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
@@ -556,7 +555,7 @@ private fun TimeGrid(
                 Column(Modifier.width(GUTTER)) {
                     (0 until 24).forEach { hour ->
                         Text(
-                            if (hour == 0) "" else LocalTime.of(hour, 0).format(CALENDAR_CLOCK),
+                            if (hour == 0) "" else Regional.time(LocalTime.of(hour, 0)),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.outline,
                             modifier = Modifier.height(HOUR).padding(start = 4.dp),
@@ -613,7 +612,7 @@ private fun TimeGrid(
                             }
                         }
                         if (day == today) {
-                            val now = LocalTime.now()
+                            val now = LocalTime.now(Regional.zone())
                             Box(
                                 Modifier.offset(y = HOUR * ((now.hour * 60 + now.minute) / 60f))
                                     .fillMaxWidth().height(2.dp).background(MaterialTheme.colorScheme.primary),
@@ -643,12 +642,12 @@ private fun Agenda(range: Pair<LocalDate, LocalDate>, occurrences: List<Occurren
         )
         return
     }
-    val today = LocalDate.now()
+    val today = LocalDate.now(Regional.zone())
     LazyColumn(Modifier.fillMaxSize()) {
         rows.forEach { (day, list) ->
             item(key = "d$day") {
                 Text(
-                    (if (day == today) "Today, " else "") + day.format(DAY_TITLE),
+                    (if (day == today) "Today, " else "") + Regional.dayTitle(day),
                     style = MaterialTheme.typography.titleSmall,
                     color = if (day == today) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.padding(top = 14.dp, bottom = 4.dp),
@@ -727,7 +726,7 @@ private fun EventDetails(
     )
 }
 
-private fun dayLetter(day: DayOfWeek) = day.getDisplayName(TextStyle.SHORT, Locale.UK)
+private fun dayLetter(day: DayOfWeek) = day.getDisplayName(TextStyle.SHORT, Regional.locale())
 
 /**
  * The event, in a dialog.
@@ -920,7 +919,7 @@ private fun RepeatPicker(
     }
     if (frequency == Frequency.WEEKLY) {
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            DayOfWeek.entries.forEach { day ->
+            weekDays(Regional.firstDayOfWeek()).forEach { day ->
                 FilterChip(
                     selected = day in weekdays,
                     // Never down to none: a weekly rule on no days is not a rule.

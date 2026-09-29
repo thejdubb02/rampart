@@ -17,8 +17,6 @@ import kotlinx.serialization.json.putJsonObject
 import java.nio.file.Files
 import java.time.Instant
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.time.format.FormatStyle
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
@@ -332,11 +330,11 @@ internal sealed interface SyncStatus {
 /** The line under the switch, for one account. */
 internal fun syncStatusLine(
     status: SyncStatus,
-    zone: ZoneId = ZoneId.systemDefault(),
-    locale: Locale = Locale.getDefault(),
+    zone: ZoneId = Regional.zone(),
+    locale: Locale = Regional.locale(),
 ): String {
-    fun time(at: Long) = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withLocale(locale).withZone(zone)
-        .format(Instant.ofEpochMilli(at))
+    val region = shownIn(Regional.current(), locale, zone)
+    fun time(at: Long) = formatTime(region, Instant.ofEpochMilli(at))
     return when (status) {
         SyncStatus.Off -> "Sync is off on this computer, so settings stay in the file here."
         is SyncStatus.LocalOnly -> "${status.why} Settings stay in the file on this computer."

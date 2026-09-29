@@ -54,7 +54,7 @@ internal object NewMailNotices {
                 enabled = Settings.notifyOnArrival(),
                 silenced = Settings.silencedAccounts(),
                 quiet = QuietHours.parse(Settings.quietHours()),
-                time = LocalTime.now(),
+                time = LocalTime.now(Regional.zone()),
             ) ?: continue
             show(notice)
         }
