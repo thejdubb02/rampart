@@ -1365,7 +1365,6 @@ private fun Reader(
      * costs money and takes a moment, so what it answered has to survive recomposition
      * until something explicitly asks for a fresh one.
      */
-    var threadSummary by remember { mutableStateOf<String?>(null) }
     var summarising by remember { mutableStateOf(false) }
     /** The sentence [LlmError] carried, or one built locally, from the last attempt. */
     var summariseError by remember { mutableStateOf<String?>(null) }
@@ -2741,7 +2740,6 @@ private fun Reader(
                 // A summary, a pending packet or an error belongs to the conversation it was
                 // made for. Left in place across a switch, it would be shown as if it were an
                 // answer about whatever is open now.
-                threadSummary = null
                 summariseError = null
                 summarisePacket = null
                 summariseFor = null
@@ -3942,8 +3940,15 @@ private fun Reader(
             summarising = false
             if (selected?.threadId != forThread) return@launch
             outcome.fold(
-                onSuccess = { threadSummary = it.text.trim() },
-                onFailure = { summariseError = it.message ?: "The model could not be reached." },
+                onSuccess = {
+                    val text = it.text.trim()
+                    said = said + Said("assistant", text)
+                },
+                onFailure = {
+                    val err = it.message ?: "The model could not be reached."
+                    summariseError = err
+                    said = said + Said("result", err)
+                },
             )
         }
     }
@@ -3961,6 +3966,7 @@ private fun Reader(
         if (summarising) return
         Assistant.whyNot(Assistant.SUMMARISE, config, key, currentFolderName(key))?.let {
             summariseError = it
+            said = said + Said("result", it)
             return
         }
         summariseError = null
@@ -4349,43 +4355,6 @@ private fun Reader(
     // between.
     val actions = selected?.let(::actionsFor) ?: MessageActions()
 
-    /**
-     * The Summarise button on the open thread, and what pressing it has done.
-     *
-     * Recomputed on every draw, the same as [actions] above it, because whether the button
-     * can be pressed depends on things that can change while the window is open: the
-     * ceiling, a key just typed into Settings, a folder just added to the never list.
-     */
-    val summariseState = run {
-        val message = selected ?: return@run null
-        val key = accountOf(message) ?: return@run null
-        val config = Assistant.config()
-        // Off means no card at all. The button that turns it on stays in the
-        // sidebar and in the command palette, so the switch is not hidden.
-        if (config.mode == AssistantMode.OFF) return@run null
-        val why = Assistant.whyNot(Assistant.SUMMARISE, config, key, currentFolderName(key))
-        SummariseActions(
-            disabledBecause = why,
-            running = summarising,
-            paragraph = threadSummary,
-            error = summariseError,
-            onSummarise = { summarise(message, key, config) },
-            // Null rather than a no-op when it is disabled: a denied folder must not be
-            // summarisable at all, and offering "look at what would be sent" would still
-            // build the very packet that is meant never to exist.
-            onViewPacket = if (why == null) {
-                { summarise(message, key, config, viewFirst = true) }
-            } else {
-                null
-            },
-            // The same text leaves as for a summary, so the same reasons refuse it.
-            actionItems = ActionItemsActions(actionJob, message.threadId.ifBlank { message.id }, why) {
-                startActionItems(actionJob, scope, why, message.threadId.ifBlank { message.id }, message.subject) {
-                    summariseTurns(key, message)
-                }
-            },
-        )
-    }
 
     /** Shows [message] as it arrived, or puts it away again. Its own card, not a shared one. */
     fun toggleSource(message: Summary) {
@@ -4462,8 +4431,8 @@ private fun Reader(
      * expanded card rather than once for the whole pane.
      *
      * [cardSummary] is which message, never [selected]: several cards can be expanded at
-     * once, and each answers Reply, Archive, Tag and the rest as itself. [invitation],
-     * [answering] and [summariseState] stay tied to whichever message the conversation was
+     * once, and each answers Reply, Archive, Tag and the rest as itself. [invitation]
+     * and [answering] stay tied to whichever message the conversation was
      * opened on, because a meeting invitation and a thread summary are read once per
      * conversation, not once per message in it.
      */
@@ -4655,7 +4624,6 @@ private fun Reader(
             reading = card.reading,
             paneHeight = windowSize().height.value.toInt(),
             actions = actionsFor(cardSummary),
-            summarise = if (isPrimary) summariseState else null,
             // A suggestion opens as an ordinary reply with the words above the quote, unsent.
             suggest = if (isPrimary && key != null) {
                 suggestReplies.actions(
@@ -5221,7 +5189,7 @@ private fun Reader(
     // Any of these sits over the message. The live panel would paint through them.
     CoverBody(
         composing != null || showPalette || showShortcuts ||
-            confirm != null || summarisePacket != null || attached != null || folderAsk != null ||
+            confirm != null || summarisePacket != null || actionJob.waiting != null || attached != null || folderAsk != null ||
             filterFor != null || changelogDialog != null || tnef != null,
     )
     Box(Modifier.fillMaxSize()) {
@@ -5355,12 +5323,31 @@ private fun Reader(
          * Labelled Row so the early returns below still leave the same block they always did.
          */
         WithSideTools(
-            working = chatThinking || summarising || composeBusy || filterBusy,
+            working = chatThinking || summarising || actionJob.running || composeBusy || filterBusy,
+            inDashboard = dashboardOpen,
+            onDashboard = {
+                dashboardOpen = !dashboardOpen
+                today.open = false
+                if (dashboardOpen) {
+                    contactsOpen = false
+                    settingsOpen = false
+                    calendarOpen = false
+                }
+            },
+            inSettings = settingsOpen,
+            onSettings = {
+                settingsOpen = !settingsOpen
+                if (settingsOpen) {
+                    contactsOpen = false
+                    dashboardOpen = false
+                    calendarOpen = false
+                }
+            },
             panel = { tool ->
                 when (tool) {
                     SideTool.ROOK -> ChatPane(
                         said = said,
-                        thinking = chatThinking,
+                        thinking = chatThinking || summarising || actionJob.running,
                         unavailable = Assistant.whyNot(Assistant.CHAT),
                         onSend = { ask(it) },
                         onClear = {
@@ -5379,6 +5366,79 @@ private fun Reader(
                         cards = settingCards.cards,
                         onConfirmCard = { confirmCard(it) },
                         onDismissCard = { settingCards = settingCards.dismiss(it) },
+                        hasOpenMessage = selected != null,
+                        summarising = summarising,
+                        actionItemsRunning = actionJob.running,
+                        onSummarise = selected?.let { sel ->
+                            accountOf(sel)?.let { key ->
+                                val cfg = Assistant.config()
+                                if (cfg.mode == AssistantMode.OFF) null
+                                else {
+                                    {
+                                        AppBar.show(SideTool.ROOK)
+                                        said = said + Said("user", "Summarise this thread")
+                                        summarise(sel, key, cfg, viewFirst = false)
+                                    }
+                                }
+                            }
+                        },
+                        onActionItems = selected?.let { sel ->
+                            accountOf(sel)?.let { key ->
+                                val cfg = Assistant.config()
+                                if (cfg.mode == AssistantMode.OFF) null
+                                else {
+                                    {
+                                        AppBar.show(SideTool.ROOK)
+                                        said = said + Said("user", "Action items in this thread")
+                                        val why = Assistant.whyNot(Assistant.ACTIONS, cfg, key, currentFolderName(key))
+                                        val forThread = sel.threadId.ifBlank { sel.id }
+                                        startActionItems(
+                                            job = actionJob,
+                                            scope = scope,
+                                            why = why,
+                                            thread = forThread,
+                                            subject = sel.subject,
+                                            onDone = { items ->
+                                                if (selected?.let { it.threadId.ifBlank { it.id } } != forThread) return@startActionItems
+                                                val text = if (items.isEmpty()) {
+                                                    "Nobody in this thread owes anything."
+                                                } else {
+                                                    items.joinToString("\n") { item ->
+                                                        val line = "${item.who}: ${item.what}" + if (item.due.isNotBlank()) ", by ${item.due}" else ""
+                                                        if (item.unverified.isNotEmpty()) {
+                                                            "$line (check: ${item.unverified.joinToString(", ")})"
+                                                        } else {
+                                                            line
+                                                        }
+                                                    }
+                                                }
+                                                said = said + Said("assistant", text)
+                                            },
+                                            onFailure = { (title, detail) ->
+                                                if (selected?.let { it.threadId.ifBlank { it.id } } != forThread) return@startActionItems
+                                                val err = if (detail != null) "$title $detail" else title
+                                                said = said + Said("result", err)
+                                            },
+                                        ) {
+                                            summariseTurns(key, sel)
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        onViewPacket = selected?.let { sel ->
+                            accountOf(sel)?.let { key ->
+                                val cfg = Assistant.config()
+                                val why = Assistant.whyNot(Assistant.SUMMARISE, cfg, key, currentFolderName(key))
+                                if (cfg.mode == AssistantMode.OFF || why != null) null
+                                else {
+                                    {
+                                        AppBar.show(SideTool.ROOK)
+                                        summarise(sel, key, cfg, viewFirst = true)
+                                    }
+                                }
+                            }
+                        },
                         modifier = Modifier.fillMaxSize(),
                     )
                     SideTool.CALENDAR -> {
@@ -6221,6 +6281,7 @@ private fun Reader(
             onDismiss = { summarisePacket = null },
         )
     }
+    RookJobConsent(actionJob)
 
     attached?.let { mail ->
         val shots = remember(mail) {
@@ -6717,108 +6778,6 @@ internal fun Sidebar(
                         AddAccountFace(onClick = onAddAccount)
                     }
                 }
-            }
-        }
-
-        Spacer(Modifier.height(4.dp))
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        Spacer(Modifier.height(4.dp))
-
-        if (collapsed) {
-            SidebarTooltip("How your mail is going") {
-                IconButton(onClick = onDashboard, modifier = Modifier.size(32.dp)) {
-                    Icon(
-                        RampartIcons.Dashboard,
-                        contentDescription = "How your mail is going",
-                        tint = if (inDashboard) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-            }
-            // Calendar, Contacts, Files and Rook moved to the app bar on the right, where
-            // they open beside the message instead of in place of it.
-            AdminSidebarButton(32.dp)
-            SidebarTooltip("Settings") {
-                IconButton(onClick = onSettings, modifier = Modifier.size(32.dp)) {
-                    Icon(
-                        RampartIcons.Settings,
-                        contentDescription = "Settings",
-                        tint = if (inSettings) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-            }
-            SidebarTooltip("Widen the sidebar") {
-                IconButton(onClick = onToggleCollapsed, modifier = Modifier.size(32.dp)) {
-                    Icon(
-                        RampartIcons.Expand,
-                        contentDescription = "Widen the sidebar",
-                        tint = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-            }
-        } else {
-            // "Add account" used to live here as its own text row; that job now belongs to
-            // the "+" beside the stack of faces above, so this row is icons only.
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                SidebarTooltip("How your mail is going") {
-                    IconButton(onClick = onDashboard, modifier = Modifier.size(28.dp)) {
-                        Icon(
-                            RampartIcons.Dashboard,
-                            contentDescription = "How your mail is going",
-                            tint = if (inDashboard) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.size(16.dp),
-                        )
-                    }
-                }
-                AdminSidebarButton(28.dp)
-                SidebarTooltip("Settings") {
-                    IconButton(onClick = onSettings, modifier = Modifier.size(28.dp)) {
-                        Icon(
-                            RampartIcons.Settings,
-                            contentDescription = "Settings",
-                            tint = if (inSettings) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.size(16.dp),
-                        )
-                    }
-                }
-                SidebarTooltip("Narrow the sidebar") {
-                    IconButton(onClick = onToggleCollapsed, modifier = Modifier.size(28.dp)) {
-                        Icon(
-                            RampartIcons.Collapse,
-                            contentDescription = "Narrow the sidebar",
-                            tint = MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.size(15.dp),
-                        )
-                    }
-                }
-            }
-            /*
-             * The version line, quiet and always in the same place at the bottom of the
-             * sidebar. What to do about a newer one is still entirely the bottom bar's
-             * job, and this still says nothing about one. It is clickable now for a
-             * second, unrelated reason: it is the one place in the window that always
-             * names the version running right now, which makes it the natural way back
-             * to the changelog once the dialog that shows automatically has been
-             * dismissed, or switched off entirely with its own checkbox.
-             */
-            Updates.current?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.padding(start = 12.dp, top = 2.dp)
-                        .clickable(onClickLabel = "What changed in Rampart", role = Role.Button, onClick = onViewChangelog),
-                )
             }
         }
     }
@@ -8552,26 +8511,6 @@ internal data class ConversationActions(
     val onMute: (Boolean) -> Unit,
 )
 
-/**
- * The Summarise button, and what has come of pressing it.
- *
- * Null hides the whole feature, which is what an account not yet known looks like: there
- * is nowhere yet to send anything, so there is nothing to offer a reason about.
- */
-internal data class SummariseActions(
-    /** Why the button cannot be pressed, in one sentence. Null when it can be. */
-    val disabledBecause: String?,
-    val running: Boolean,
-    /** The paragraph from the last successful call, for this thread. Null before one. */
-    val paragraph: String?,
-    /** The sentence [LlmError] carried, from the last attempt that failed. */
-    val error: String?,
-    val onSummarise: () -> Unit,
-    /** Looking at the exact packet without it gating the button. Null while disabled. */
-    val onViewPacket: (() -> Unit)?,
-    /** The Action items button beside Summarise. See `BriefingPane.kt`. */
-    val actionItems: ActionItemsActions? = null,
-)
 
 @Composable
 internal fun Message(
@@ -8646,7 +8585,6 @@ internal fun Message(
     /** The original attached as a .eml, rather than quoted. */
     onForwardFile: () -> Unit = {},
     actions: MessageActions = MessageActions(),
-    summarise: SummariseActions? = null,
     suggest: SuggestRepliesActions? = null,
     attachments: List<Attachment> = emptyList(),
     savedTo: String? = null,
@@ -8939,6 +8877,8 @@ internal fun Message(
                     onSource = onSource,
                     onPrint = { page?.let { printDocument(it.document) } },
                     onUnsubscribe = onUnsubscribe,
+                    rookOpen = AppBar.showing(SideTool.ROOK),
+                    onOpenRook = { AppBar.show(SideTool.ROOK) },
                 )
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -9084,10 +9024,6 @@ internal fun Message(
                         Spacer(Modifier.height(14.dp))
                     }
 
-                    // Only on the card the conversation opened on: this is a paragraph
-                    // about the whole thread, not about any one message in it, and belongs
-                    // above whichever card is telling that story rather than on every card.
-                    summarise?.let { SummaryCard(it) }
                     suggest?.let { SuggestRepliesCard(it) }
 
                     Row(
@@ -9685,79 +9621,6 @@ internal fun String.asFullLocalTime(): String = runCatching {
         .format(Instant.parse(this))
 }.getOrDefault(this)
 
-/**
- * What Rook said about this thread, or the button that would ask it to.
- *
- * Its own card rather than a line among the message buttons above, so a paragraph nobody
- * wrote cannot be mistaken for one somebody did: no person's name beside it, no date, a
- * heading that says plainly what it is.
- */
-@Composable
-private fun SummaryCard(summarise: SummariseActions) {
-    Column(
-        Modifier.fillMaxWidth()
-            .clip(MaterialTheme.shapes.small)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(horizontal = 14.dp, vertical = 11.dp),
-    ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "Summary, from Rook",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.outline,
-                modifier = Modifier.weight(1f),
-            )
-            if (summarise.running) Spinner(size = 15.dp, thickness = 2.dp)
-        }
-        summarise.paragraph?.let {
-            Spacer(Modifier.height(6.dp))
-            Text(it, style = MaterialTheme.typography.bodyMedium)
-        }
-        // Whichever of these is current, shown under whatever paragraph is already there
-        // rather than instead of it: a paragraph from a moment ago is still worth having
-        // even when the next attempt at a fresh one failed or has since become disabled.
-        (summarise.error ?: summarise.disabledBecause)?.let {
-            Spacer(Modifier.height(4.dp))
-            Text(
-                it,
-                style = MaterialTheme.typography.bodySmall,
-                color = if (summarise.error != null) MaterialTheme.colorScheme.error
-                else MaterialTheme.colorScheme.outline,
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedButton(
-                onClick = summarise.onSummarise,
-                enabled = !summarise.running && summarise.disabledBecause == null,
-            ) {
-                Text(
-                    when {
-                        summarise.running -> "Summarising"
-                        summarise.paragraph != null -> "Summarise again"
-                        else -> "Summarise this thread"
-                    },
-                )
-            }
-            summarise.actionItems?.let {
-                Spacer(Modifier.width(8.dp))
-                ActionItemsButton(it)
-            }
-            summarise.onViewPacket?.let { view ->
-                Spacer(Modifier.width(8.dp))
-                TextButton(onClick = view) {
-                    Text(
-                        if (summarise.paragraph != null) "What was sent" else "What would be sent",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-            }
-        }
-        summarise.actionItems?.let { ActionItemsList(it) }
-    }
-    Spacer(Modifier.height(14.dp))
-}
 
 /**
  * One collapsed message in the thread stack: who, when, and a preview where there is one.

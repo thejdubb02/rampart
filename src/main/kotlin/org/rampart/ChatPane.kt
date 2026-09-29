@@ -2,6 +2,8 @@ package org.rampart
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -69,6 +71,18 @@ internal fun ChatPane(
     cards: List<ChangeCard> = emptyList(),
     onConfirmCard: (Int) -> Unit = {},
     onDismissCard: (Int) -> Unit = {},
+    /** Whether a message is currently open in the reading pane. */
+    hasOpenMessage: Boolean = false,
+    /** Whether thread summarisation is currently running. */
+    summarising: Boolean = false,
+    /** Whether action item extraction is currently running. */
+    actionItemsRunning: Boolean = false,
+    /** Summarise the currently open thread. */
+    onSummarise: (() -> Unit)? = null,
+    /** List action items in the currently open thread. */
+    onActionItems: (() -> Unit)? = null,
+    /** View the summarise packet before sending. */
+    onViewPacket: (() -> Unit)? = null,
     /**
      * Its size. The fixed width it always had by default; the app bar's panel passes a fill
      * instead, because there the width is whatever the panel was dragged to.
@@ -160,6 +174,37 @@ internal fun ChatPane(
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Column(Modifier.padding(12.dp)) {
+            if (hasOpenMessage) {
+                Row(
+                    Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    SmallChip(
+                        label = "Summarise",
+                        enabled = onSummarise != null && !summarising && !thinking,
+                        running = summarising,
+                        onClick = { onSummarise?.invoke() },
+                    )
+                    SmallChip(
+                        label = "Action items",
+                        enabled = onActionItems != null && !actionItemsRunning && !thinking,
+                        running = actionItemsRunning,
+                        onClick = { onActionItems?.invoke() },
+                    )
+                    if (onViewPacket != null) {
+                        Text(
+                            "What would be sent",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable(onClick = onViewPacket)
+                                .padding(horizontal = 4.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+            }
             OutlinedTextField(
                 value = typed,
                 onValueChange = { typed = it },
@@ -313,5 +358,36 @@ private fun SaidLine(line: Said) {
             Spacer(Modifier.width(8.dp))
             Text(line.text, style = MaterialTheme.typography.bodyMedium)
         }
+    }
+}
+
+/** A compact chip for quick actions on the currently open message. */
+@Composable
+private fun SmallChip(
+    label: String,
+    enabled: Boolean,
+    running: Boolean,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(12.dp)
+    Row(
+        Modifier
+            .clip(shape)
+            .background(
+                if (enabled) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surfaceDim,
+                shape,
+            )
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 9.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        if (running) Spinner(size = 11.dp, thickness = 1.5.dp)
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.outline,
+        )
     }
 }

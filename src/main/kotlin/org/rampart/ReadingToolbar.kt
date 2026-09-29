@@ -60,6 +60,10 @@ internal fun ReadingToolbar(
     onSource: () -> Unit,
     onPrint: () -> Unit,
     onUnsubscribe: (Unsubscribe) -> Unit,
+    /** Whether the Rook side panel is currently open. */
+    rookOpen: Boolean = false,
+    /** Opens the Rook side panel. */
+    onOpenRook: (() -> Unit)? = null,
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth().height(ToolbarHeight).padding(horizontal = 12.dp)) {
         val kept = toolbarKept(maxWidth, darkWindow, replyAll || !bodyReady)
@@ -126,6 +130,13 @@ internal fun ReadingToolbar(
                     if (paper) "Draw this message dark" else "Show it as the sender drew it",
                     tint = if (paper) LocalContentColor.current else MaterialTheme.colorScheme.primary,
                 ) { onPaper(!paper) }
+            }
+            if (!rookOpen && onOpenRook != null) {
+                SidebarTooltip("Ask Rook") {
+                    IconButton(onClick = onOpenRook, modifier = Modifier.size(34.dp)) {
+                        RookAvatar(size = 18.dp)
+                    }
+                }
             }
             MoreMenu(
                 summary = summary,

@@ -90,6 +90,8 @@ internal object AppBar {
 
     fun toggle(tool: SideTool) { panels = panels.toggle(tool) }
 
+    fun show(tool: SideTool) { panels = panels.show(tool) }
+
     fun close(tool: SideTool) { panels = panels.close(tool) }
 
     fun showing(tool: SideTool): Boolean = panels.open == tool
@@ -143,6 +145,10 @@ private val EdgeWidth = 6.dp
 internal fun WithSideTools(
     /** Whether Rook is busy anywhere in the app, so his face moves while he works. */
     working: Boolean,
+    inDashboard: Boolean = false,
+    onDashboard: () -> Unit = {},
+    inSettings: Boolean = false,
+    onSettings: () -> Unit = {},
     panel: @Composable (SideTool) -> Unit,
     content: @Composable RowScope.() -> Unit,
 ) {
@@ -161,7 +167,7 @@ internal fun WithSideTools(
             }
         }
         VerticalDivider()
-        Bar(working)
+        Bar(working, inDashboard, onDashboard, inSettings, onSettings)
     }
 }
 
@@ -195,9 +201,15 @@ private fun PanelEdge(tool: SideTool, available: Float?) {
     }
 }
 
-/** The bar itself: one button per tool, top to bottom in [SideTool]'s order. */
+/** The bar itself: one button per tool, top to bottom in [SideTool]'s order, with Dashboard and Settings pinned to the bottom. */
 @Composable
-private fun Bar(working: Boolean) {
+private fun Bar(
+    working: Boolean,
+    inDashboard: Boolean = false,
+    onDashboard: () -> Unit = {},
+    inSettings: Boolean = false,
+    onSettings: () -> Unit = {},
+) {
     Column(
         Modifier.width(BarWidth).fillMaxHeight()
             .background(MaterialTheme.colorScheme.background)
@@ -210,6 +222,37 @@ private fun Bar(working: Boolean) {
             // was. The key still answers, and the panel says why there is nothing in it.
             if (tool == SideTool.FILES && !FilesPage.offered && !AppBar.showing(tool)) return@forEach
             BarButton(tool, working)
+        }
+        Spacer(Modifier.weight(1f))
+        BarAction(
+            icon = RampartIcons.Dashboard,
+            label = "How your mail is going",
+            active = inDashboard,
+            onClick = onDashboard,
+        )
+        BarAction(
+            icon = RampartIcons.Settings,
+            label = "Settings",
+            active = inSettings,
+            onClick = onSettings,
+        )
+    }
+}
+
+@Composable
+private fun BarAction(icon: ImageVector, label: String, active: Boolean, onClick: () -> Unit) {
+    SidebarTooltip(label) {
+        IconButton(
+            onClick = onClick,
+            modifier = Modifier.size(34.dp).clip(MaterialTheme.shapes.small)
+                .background(if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent),
+        ) {
+            Icon(
+                icon,
+                contentDescription = label,
+                tint = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                modifier = Modifier.size(16.dp),
+            )
         }
     }
 }

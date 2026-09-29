@@ -232,20 +232,7 @@ private fun BriefRow(line: BriefLine, onOpen: (Summary) -> Unit) {
     }
 }
 
-// ---- action items, beside "Summarise this thread" ------------------------------------------
-
-/**
- * The Action items button on the open thread, and what pressing it has done.
- *
- * [thread] is the conversation on screen. A list made for a different one is not shown,
- * the same rule the summary follows when the reader moves on while a call is out.
- */
-internal class ActionItemsActions(
-    val job: RookJob<List<ActionItem>>,
-    val thread: String,
-    val disabledBecause: String?,
-    val onStart: () -> Unit,
-)
+// ---- action items, asked for from Rook's panel ------------------------------------------
 
 /** Starts the action items call for [thread], whose turns [turns] fetches. */
 internal fun startActionItems(
@@ -254,66 +241,16 @@ internal fun startActionItems(
     why: String?,
     thread: String,
     subject: String,
+    onDone: (List<ActionItem>) -> Unit = {},
+    onFailure: (Pair<String, String?>) -> Unit = {},
     turns: suspend () -> List<Turn>,
 ) {
     val config = Assistant.config()
-    job.start(scope, Assistant.ACTIONS, config, why, thread) {
+    job.start(scope, Assistant.ACTIONS, config, why, thread, onDone, onFailure) {
         val said = turns()
         val text = said.joinToString("\n\n") { it.text }
         Prepared(Llm.packet(config.model, ActionItems.system(), ActionItems.user(subject, said))) { reply ->
             ActionItems.parse(reply.orEmpty(), text)
-        }
-    }
-}
-
-@Composable
-internal fun ActionItemsButton(actions: ActionItemsActions) {
-    val mine = actions.job.forKey == actions.thread
-    OutlinedButton(
-        onClick = actions.onStart,
-        enabled = !actions.job.running && actions.disabledBecause == null,
-    ) {
-        Text(if (actions.job.running && mine) "Listing" else "Action items")
-    }
-}
-
-/** The list under the summary card's buttons: who owes what, and by when. */
-@Composable
-internal fun ActionItemsList(actions: ActionItemsActions) {
-    val job = actions.job
-    RookJobConsent(job)
-    if (job.forKey != actions.thread) return
-    job.failure?.let { (title, detail) ->
-        Spacer(Modifier.height(6.dp))
-        FaultText(title, detail)
-    }
-    val items = job.result ?: return
-    Spacer(Modifier.height(8.dp))
-    Text(
-        "Action items, from Rook",
-        style = MaterialTheme.typography.labelMedium,
-        fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.outline,
-    )
-    Spacer(Modifier.height(4.dp))
-    if (items.isEmpty()) {
-        Text("Nobody in this thread owes anything.", style = MaterialTheme.typography.bodyMedium)
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        items.forEach { item ->
-            Column {
-                Text(
-                    "${item.who}: ${item.what}" + if (item.due.isNotBlank()) ", by ${item.due}" else "",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                if (item.unverified.isNotEmpty()) {
-                    Text(
-                        "Not in the thread word for word, so check it: ${item.unverified.joinToString(", ")}.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            }
         }
     }
 }

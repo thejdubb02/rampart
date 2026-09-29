@@ -67,6 +67,7 @@ internal class RookJob<T> {
 
     private var scope: CoroutineScope? = null
     private var onDone: (T) -> Unit = {}
+    private var onFailure: (Pair<String, String?>) -> Unit = {}
 
     fun clear() {
         result = null
@@ -88,15 +89,19 @@ internal class RookJob<T> {
         why: String?,
         key: String,
         onDone: (T) -> Unit = {},
+        onFailure: (Pair<String, String?>) -> Unit = {},
         prepare: suspend () -> Prepared<T>,
     ) {
         if (running) return
         this.scope = scope
         this.onDone = onDone
+        this.onFailure = onFailure
         forKey = key
         clear()
         if (why != null) {
-            failure = why to null
+            val f = why to null
+            failure = f
+            onFailure(f)
             return
         }
         running = true
@@ -150,11 +155,13 @@ internal class RookJob<T> {
     }
 
     private fun fail(thrown: Throwable) {
-        failure = when (thrown) {
+        val f = when (thrown) {
             is StepFailed -> thrown.message.orEmpty() to thrown.cause?.let { whyFailed(it) }
             is LlmError -> thrown.message.orEmpty() to null
             else -> "Rook could not finish that." to whyFailed(thrown)
         }
+        failure = f
+        onFailure(f)
     }
 }
 
