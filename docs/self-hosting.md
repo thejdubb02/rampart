@@ -26,6 +26,11 @@ Recipient autocomplete. Saved searches, including nested conditions and child fo
 split by sender, mailing list or tag, which are a line in your settings file and move
 nothing on the server. The table and card layouts of the message list.
 
+Signing in to Gmail and Microsoft 365 through the browser belongs here too. It talks to
+Google or Microsoft as the person signing in and to nobody else. The one thing it needs is a
+client ID registered with each provider, which is done once by whoever builds Rampart, not by
+the person installing it; docs/connecting.md has the details and how to use your own.
+
 **This is the default shape and the one to aim for.** The dashboard is the worked example:
 every number on it is counted from mail already in the mailbox, so it needs no pixel, no
 endpoint, no DNS and no configuration, and it works on Stalwart, on Gmail and on plain
