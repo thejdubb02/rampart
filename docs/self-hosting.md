@@ -42,6 +42,10 @@ conversations into one and splitting a message out of one, which are kept in the
 account's local copy on this computer because JMAP has no way to change a message's
 thread and IMAP has no thread to change.
 
+Follow-up flags, which are keywords on the message on the server, so every device sees
+them; the reminder itself fires only while Rampart is running. Attachments kept for
+offline use, which are a per-computer copy, encrypted under the local store's key.
+
 **This is the default shape and the one to aim for.** The dashboard is the worked example:
 every number on it is counted from mail already in the mailbox, so it needs no pixel, no
 endpoint, no DNS and no configuration, and it works on Stalwart, on Gmail and on plain
