@@ -82,6 +82,7 @@ internal fun SettingsPane(
     update: String?,
     /** Whether a check asked for from the About page's own button is still in flight. */
     checkingUpdate: Boolean = false,
+    updateCheckFailure: UpdateCheckFailure? = null,
     onCheckNow: () -> Unit = {},
     notifyOnArrival: Boolean,
     onNotifyOnArrival: (Boolean) -> Unit,
@@ -190,7 +191,7 @@ internal fun SettingsPane(
                         "assistant" -> AssistantPage(accounts)
                         "admin" -> AdminLoginPage()
                         "diagnostics" -> DiagnosticsPage()
-                        "about" -> AboutPage(update, checkingUpdate, onCheckNow, onRestart)
+                        "about" -> AboutPage(update, checkingUpdate, updateCheckFailure, onCheckNow, onRestart)
                     }
                 }
             }
@@ -1643,7 +1644,13 @@ private fun Dollars(label: String, value: Double, modifier: Modifier = Modifier,
 }
 
 @Composable
-private fun AboutPage(update: String?, checkingUpdate: Boolean, onCheckNow: () -> Unit, onRestart: () -> Unit) {
+private fun AboutPage(
+    update: String?,
+    checkingUpdate: Boolean,
+    updateCheckFailure: UpdateCheckFailure?,
+    onCheckNow: () -> Unit,
+    onRestart: () -> Unit,
+) {
     Section("Version", "Rampart updates itself in the background and asks before restarting.")
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
@@ -1665,10 +1672,29 @@ private fun AboutPage(update: String?, checkingUpdate: Boolean, onCheckNow: () -
             }
         }
     }
+    updateCheckFailure?.let {
+        Text(
+            "Could not check for updates: ${updateFailureMessage(it)}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
 
     Spacer(Modifier.height(30.dp))
     Section("What changed", "Every version, newest first.")
     Changes()
+}
+
+internal fun updateFailureMessage(reason: UpdateCheckFailure): String = when (reason) {
+    UpdateCheckFailure.NO_VERSION -> "This build has no version information."
+    UpdateCheckFailure.HTTP_403, UpdateCheckFailure.HTTP_429 -> "GitHub refused the request."
+    UpdateCheckFailure.HTTP_404 -> "GitHub could not find the release."
+    UpdateCheckFailure.HTTP_3XX -> "GitHub redirected the request unexpectedly."
+    UpdateCheckFailure.HTTP_4XX -> "GitHub rejected the request."
+    UpdateCheckFailure.HTTP_5XX -> "GitHub is temporarily unavailable."
+    UpdateCheckFailure.HTTP_OTHER -> "GitHub returned an unexpected response."
+    UpdateCheckFailure.NETWORK -> "The network could not be reached."
+    UpdateCheckFailure.PARSE -> "GitHub returned update information Rampart could not read."
 }
 
 @Composable

@@ -112,7 +112,14 @@ class DiagnosticsTest {
             listOf("auth", "connection", "rejected", "timeout", "unknown"),
             SendFailureCategory.entries.map { it.value },
         )
-        assertEquals(listOf("newer-found", "current", "check-failed"), UpdateCheckCategory.entries.map { it.value })
+        assertEquals(
+            listOf(
+                "newer-found", "current", "failed-no-version", "failed-http-3xx",
+                "failed-http-403", "failed-http-404", "failed-http-429", "failed-http-4xx",
+                "failed-http-5xx", "failed-http-other", "failed-network", "failed-parse",
+            ),
+            UpdateCheckCategory.entries.map { it.value },
+        )
         assertEquals(listOf("staged", "not-ready", "failed"), UpdateStageCategory.entries.map { it.value })
         assertEquals(listOf("applied", "failed"), UpdateApplyCategory.entries.map { it.value })
     }

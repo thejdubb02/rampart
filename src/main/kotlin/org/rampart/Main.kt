@@ -1107,6 +1107,7 @@ private fun Reader(
     var sendError by remember { mutableStateOf<String?>(null) }
     var sendDetail by remember { mutableStateOf<String?>(null) }
     var update by remember { mutableStateOf<String?>(null) }
+    var updateCheckFailure by remember { mutableStateOf<UpdateCheckFailure?>(null) }
     // Whether a check asked for from the About page, rather than the half-hourly one, is
     // still in flight, so the button there can say so instead of doing nothing visibly.
     var checkingUpdate by remember { mutableStateOf(false) }
@@ -1772,19 +1773,12 @@ private fun Reader(
         }
     }
 
-    /**
-     * One round trip to GitHub, shared by the half-hourly poll below and the button on the
-     * About page. A failed check and "nothing newer" both come back null from
-     * [Updates.newerVersion]: CURRENT covers both here rather than claiming a distinction
-     * this call site cannot actually tell apart.
-     */
+    /** One update check shared by the half-hourly poll and the button on the About page. */
     suspend fun checkForUpdate() {
-        val found = withContext(Dispatchers.IO) { Updates.newerVersion() }
-        update = found
-        Diagnostics.event(
-            Metric.UPDATE_CHECK,
-            if (found != null) UpdateCheckCategory.NEWER_FOUND else UpdateCheckCategory.CURRENT,
-        )
+        val result = withContext(Dispatchers.IO) { Updates.newerVersion() }
+        update = (result as? UpdateCheckResult.Newer)?.version
+        updateCheckFailure = (result as? UpdateCheckResult.Failed)?.reason
+        Diagnostics.event(Metric.UPDATE_CHECK, updateCheckCategory(result))
     }
 
     /*
@@ -5432,6 +5426,7 @@ private fun Reader(
                         else -> null
                     },
                     checkingUpdate = checkingUpdate,
+                    updateCheckFailure = updateCheckFailure,
                     onCheckNow = {
                         if (!checkingUpdate) scope.launch {
                             checkingUpdate = true

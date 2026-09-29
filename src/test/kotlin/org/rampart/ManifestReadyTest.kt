@@ -4,6 +4,8 @@ import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import kotlin.test.Test
 import kotlin.test.assertFalse
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -54,5 +56,16 @@ class ManifestReadyTest {
     fun `nothing listening is not ready`() {
         // No network is not a failed update. It is a reason to ask again later.
         assertFalse(Updates.manifestReady("http://127.0.0.1:1/rampart.appinstaller"))
+    }
+
+    @Test
+    fun `the package version is read from the manifest and its fourth zero is dropped`() {
+        val body = """<AppInstaller><MainPackage Name="Rampart" Version="0.1.272.0" /></AppInstaller>"""
+        assertEquals("0.1.272", Updates.parseManifestVersion(body))
+    }
+
+    @Test
+    fun `a version elsewhere in the manifest is not mistaken for the package version`() {
+        assertNull(Updates.parseManifestVersion("""<AppInstaller Version="0.1.272.0" />"""))
     }
 }

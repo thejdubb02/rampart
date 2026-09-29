@@ -400,7 +400,33 @@ enum class SendFailureCategory(override val value: String) : Category {
 enum class UpdateCheckCategory(override val value: String) : Category {
     NEWER_FOUND("newer-found"),
     CURRENT("current"),
-    CHECK_FAILED("check-failed"),
+    FAILED_NO_VERSION("failed-no-version"),
+    FAILED_HTTP_3XX("failed-http-3xx"),
+    FAILED_HTTP_403("failed-http-403"),
+    FAILED_HTTP_404("failed-http-404"),
+    FAILED_HTTP_429("failed-http-429"),
+    FAILED_HTTP_4XX("failed-http-4xx"),
+    FAILED_HTTP_5XX("failed-http-5xx"),
+    FAILED_HTTP_OTHER("failed-http-other"),
+    FAILED_NETWORK("failed-network"),
+    FAILED_PARSE("failed-parse"),
+}
+
+internal fun updateCheckCategory(result: UpdateCheckResult): UpdateCheckCategory = when (result) {
+    is UpdateCheckResult.Newer -> UpdateCheckCategory.NEWER_FOUND
+    UpdateCheckResult.Current -> UpdateCheckCategory.CURRENT
+    is UpdateCheckResult.Failed -> when (result.reason) {
+        UpdateCheckFailure.NO_VERSION -> UpdateCheckCategory.FAILED_NO_VERSION
+        UpdateCheckFailure.HTTP_3XX -> UpdateCheckCategory.FAILED_HTTP_3XX
+        UpdateCheckFailure.HTTP_403 -> UpdateCheckCategory.FAILED_HTTP_403
+        UpdateCheckFailure.HTTP_404 -> UpdateCheckCategory.FAILED_HTTP_404
+        UpdateCheckFailure.HTTP_429 -> UpdateCheckCategory.FAILED_HTTP_429
+        UpdateCheckFailure.HTTP_4XX -> UpdateCheckCategory.FAILED_HTTP_4XX
+        UpdateCheckFailure.HTTP_5XX -> UpdateCheckCategory.FAILED_HTTP_5XX
+        UpdateCheckFailure.HTTP_OTHER -> UpdateCheckCategory.FAILED_HTTP_OTHER
+        UpdateCheckFailure.NETWORK -> UpdateCheckCategory.FAILED_NETWORK
+        UpdateCheckFailure.PARSE -> UpdateCheckCategory.FAILED_PARSE
+    }
 }
 
 /** `update.stage`'s categories. */

@@ -15,19 +15,21 @@ import kotlin.test.assertTrue
 class UpdateBarTest {
     @Test
     fun `a click installs the freshly checked version when it differs from what was staged`() {
-        assertEquals("0.1.176", Updates.targetVersion(staged = "0.1.174", fresh = "0.1.176"))
+        assertEquals(
+            "0.1.176",
+            Updates.targetVersion(staged = "0.1.174", fresh = UpdateCheckResult.Newer("0.1.176")),
+        )
     }
 
     @Test
     fun `a click that finds nothing has changed keeps the staged version`() {
-        assertEquals("0.1.174", Updates.targetVersion(staged = "0.1.174", fresh = "0.1.174"))
+        assertEquals("0.1.174", Updates.targetVersion(staged = "0.1.174", fresh = UpdateCheckResult.Current))
     }
 
     @Test
     fun `a check that could not be answered installs what is already on disk rather than nothing`() {
-        // Null means the network call failed, not that nothing new was published. What is
-        // already staged is known to exist, so it is the safe thing to fall back on.
-        assertEquals("0.1.174", Updates.targetVersion(staged = "0.1.174", fresh = null))
+        val failed = UpdateCheckResult.Failed(UpdateCheckFailure.NETWORK)
+        assertEquals("0.1.174", Updates.targetVersion(staged = "0.1.174", fresh = failed))
     }
 
     @Test

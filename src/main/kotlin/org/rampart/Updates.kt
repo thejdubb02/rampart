@@ -12,6 +12,25 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
+sealed interface UpdateCheckResult {
+    data class Newer(val version: String) : UpdateCheckResult
+    data object Current : UpdateCheckResult
+    data class Failed(val reason: UpdateCheckFailure) : UpdateCheckResult
+}
+
+enum class UpdateCheckFailure {
+    NO_VERSION,
+    HTTP_3XX,
+    HTTP_403,
+    HTTP_404,
+    HTTP_429,
+    HTTP_4XX,
+    HTTP_5XX,
+    HTTP_OTHER,
+    NETWORK,
+    PARSE,
+}
+
 /**
  * Whether a newer Rampart has been published, and pulling it in when asked.
  *
@@ -33,6 +52,7 @@ object Updates {
 
     private val http: HttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
+        .followRedirects(HttpClient.Redirect.NORMAL)
         .build()
 
     /** Set by the packaged launcher. Null when running from a development build. */
@@ -91,26 +111,82 @@ object Updates {
         response.statusCode() == 200 && response.body().contains("<AppInstaller")
     }.getOrNull()
 
-    /**
-     * The published version, when it is newer than this one. Null for every other outcome,
-     * including no network: an update check that failed is not something to interrupt
-     * someone reading their mail about.
-     */
-    fun newerVersion(): String? = runCatching {
-        val running = current ?: return null
-        val response = http.send(
-            HttpRequest.newBuilder(URI.create(LATEST))
+    /** Returns the published-version outcome without retaining response bodies or exception text. */
+    fun newerVersion(): UpdateCheckResult = newerVersion(current, LATEST, APPINSTALLER)
+
+    internal fun newerVersion(
+        running: String?,
+        latestUrl: String,
+        manifestUrl: String,
+    ): UpdateCheckResult {
+        if (running == null) return UpdateCheckResult.Failed(UpdateCheckFailure.NO_VERSION)
+        val response = try {
+            http.send(
+                HttpRequest.newBuilder(URI.create(latestUrl))
                 .header("Accept", "application/vnd.github+json")
                 .timeout(Duration.ofSeconds(15))
                 .GET()
                 .build(),
-            HttpResponse.BodyHandlers.ofString(),
-        )
-        if (response.statusCode() != 200) return null
-        val latest = Json.parseToJsonElement(response.body()).jsonObject["tag_name"]
-            ?.jsonPrimitive?.contentOrNull?.removePrefix("v") ?: return null
-        latest.takeIf { isNewer(it, running) }
-    }.getOrNull()
+                HttpResponse.BodyHandlers.ofString(),
+            )
+        } catch (_: Exception) {
+            return UpdateCheckResult.Failed(UpdateCheckFailure.NETWORK)
+        }
+        if (response.statusCode() == 403 || response.statusCode() == 429) {
+            return versionFromManifest(manifestUrl, running, httpFailure(response.statusCode()))
+        }
+        if (response.statusCode() != 200) {
+            return UpdateCheckResult.Failed(httpFailure(response.statusCode()))
+        }
+        val latest = try {
+            Json.parseToJsonElement(response.body()).jsonObject["tag_name"]
+                ?.jsonPrimitive?.contentOrNull?.removePrefix("v")
+                ?: return UpdateCheckResult.Failed(UpdateCheckFailure.PARSE)
+        } catch (_: Exception) {
+            return UpdateCheckResult.Failed(UpdateCheckFailure.PARSE)
+        }
+        return resultFor(latest, running)
+    }
+
+    private fun versionFromManifest(
+        url: String,
+        running: String,
+        originalFailure: UpdateCheckFailure,
+    ): UpdateCheckResult {
+        val response = try {
+            http.send(
+                HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(15)).GET().build(),
+                HttpResponse.BodyHandlers.ofString(),
+            )
+        } catch (_: Exception) {
+            return UpdateCheckResult.Failed(UpdateCheckFailure.NETWORK)
+        }
+        if (response.statusCode() != 200) return UpdateCheckResult.Failed(originalFailure)
+        val latest = parseManifestVersion(response.body())
+            ?: return UpdateCheckResult.Failed(UpdateCheckFailure.PARSE)
+        return resultFor(latest, running)
+    }
+
+    internal fun parseManifestVersion(manifest: String): String? {
+        val tag = Regex("<MainPackage\\b[^>]*>", RegexOption.IGNORE_CASE).find(manifest)?.value
+            ?: return null
+        val version = Regex("\\bVersion\\s*=\\s*\"(\\d+\\.\\d+\\.\\d+\\.\\d+)\"", RegexOption.IGNORE_CASE)
+            .find(tag)?.groupValues?.get(1) ?: return null
+        return version.removeSuffix(".0")
+    }
+
+    internal fun resultFor(candidate: String, running: String): UpdateCheckResult =
+        if (isNewer(candidate, running)) UpdateCheckResult.Newer(candidate) else UpdateCheckResult.Current
+
+    private fun httpFailure(status: Int): UpdateCheckFailure = when (status) {
+        403 -> UpdateCheckFailure.HTTP_403
+        404 -> UpdateCheckFailure.HTTP_404
+        429 -> UpdateCheckFailure.HTTP_429
+        in 300..399 -> UpdateCheckFailure.HTTP_3XX
+        in 400..499 -> UpdateCheckFailure.HTTP_4XX
+        in 500..599 -> UpdateCheckFailure.HTTP_5XX
+        else -> UpdateCheckFailure.HTTP_OTHER
+    }
 
     /**
      * The launcher Windows installs beside the app. Its presence is how we know this is a
@@ -349,7 +425,8 @@ object Updates {
      * nothing new being published: [staged] is the safest thing to install then, since it
      * is already known to exist and is already sitting on disk.
      */
-    internal fun targetVersion(staged: String, fresh: String?): String = fresh ?: staged
+    internal fun targetVersion(staged: String, fresh: UpdateCheckResult): String =
+        (fresh as? UpdateCheckResult.Newer)?.version ?: staged
 
     /**
      * What the bar should show after a stage or install attempt has returned false.
