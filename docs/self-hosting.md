@@ -24,7 +24,11 @@ you. Folder management. The command palette and the shortcuts. Templates. Undo-s
 is held in the client. Read receipts, which are a standard mail header and not a tracker.
 Recipient autocomplete. Saved searches, including nested conditions and child folders
 split by sender, mailing list or tag, which are a line in your settings file and move
-nothing on the server. The table and card layouts of the message list.
+nothing on the server. The table and card layouts of the message list. OpenPGP and S/MIME
+signing, encryption and checking, with keys kept on this computer; looking a correspondent's
+key up in their own domain's Web Key Directory or on keys.openpgp.org talks to those
+directly, and only when you write to them with encryption on or press Look up
+(`encryption.md`).
 
 **This is the default shape and the one to aim for.** The dashboard is the worked example:
 every number on it is counted from mail already in the mailbox, so it needs no pixel, no
@@ -93,6 +97,9 @@ server what it can do and hides what it cannot.
   over JMAP only, done as you with your own sign-in and never with an admin token. On any
   other account the page says in one sentence why it has nothing to offer. See
   `account-security.md`.
+- **Encryption at rest on the server**, in Settings, Encryption: Stalwart encrypting new mail
+  to your own public key before it stores it. Stalwart over JMAP only, set as you, never with
+  an admin token; on any other account the section is one sentence. See `encryption.md`.
 - **Require secure delivery and Confirm delivery** in the composer, which need the JMAP
   submission extensions REQUIRETLS and DSN. The buttons are only there when the server
   offers them, so an IMAP account never shows either.

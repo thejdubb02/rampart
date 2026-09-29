@@ -26,6 +26,12 @@ The second rule, from the same place: **anything we give an LLM gets its own key
 registry entry with a daily budget, and a monitor.** Section 2 says what that means when
 the key belongs to the user rather than to us, because the usual answer does not fit.
 
+A third, added 2026-09-29 with encryption (branch `claude/encryption`, not released): **Rook
+does not read encrypted mail.** Every path that hands message text to a model goes through
+`RookGate.kt`, and an encrypted message, ciphertext or decrypted, comes out of it as one line
+saying it was withheld. The only way past is Decrypt to summarise on one opened thread, which
+always shows the packet first. `encryption.md` lists the paths.
+
 ---
 
 ## 1. What the model is actually for

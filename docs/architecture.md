@@ -329,14 +329,26 @@ the reader assumes, which is the real work in step 2.
 
 ## What we are deliberately not doing
 
-Android (Sterna). File storage. OpenPGP implemented in
-process. Certificate pinning. Any app store. Admin on a phone.
+Android (Sterna). File storage. Certificate pinning. Any app store. Admin on a phone.
 
 Calendars and contacts came off that list: both turned out to be the same small shape of
 work over JMAP as the mail, read and written as the signed-in user, and both are absent with
 a sentence on a server that does not offer them. Contacts shipped first; the calendar was
 built on 2026-09-28. Neither is an application in its own right yet, and CalDAV and CardDAV
 for IMAP accounts are still not being done.
+
+OpenPGP implemented in process came off it on 2026-09-29, with S/MIME alongside, on Justin's
+decision (Kaneo RAM-37, built in rather than a plugin). The reason it was on the list was
+Sterna: it already did OpenPGP, and a desktop client leaning on a phone app for it looked like
+enough. It is not. Encrypted mail that only opens on a phone is mail the desktop client cannot
+read, reply to or search, and Stalwart's own encryption at rest turns every new message into
+exactly that the moment somebody switches it on. Bulwark ships the same thing as three plugins,
+which is the shape `CLAUDE.md` warns against. So it is built in, on Bouncy Castle rather than
+hand rolled, with the rules that kept it off the list written into the design instead:
+decrypted content goes through the same hostile HTML path as any other mail, secret keys live
+only in the credential store, nothing is ever sent unencrypted after encryption was asked for,
+and Rook never reads encrypted mail without an explicit press. `encryption.md` has the design
+and the Stalwart research.
 
 ## Brand
 
