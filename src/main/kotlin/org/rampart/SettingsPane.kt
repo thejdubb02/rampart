@@ -118,6 +118,10 @@ internal fun SettingsPane(
     onMessageScale: (Float) -> Unit = {},
     /** Told when the message list density changes, so the list updates immediately. */
     onDensity: (Density) -> Unit = {},
+    /** The sidebar icon colouring, so the choice and the sidebar stay on the same value. */
+    sidebarIcons: SidebarIcons = SidebarIcons.COLOUR,
+    /** Told when that choice changes, so the sidebar repaints without a restart. */
+    onSidebarIcons: (SidebarIcons) -> Unit = {},
     /** Told when the tracking server changes, so the composer's toggle appears or goes. */
     onTrackingServer: (String) -> Unit = {},
     onRestart: () -> Unit,
@@ -223,7 +227,10 @@ internal fun SettingsPane(
                                 onCreateFolder = onCreateFilterFolder,
                                 onBusy = onFilterBusy,
                             )
-                            "themes" -> ThemesPage(onTheme, iconPack, onIconPack, onTintRowsByTag, onLoader, onTrackingServer, onDensity)
+                            "themes" -> ThemesPage(
+                                onTheme, iconPack, onIconPack, onTintRowsByTag, onLoader, onTrackingServer, onDensity,
+                                sidebarIcons, onSidebarIcons,
+                            )
                             "identities" -> IdentitiesPage(
                                 accounts, account, onAccount, identities, signatureError, onSignature, onPickSignatureImage,
                             )
@@ -445,6 +452,8 @@ private fun ThemesPage(
     /** Told when the tracking server changes, so the composer's toggle appears or goes. */
     onTrackingServer: (String) -> Unit = {},
     onDensity: (Density) -> Unit = {},
+    sidebarIcons: SidebarIcons = SidebarIcons.COLOUR,
+    onSidebarIcons: (SidebarIcons) -> Unit = {},
 ) {
     val current = LocalRampartTheme.current
     var customThemes by remember { mutableStateOf(Settings.customThemes()) }
@@ -596,6 +605,28 @@ private fun ThemesPage(
                     )
                 }
             }
+        }
+    }
+
+    Spacer(Modifier.height(18.dp))
+    Section(
+        "Sidebar icons",
+        "Colour gives each folder its own icon colour. Plain keeps every folder icon the one colour it has now.",
+    )
+    SidebarIcons.entries.forEach { option ->
+        Row(
+            Modifier.fillMaxWidth().clickable {
+                Settings.setSidebarIcons(option.key)
+                onSidebarIcons(option)
+            }.padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(selected = option == sidebarIcons, onClick = {
+                Settings.setSidebarIcons(option.key)
+                onSidebarIcons(option)
+            })
+            Spacer(Modifier.width(8.dp))
+            Text(option.label, style = MaterialTheme.typography.bodyMedium)
         }
     }
 

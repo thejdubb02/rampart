@@ -99,6 +99,7 @@ internal val SYNCED_SETTINGS: Map<String, SyncShape> = mapOf(
     "theme" to SyncShape.TEXT,
     "customThemes" to SyncShape.LIST_OF_OBJECTS,
     "iconPack" to SyncShape.TEXT,
+    "sidebarIcons" to SyncShape.TEXT,
     "loader" to SyncShape.TEXT,
     "density" to SyncShape.TEXT,
     "tintRowsByTag" to SyncShape.TEXT,

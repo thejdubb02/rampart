@@ -79,7 +79,7 @@ internal interface IconPack {
     val Read: ImageVector
     val Contacts: ImageVector
 
-    /** A price tag, for a message carrying a label somebody made. */
+    /** A price tag, for a message carrying a label somebody made, and for a tag row in the sidebar. */
     val Tag: ImageVector
 
     /** A paperclip, for a message with a file attached. */
@@ -145,6 +145,67 @@ internal fun IconPack.forRole(role: String?): ImageVector = when (role) {
     "sent" -> Sent
     "trash" -> Trash
     else -> Folder
+}
+
+/**
+ * Whether sidebar folder icons take a colour per role.
+ *
+ * Separate from [IconPack]. A pack chooses the shapes, and this only chooses
+ * coloured or plain. Colour is the default, including where nobody has chosen
+ * yet, so a new install matches Bulwark. Plain is every folder icon in the
+ * single ordinary colour.
+ */
+internal enum class SidebarIcons(val key: String, val label: String) {
+    COLOUR("colour", "Colour"),
+    PLAIN("plain", "Plain"),
+    ;
+
+    companion object {
+        /** A missing or unknown value is colour, the default for a new install. */
+        fun of(key: String?): SidebarIcons =
+            entries.firstOrNull { it.key.equals(key, ignoreCase = true) } ?: COLOUR
+    }
+}
+
+/** The sidebar icon colouring in force. Colour unless a caller says plain. */
+internal val LocalSidebarIcons = staticCompositionLocalOf { SidebarIcons.COLOUR }
+
+/*
+ * One palette for the role icons. The theme accent is whichever palette somebody
+ * picked, so it cannot stay "inbox blue" from one theme to the next, and Material's
+ * error and outline are the theme red and the ordinary icon grey. These sit in the
+ * middle so the same number reads as a 16dp icon on the light page and the dark one.
+ * Junk is the Rampart red.
+ */
+private val SIDEBAR_INBOX = Color(0xFF3B6FE0)
+private val SIDEBAR_DRAFTS = Color(0xFF7B4BBF)
+private val SIDEBAR_SCHEDULED = Color(0xFF1490A8)
+private val SIDEBAR_SENT = Color(0xFF2F8F4E)
+private val SIDEBAR_ARCHIVE = Color(0xFFB36B00)
+private val SIDEBAR_STARRED = Color(0xFFA68B00)
+private val SIDEBAR_JUNK = Color(0xFFDB2D54)
+private val SIDEBAR_TRASH = Color(0xFF6E6E7A)
+
+/**
+ * The colour of a sidebar folder icon for [role], or null when that icon stays
+ * the ordinary one.
+ *
+ * One colour per role, so Inbox and Trash can be told apart at a glance the way
+ * Bulwark's sidebar does. All mail and a folder with no role stay ordinary:
+ * colouring every folder would leave the special ones with nothing to stand out
+ * by. Junk and spam are the same folder. All unread uses the inbox blue, and
+ * All starred uses a yellower amber than Archive.
+ */
+internal fun sidebarRoleColour(role: String?): Color? = when (role?.lowercase()) {
+    "inbox", "unread" -> SIDEBAR_INBOX
+    "drafts" -> SIDEBAR_DRAFTS
+    "scheduled" -> SIDEBAR_SCHEDULED
+    "sent" -> SIDEBAR_SENT
+    "archive" -> SIDEBAR_ARCHIVE
+    "starred" -> SIDEBAR_STARRED
+    "junk", "spam" -> SIDEBAR_JUNK
+    "trash" -> SIDEBAR_TRASH
+    else -> null
 }
 
 /** The set drawn for Rampart: thin strokes, sitting at the weight of the text beside them. */

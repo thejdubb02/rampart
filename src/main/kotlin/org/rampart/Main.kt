@@ -593,6 +593,7 @@ private fun Reader(
     var folded by remember { mutableStateOf(Settings.collapsedSections()) }
     var tintRows by remember { mutableStateOf(Settings.tintRowsByTag()) }
     var density by remember { mutableStateOf(Density.of(Settings.density())) }
+    var sidebarIcons by remember { mutableStateOf(SidebarIcons.of(Settings.sidebarIcons())) }
     var undoBarSeconds by remember { mutableStateOf(Settings.undoBarSeconds()) }
     var loader by remember { mutableStateOf(Loader.of(Settings.loader())) }
     /*
@@ -2097,6 +2098,7 @@ private fun Reader(
             (THEMES + Settings.customThemes()).firstOrNull { it.key == Settings.theme() }?.let(onTheme)
         }
         if ("settings.iconPack" in changed) onIcons(iconPack(Settings.iconPack()))
+        if ("settings.sidebarIcons" in changed) sidebarIcons = SidebarIcons.of(Settings.sidebarIcons())
         if ("settings.loader" in changed) loader = Loader.of(Settings.loader())
         if ("settings.density" in changed) density = Density.of(Settings.density())
         if ("settings.tintRowsByTag" in changed) tintRows = Settings.tintRowsByTag()
@@ -3711,6 +3713,7 @@ private fun Reader(
                     "rampart.theme" -> (THEMES + Settings.customThemes())
                         .firstOrNull { it.key == Settings.theme() }?.let(onTheme)
                     "rampart.icons" -> onIcons(iconPack(Settings.iconPack()))
+                    "rampart.sidebarIcons" -> sidebarIcons = SidebarIcons.of(Settings.sidebarIcons())
                     "rampart.loader" -> loader = Loader.of(Settings.loader())
                     "rampart.density" -> density = Density.of(Settings.density())
                     "rampart.listLayout" -> ListLayoutState.reload()
@@ -5271,6 +5274,7 @@ private fun Reader(
             LocalAccountTints provides AccountTintState.tints(sessions.map { it.key }),
             LocalLoader provides loader,
             LocalListDensity provides density,
+            LocalSidebarIcons provides sidebarIcons,
         ) {
         /*
          * One address book, drawn in two places: the full page, and the panel the app bar
@@ -5808,6 +5812,8 @@ private fun Reader(
                     quotas = quotas,
                     onTintRowsByTag = { tintRows = it },
                     onDensity = { density = it },
+                    sidebarIcons = sidebarIcons,
+                    onSidebarIcons = { sidebarIcons = it },
                     onUndoBarSeconds = { undoBarSeconds = it },
                     onLoader = { loader = it },
                     onTrackingServer = { trackingServer = it },

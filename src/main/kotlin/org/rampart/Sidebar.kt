@@ -516,7 +516,9 @@ private fun Chevron(open: Boolean) {
 /**
  * One tag in the sidebar.
  *
- * A dot in the tag's colour and its own level of the name, indented by how deep it is.
+ * Colour mode draws a tag-shaped icon in the tag's own colour, on a light theme and a
+ * dark one. Plain mode keeps the dot. The row shows its own level of the name, indented
+ * by how deep it is.
  * Only the last level is written: "Clients / Acme / Renewals" spelled out in full on every
  * line is three quarters repetition in a 232dp column, and the indent already says whose
  * it is.
@@ -593,11 +595,23 @@ private fun TagLine(
                 onClick = { menu = false; onColour(null) },
             )
         }
-        if (open == null) {
+        // The icon carries the tag's colour, the same one the chips use, so it reads on
+        // both themes. A branch still needs the chevron to fold, so in colour mode it
+        // sits beside the icon. In plain mode the chevron takes the dot's place: a
+        // heading with two markers was more than the row could carry.
+        val coloured = LocalSidebarIcons.current == SidebarIcons.COLOUR
+        if (coloured) {
+            Icon(
+                RampartIcons.Tag,
+                contentDescription = null,
+                tint = Color(row.color),
+                modifier = Modifier.size(16.dp),
+            )
+        } else if (open == null) {
             Box(Modifier.size(10.dp).background(Color(row.color), CircleShape))
-        } else {
-            // The chevron takes the dot's place rather than sitting beside it: a branch is
-            // a heading, and two markers on one row is one more than the row can carry.
+        }
+        if (open != null) {
+            if (coloured) Spacer(Modifier.width(4.dp))
             Box(
                 Modifier.size(15.dp).clip(MaterialTheme.shapes.small).clickable(onClick = onFold),
                 contentAlignment = Alignment.Center,
@@ -641,7 +655,9 @@ private fun FolderRow(
     refusal: (FolderJob) -> String? = { null },
     onClick: () -> Unit,
 ) {
-    val tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+    val plain = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+    // The role colour stays on a selected row. The highlight behind the row already marks it.
+    val tint = sidebarRoleColour(mailbox.role).takeIf { LocalSidebarIcons.current == SidebarIcons.COLOUR } ?: plain
     // Conversations, not messages. Trash, junk, sent and drafts keep the number and lose
     // the emphasis: unread there is not mail waiting to be read.
     val threads = mailbox.unreadThreads

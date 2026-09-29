@@ -147,7 +147,14 @@ internal fun UnifiedViewRows(
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         UnifiedView.entries.forEach { view ->
             val selected = selectedId == view.id
-            val tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+            val role = when (view) {
+                UnifiedView.UNREAD -> "unread"
+                UnifiedView.STARRED -> "starred"
+                UnifiedView.ALL_MAIL -> "all"
+            }
+            val plain = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+            // The role colour stays on a selected row. The highlight behind the row already marks it.
+            val tint = sidebarRoleColour(role).takeIf { LocalSidebarIcons.current == SidebarIcons.COLOUR } ?: plain
             var menu by remember { mutableStateOf(false) }
             Row(
                 modifier = Modifier.fillMaxWidth().height(32.dp)

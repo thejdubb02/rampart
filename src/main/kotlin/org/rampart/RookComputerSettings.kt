@@ -109,6 +109,14 @@ internal class ComputerPlace(private val choices: ComputerChoices) : SettingPlac
                 { Settings.iconPack().ifBlank { choices.iconPacks.firstOrNull()?.value.orEmpty() } }, Settings::setIconPack,
             ),
             oneOf(
+                "sidebarIcons", "Sidebar icons",
+                "Colour gives each folder in the sidebar its own icon colour. Plain keeps every folder icon one colour.",
+                "Themes", "sidebar icons colour color plain folder appearance",
+                SidebarIcons.entries.map { SettingOption(it.key, it.label) },
+                { SidebarIcons.of(Settings.sidebarIcons()).key },
+                Settings::setSidebarIcons,
+            ),
+            oneOf(
                 "density", "Density", "How tightly packed the message list is drawn.",
                 "Themes", "density message list compact spacious normal appearance",
                 Density.entries.map { SettingOption(it.key, it.label) },

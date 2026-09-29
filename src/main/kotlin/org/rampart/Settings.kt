@@ -437,6 +437,17 @@ object Settings {
     fun setIconPack(value: String) = write { put("iconPack", JsonPrimitive(value)) }
 
     /**
+     * Whether sidebar folder icons take a colour per role: "colour" or "plain".
+     *
+     * Nothing stored means colour, so a new install is coloured. Plain is every
+     * folder icon in the one ordinary colour. Kept apart from [iconPack], which
+     * only chooses the shapes.
+     */
+    fun sidebarIcons(): String? = read()["sidebarIcons"]?.jsonPrimitive?.contentOrNull
+
+    fun setSidebarIcons(value: String) = write { put("sidebarIcons", JsonPrimitive(value)) }
+
+    /**
      * Whether Send asks before every message, not only when something looks wrong.
      *
      * Off by default. A missing subject or a promised attachment is already asked about,
