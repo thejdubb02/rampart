@@ -8,6 +8,9 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.concurrent.Executors
@@ -123,10 +126,13 @@ private fun pixel(exchange: HttpExchange, log: Log, pushClients: List<PushClient
                     ),
                 ).also(log::record)
             }
-            if (fetch.classification == OpenClassification.PERSON && pushClients.isNotEmpty() && log.alertsEnabled(id)) {
-                val count = log.fetchesFor(id).count { it.classification == OpenClassification.PERSON }
+            if (fetch.classification in setOf(OpenClassification.PERSON, OpenClassification.REPEAT) &&
+                pushClients.isNotEmpty() && log.alertsEnabled(id)) {
+                val count = log.fetchesFor(id).count {
+                    it.event == "open" && it.classification in setOf(OpenClassification.PERSON, OpenClassification.REPEAT)
+                }
                 val label = log.labelFor(id)
-                val notification = openNotification(label, count)
+                val notification = openNotification(label, count, fetch.at)
                 pushClients.forEach { client ->
                     pushes.execute {
                         runCatching { client.send(notification) }
@@ -260,8 +266,8 @@ private fun click(exchange: HttpExchange, log: Log, pushClients: List<PushClient
         val label = log.labelFor(link.id)
         val domain = runCatching { URI(link.url).host }.getOrNull().orEmpty()
         val notification = PushNotification(
-            "Link clicked",
-            if (label.isNullOrBlank()) "A link in a tracked email was clicked" else "$label clicked $domain",
+            "Email tracking",
+            trackingNotificationText(label, "clicked $domain", recorded.at),
             link.url,
         )
         pushClients.forEach { client -> pushes.execute { runCatching { client.send(notification) } } }
@@ -302,20 +308,29 @@ internal interface PushClient {
 internal data class PushNotification(val title: String, val message: String, val click: String? = null)
 internal typealias NtfyNotification = PushNotification
 
-internal fun openNotification(label: String?, count: Int): PushNotification {
+internal fun openNotification(label: String?, count: Int, at: Long = System.currentTimeMillis()): PushNotification {
     val times = when (count) {
         2 -> "2nd time"
         3 -> "3rd time"
         else -> "${count}th time"
     }
     return PushNotification(
-        title = "Email opened",
+        title = "Email tracking",
         message = when {
-            label.isNullOrBlank() -> if (count == 1) "A tracked email was opened" else "A tracked email was opened ($times)"
-            count == 1 -> "$label opened it"
-            else -> "$label opened it ($times)"
+            count == 1 -> trackingNotificationText(label, "opened", at)
+            else -> trackingNotificationText(label, "opened again, $times", at)
         },
     )
+}
+
+/** Gives ntfy and Gotify one wording for opens and clicks. */
+internal fun trackingNotificationText(label: String?, action: String, at: Long): String {
+    val parts = label.orEmpty().split('\n', limit = 2)
+    val who = parts.getOrNull(0)?.ifBlank { null } ?: "Someone"
+    val subject = parts.getOrNull(1)?.ifBlank { null }
+    val time = DateTimeFormatter.ofPattern("HH:mm 'UTC'").withZone(ZoneOffset.UTC).format(Instant.ofEpochMilli(at))
+    return if (subject == null) "$who $action at $time"
+    else "$who $action in \"$subject\" at $time"
 }
 
 internal class NtfyClient(

@@ -133,7 +133,7 @@ object Settings {
     fun setNtfyBounce(value: Boolean) = write { put("ntfyBounce", JsonPrimitive(value)) }
     fun ntfyTrackedOpen(): Boolean = read()["ntfyTrackedOpen"]?.jsonPrimitive?.booleanOrNull ?: true
     fun setNtfyTrackedOpen(value: Boolean) = write { put("ntfyTrackedOpen", JsonPrimitive(value)) }
-    fun ntfyOpenLabels(): Boolean = read()["ntfyOpenLabels"]?.jsonPrimitive?.booleanOrNull ?: false
+    fun ntfyOpenLabels(): Boolean = read()["ntfyOpenLabels"]?.jsonPrimitive?.booleanOrNull ?: true
     fun setNtfyOpenLabels(value: Boolean) = write { put("ntfyOpenLabels", JsonPrimitive(value)) }
 
     /**
@@ -243,6 +243,21 @@ object Settings {
     fun trackingServer(): String = read()["trackingServer"]?.jsonPrimitive?.contentOrNull.orEmpty()
 
     fun setTrackingServer(value: String) = write { put("trackingServer", JsonPrimitive(value.trim())) }
+
+    /** The all-account default for tracking newly composed messages. */
+    fun trackNewMail(): Boolean = read()["trackNewMail"]?.jsonPrimitive?.booleanOrNull ?: false
+
+    fun setTrackNewMail(value: Boolean) = write { put("trackNewMail", JsonPrimitive(value)) }
+
+    /** An account override, with the master default used until one is chosen. */
+    fun trackNewMail(account: String): Boolean =
+        (read()["trackNewMailAccounts"] as? JsonObject)?.get(account)?.jsonPrimitive?.booleanOrNull ?: trackNewMail()
+
+    fun setTrackNewMail(account: String, value: Boolean) = write {
+        val current = (read()["trackNewMailAccounts"] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
+        current[account] = JsonPrimitive(value)
+        put("trackNewMailAccounts", JsonObject(current))
+    }
 
     /**
      * The recipient domains tracking was last switched on for.

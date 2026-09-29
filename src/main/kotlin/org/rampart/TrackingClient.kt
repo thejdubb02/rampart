@@ -97,6 +97,20 @@ internal object TrackingClient {
         if (response.statusCode() !in 200..299) throw TrackingError("The tracking server did not accept the links.")
     }
 
+    /** Registers everything an outgoing tracked message needs, or reports one clean failure. */
+    fun registerMessage(
+        base: String,
+        token: String?,
+        tracked: Tracked,
+        links: List<String>,
+        includeLabel: Boolean,
+    ): Boolean = runCatching {
+        if (token.isNullOrBlank()) throw TrackingError("The tracking token is missing.")
+        if (links.isNotEmpty()) registerLinks(base, token, tracked.id, tracked.sentAt, links)
+        if (includeLabel) registerLabel(base, token, tracked.id, trackingLabel(tracked.recipient, tracked.subject))
+        else if (links.isEmpty()) since(base, token, Instant.now())
+    }.isSuccess
+
     fun stopAlerts(base: String, token: String, id: String) {
         val response = http.send(
             HttpRequest.newBuilder(URI.create(base.trim().trimEnd('/') + "/replied"))

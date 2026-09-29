@@ -10,11 +10,8 @@ import org.jsoup.Jsoup
  * Knowing whether a message was read, and being honest about what that means.
  *
  * **This is a tracker and a tracker blocker in one application, and that is the right way
- * round.** Blocking is the default for everybody who receives mail; tracking is switched on
- * per message by somebody who knows what it is. Nothing here is ever on by default and
- * there is deliberately no global "track everything": tracking every message you write to
- * your family is a different act from tracking a sales email, and one switch would pretend
- * they are the same.
+ * round.** Blocking is the default for everybody who receives mail. Outgoing tracking can
+ * be the account default, while the composer keeps the final decision for each message.
  *
  * The whole mechanism is a 1x1 image at an address unique to the message. When it is
  * fetched, the companion server ([docs/open-tracking.md]) writes down that it was, and
@@ -166,6 +163,37 @@ private val HUMAN_AGENTS = listOf("mozilla", "applewebkit", "safari", "chrome", 
  */
 internal data class Opens(val reads: Int, val automatic: Int, val firstRead: Instant?) {
     val wasRead: Boolean get() = reads > 0
+}
+
+internal data class TrackingStats(
+    val sent7: Int,
+    val sent30: Int,
+    val openRate: Int,
+    val clickRate: Int,
+    val automatic: Int,
+    val mostOpened: List<Pair<Tracked, Int>>,
+    val mostClicked: List<Pair<Tracked, Int>>,
+)
+
+/** Counts person activity only, while keeping automatic traffic visible on its own. */
+internal fun trackingStats(rows: List<Pair<Tracked, List<Fetch>>>, now: Instant = Instant.now()): TrackingStats {
+    val last30 = rows.filter { !it.first.sentAt.isBefore(now.minus(Duration.ofDays(30))) }
+    val last7 = last30.count { !it.first.sentAt.isBefore(now.minus(Duration.ofDays(7))) }
+    fun personEvents(row: Pair<Tracked, List<Fetch>>, event: String) =
+        row.second.count { it.event == event && classify(it, row.first.sentAt) == Opened.READ }
+    val opened = last30.count { personEvents(it, "open") > 0 }
+    val clicked = last30.count { personEvents(it, "click") > 0 }
+    fun ranked(event: String) = last30.map { it.first to personEvents(it, event) }
+        .filter { it.second > 0 }.sortedByDescending { it.second }.take(3)
+    return TrackingStats(
+        sent7 = last7,
+        sent30 = last30.size,
+        openRate = if (last30.isEmpty()) 0 else opened * 100 / last30.size,
+        clickRate = if (last30.isEmpty()) 0 else clicked * 100 / last30.size,
+        automatic = last30.sumOf { row -> row.second.count { classify(it, row.first.sentAt) == Opened.AUTOMATIC } },
+        mostOpened = ranked("open"),
+        mostClicked = ranked("click"),
+    )
 }
 
 internal fun opensOf(fetches: List<Fetch>, sentAt: Instant): Opens {
@@ -346,3 +374,33 @@ internal fun trackingProblem(base: String): String? {
  * on globally.
  */
 internal fun trackingDomain(address: String): String = domainOf(address)
+
+/** The honest recipient name for one shared tracking id. */
+internal fun trackingRecipient(to: String, cc: String): String {
+    val people = (parseAddressList(to) + parseAddressList(cc)).distinctBy { it.email.lowercase() }
+        .map { address -> address.name.ifBlank { address.email } }
+    return when (people.size) {
+        0 -> "a recipient"
+        1 -> people.single()
+        2 -> "one of ${people[0]} and ${people[1]}"
+        else -> "one of ${people[0]}, ${people[1]} and ${people.size - 2} others"
+    }
+}
+
+/** A server label contains both fields and never exceeds the companion's 120 character limit. */
+internal fun trackingLabel(recipient: String, subject: String): String {
+    val who = recipient.ifBlank { "a recipient" }
+    val what = subject.ifBlank { "(no subject)" }
+    val separator = "\n"
+    val available = (120 - who.length - separator.length).coerceAtLeast(0)
+    return (who.take(119) + separator + what.take(available)).take(120)
+}
+
+/** Defaults apply only to new drafts and never allow tracking mail sent solely to yourself. */
+internal fun trackingDefault(enabled: Boolean, draft: Draft, ownAddresses: Collection<String>): Draft {
+    if (!enabled) return draft
+    val own = ownAddresses.map { it.trim().lowercase() }.toSet()
+    val recipients = draft.recipients.map { it.trim().lowercase() }
+    if (recipients.isEmpty() || recipients.any { it in own }) return draft.copy(tracked = false, clickTracked = false)
+    return draft.copy(tracked = true, clickTracked = true)
+}

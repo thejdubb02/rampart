@@ -223,7 +223,7 @@ internal fun SettingsPane(
                             )
                             "away" -> AwayPage(accounts, account, onAccount, vacation, vacationError, onVacation)
                             "export" -> ExportMailPage(accounts, account, onAccount, backendFor)
-                            "tracking" -> TrackingPage(onTrackingServer)
+                            "tracking" -> TrackingPage(accounts, onTrackingServer)
                             "assistant" -> AssistantPage(accounts)
                             "admin" -> AdminLoginPage()
                             "diagnostics" -> DiagnosticsPage()
@@ -1383,7 +1383,7 @@ private fun AwayPage(
  * every message goes out tracked and nothing is ever recorded.
  */
 @Composable
-private fun TrackingPage(onTrackingServer: (String) -> Unit = {}) {
+private fun TrackingPage(accounts: List<AccountMailboxes>, onTrackingServer: (String) -> Unit = {}) {
     val scope = rememberCoroutineScope()
     var server by remember { mutableStateOf(Settings.trackingServer()) }
     var token by remember { mutableStateOf(Secrets.trackingToken().orEmpty()) }
@@ -1398,12 +1398,60 @@ private fun TrackingPage(onTrackingServer: (String) -> Unit = {}) {
             "the whole mechanism, and it is what every sales tool does.",
     )
     Text(
-        "It is off unless you switch it on for a particular message, and there is deliberately " +
-            "no way to turn it on for everything. Rampart blocks other people's tracking pixels " +
-            "by default and names who sent them, which is the same feature pointed the other way.",
+        "Choose the default for all accounts or for one account below. The composer switches " +
+            "apply only to the message you are writing. Rampart never tracks mail to your own addresses.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.outline,
     )
+    Spacer(Modifier.height(14.dp))
+
+    var allAccounts by remember { mutableStateOf(Settings.trackNewMail()) }
+    Row(
+        Modifier.fillMaxWidth().clickable {
+            allAccounts = !allAccounts
+            Settings.setTrackNewMail(allAccounts)
+            accounts.forEach { Settings.setTrackNewMail(it.key, allAccounts) }
+        }.padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Track opens and clicks on new mail", style = MaterialTheme.typography.bodyMedium)
+            Text("All accounts", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+        }
+        Switch(checked = allAccounts, onCheckedChange = {
+            allAccounts = it
+            Settings.setTrackNewMail(it)
+            accounts.forEach { account -> Settings.setTrackNewMail(account.key, it) }
+        })
+    }
+    accounts.forEach { account ->
+        var enabled by remember(account.key, allAccounts) { mutableStateOf(Settings.trackNewMail(account.key)) }
+        Row(
+            Modifier.fillMaxWidth().clickable {
+                enabled = !enabled
+                Settings.setTrackNewMail(account.key, enabled)
+            }.padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(shortAccountName(account.name, account.email), modifier = Modifier.weight(1f))
+            Switch(checked = enabled, onCheckedChange = {
+                enabled = it
+                Settings.setTrackNewMail(account.key, it)
+            })
+        }
+    }
+    var labels by remember { mutableStateOf(Settings.ntfyOpenLabels()) }
+    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Include recipients and subjects in alerts")
+            Text(
+                "Turn this off if you do not want email subjects stored on your companion server.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+        Switch(checked = labels, onCheckedChange = { labels = it; Settings.setNtfyOpenLabels(it) })
+    }
     Spacer(Modifier.height(14.dp))
 
     OutlinedTextField(
@@ -1479,7 +1527,8 @@ private fun TrackingPage(onTrackingServer: (String) -> Unit = {}) {
         "Rampart is a desktop app, and a tracking pixel has to be fetched from somewhere on " +
             "the web, which a desktop app is not. The server is in the Rampart repository " +
             "under server/, with a Dockerfile and a compose file: it is one container and one " +
-            "hostname. It never sees a message, a subject, a recipient or an address.",
+            "hostname. It never sees the message body. Alert labels contain the recipient " +
+            "wording and subject unless you turn them off above.",
     )
 
     Spacer(Modifier.height(18.dp))

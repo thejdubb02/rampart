@@ -60,6 +60,7 @@ internal fun DashboardPane(
      * screen made by a model rather than counted, and it works without a local copy.
      */
     onToday: (() -> Unit)? = null,
+    tracking: TrackingStats? = null,
 ) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 28.dp, vertical = 24.dp),
@@ -100,6 +101,34 @@ internal fun DashboardPane(
         }
 
         Spacer(Modifier.height(26.dp))
+        tracking?.let { tracked ->
+            Heading("Tracking")
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
+                Figure("Tracked, 7 days", tracked.sent7.toString(), Modifier.weight(1f))
+                Figure("Tracked, 30 days", tracked.sent30.toString(), Modifier.weight(1f))
+                Figure("Open rate", "${tracked.openRate}%", Modifier.weight(1f), "person opens only")
+                Figure("Click rate", "${tracked.clickRate}%", Modifier.weight(1f), "person clicks only")
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "${tracked.automatic} automatic fetches from scanners, Apple privacy, and proxies are not in these rates.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            Spacer(Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(26.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.weight(1f)) {
+                    Heading("Most opened")
+                    Ranked(tracked.mostOpened.map { Counted(it.first.subject.ifBlank { "No subject" }, it.second) }, "No person opens yet.")
+                }
+                Column(Modifier.weight(1f)) {
+                    Heading("Most clicked")
+                    Ranked(tracked.mostClicked.map { Counted(it.first.subject.ifBlank { "No subject" }, it.second) }, "No person clicks yet.")
+                }
+            }
+            Spacer(Modifier.height(26.dp))
+        }
+
         Heading("What arrives, and what you send")
         Chart(stats.received, stats.sent)
 

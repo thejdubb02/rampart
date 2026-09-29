@@ -3314,7 +3314,8 @@ private fun Reader(
         val trackingBase = Settings.trackingServer()
         var tracked: Tracked? = null
         var clickLinks: List<String> = emptyList()
-        val outgoing = if ((!draft.tracked && !draft.clickTracked) || trackingBase.isBlank()) {
+        var outgoing = if ((!draft.tracked && !draft.clickTracked) || trackingBase.isBlank() ||
+            draft.recipients.any { recipient -> identities[key].orEmpty().any { it.email.equals(recipient, true) } }) {
             draft
         } else {
             val id = newTrackingId()
@@ -3332,7 +3333,7 @@ private fun Reader(
                     id = id,
                     messageId = ready.messageId.orEmpty(),
                     account = key,
-                    recipient = draft.recipients.firstOrNull().orEmpty(),
+                    recipient = trackingRecipient(draft.to, draft.cc),
                     subject = draft.subject,
                     sentAt = sentAt,
                 )
@@ -3342,29 +3343,33 @@ private fun Reader(
         // that pause is deliberate, not server latency, and counting it would make
         // every send look exactly [Settings.undoSeconds] slower than it was.
         var cleanupDraft: String? = null
+        var trackingNotice: String? = null
         val notice = Diagnostics.time(Metric.SEND_COMPOSE_TO_SENT) {
             withContext(Dispatchers.IO) {
-                if (clickLinks.isNotEmpty()) {
-                    val token = Secrets.trackingToken() ?: throw TrackingError("The tracking token is missing.")
-                    TrackingClient.registerLinks(trackingBase, token, tracked!!.id, tracked!!.sentAt, clickLinks)
+                tracked?.let { row ->
+                    val token = Secrets.trackingToken()
+                    val registered = TrackingClient.registerMessage(
+                        trackingBase, token, row, clickLinks, Settings.ntfyOpenLabels(),
+                    )
+                    if (!registered) {
+                        val retryLinks = clickLinks
+                        scope.launch(Dispatchers.IO) {
+                            delay(1_000)
+                            TrackingClient.registerMessage(
+                                trackingBase, token, row, retryLinks, Settings.ntfyOpenLabels(),
+                            )
+                        }
+                        outgoing = draft
+                        tracked = null
+                        clickLinks = emptyList()
+                        trackingNotice = "The message was sent without tracking because the companion server could not be reached."
+                    }
                 }
                 val filed = account.jmap.send(outgoing, identity, draftsId, sentId)
                 // Written down only once it has actually gone. A tracked id for a
                 // message that failed to send would sit in the list forever waiting
                 // for an open that cannot come.
                 tracked?.let { account.store?.track(it, clickLinks) }
-                if (Settings.ntfyOpenLabels()) {
-                    tracked?.let { row ->
-                        val token = Secrets.trackingToken()
-                        if (!token.isNullOrBlank()) {
-                            val label = listOf(row.recipient, row.subject).filter(String::isNotBlank)
-                                .joinToString(", ").take(120)
-                            if (label.isNotBlank()) runCatching {
-                                TrackingClient.registerLabel(trackingBase, token, row.id, label)
-                            }
-                        }
-                    }
-                }
                 // The sent message is its own copy in Sent, so the working copy in
                 // Drafts is now a duplicate of mail already gone.
                 val cleanup = draftId?.let { id ->
@@ -3373,6 +3378,7 @@ private fun Reader(
                 if (cleanup != null) cleanupDraft = draftId
                 listOfNotNull(
                     filed,
+                    trackingNotice,
                     cleanup?.let {
                         "The message was sent, but its working draft could not be removed. Try deleting it from Drafts."
                     },
@@ -3384,13 +3390,6 @@ private fun Reader(
                 delay(5_000)
                 withContext(Dispatchers.IO) { runCatching { account.jmap.destroy(listOf(id)) } }
             }
-        }
-        // Who you write to counts for more than who writes to you, so a sent
-        // message is the strongest signal the book gets. Remembered by domain, so
-        // the next message to the same place starts with the same answer rather
-        // than asking again.
-        draft.recipients.firstOrNull()?.let {
-            Settings.rememberTracking(trackingDomain(it), draft.tracked)
         }
         trackingBadges = trackingBadgesOf(sessions.flatMap { it.store?.tracking().orEmpty() })
         var book = books[key] ?: AddressBook.read(AddressBook.file(key))
@@ -3436,7 +3435,8 @@ private fun Reader(
         val trackingBase = Settings.trackingServer()
         var tracked: Tracked? = null
         var clickLinks: List<String> = emptyList()
-        val outgoing = if ((!draft.tracked && !draft.clickTracked) || trackingBase.isBlank()) {
+        var outgoing = if ((!draft.tracked && !draft.clickTracked) || trackingBase.isBlank() ||
+            draft.recipients.any { recipient -> identities[key].orEmpty().any { it.email.equals(recipient, true) } }) {
             draft
         } else {
             val id = newTrackingId()
@@ -3454,18 +3454,34 @@ private fun Reader(
                     id = id,
                     messageId = ready.messageId.orEmpty(),
                     account = key,
-                    recipient = draft.recipients.firstOrNull().orEmpty(),
+                    recipient = trackingRecipient(draft.to, draft.cc),
                     subject = draft.subject,
                     sentAt = sentAt,
                 )
             }
         }
         var cleanupDraft: String? = null
+        var trackingNotice: String? = null
         val delayed = Diagnostics.time(Metric.SEND_COMPOSE_TO_SENT) {
             withContext(Dispatchers.IO) {
-                if (clickLinks.isNotEmpty()) {
-                    val token = Secrets.trackingToken() ?: throw TrackingError("The tracking token is missing.")
-                    TrackingClient.registerLinks(trackingBase, token, tracked!!.id, tracked!!.sentAt, clickLinks)
+                tracked?.let { row ->
+                    val token = Secrets.trackingToken()
+                    val registered = TrackingClient.registerMessage(
+                        trackingBase, token, row, clickLinks, Settings.ntfyOpenLabels(),
+                    )
+                    if (!registered) {
+                        val retryLinks = clickLinks
+                        scope.launch(Dispatchers.IO) {
+                            delay(1_000)
+                            TrackingClient.registerMessage(
+                                trackingBase, token, row, retryLinks, Settings.ntfyOpenLabels(),
+                            )
+                        }
+                        outgoing = draft
+                        tracked = null
+                        clickLinks = emptyList()
+                        trackingNotice = "The message was scheduled without tracking because the companion server could not be reached."
+                    }
                 }
                 val made = account.jmap.sendDelayed(outgoing, identity, draftsId, sentId, holdUntil)
                 tracked?.let { account.store?.track(it, clickLinks) }
@@ -3476,6 +3492,7 @@ private fun Reader(
                 made.copy(
                     notice = listOfNotNull(
                         made.notice,
+                        trackingNotice,
                         cleanup?.let {
                             "The message was scheduled, but its working draft could not be removed. Try deleting it from Drafts."
                         },
@@ -3488,9 +3505,6 @@ private fun Reader(
                 delay(5_000)
                 withContext(Dispatchers.IO) { runCatching { account.jmap.destroy(listOf(id)) } }
             }
-        }
-        draft.recipients.firstOrNull()?.let {
-            Settings.rememberTracking(trackingDomain(it), draft.tracked)
         }
         trackingBadges = trackingBadgesOf(sessions.flatMap { it.store?.tracking().orEmpty() })
         var book = books[key] ?: AddressBook.read(AddressBook.file(key))
@@ -5081,7 +5095,8 @@ private fun Reader(
             full = composeFull,
             onFull = { composeFull = it },
             trackingReady = trackingServer.isNotBlank(),
-            trackedBefore = { domain -> domain in Settings.trackedDomains() },
+            trackingDefaultOn = key?.let(Settings::trackNewMail) ?: Settings.trackNewMail(),
+            ownAddresses = accountIdentities.map { it.email },
             sendExtensions = sessions.firstOrNull { it.key == key }?.jmap?.submissionExtensions.orEmpty(),
             onSend = { draft ->
                 val account = key?.let(::session)
@@ -5784,6 +5799,13 @@ private fun Reader(
                 DashboardPane(
                     onToday = if (Assistant.config().mode == AssistantMode.OFF) null else ({ today.open = true }),
                     stats = stats,
+                    tracking = if (Settings.trackNewMail() || sessions.any { Settings.trackNewMail(it.key) }) {
+                        val selectedAccount = here?.first?.takeIf { it != ALL_ACCOUNTS }
+                        trackingStats(
+                            sessions.filter { selectedAccount == null || it.key == selectedAccount }
+                                .flatMap { it.store?.tracking().orEmpty() },
+                        )
+                    } else null,
                     unavailable = if (sessions.any { it.store != null }) "" else
                         "There is no local copy of this mailbox on this machine, and every " +
                             "figure here is counted from one. Rampart runs without it where " +
@@ -8181,7 +8203,12 @@ private fun MessageRow(
                 }
                 trackingBadge?.let {
                     Spacer(Modifier.width(8.dp))
-                    Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.clickable { onSelect(message, false, false) },
+                    )
                 }
                 accountLabel?.let {
                     Spacer(Modifier.width(8.dp))
@@ -8266,7 +8293,12 @@ private fun MessageRow(
                     )
                     trackingBadge?.let {
                         Spacer(Modifier.width(8.dp))
-                        Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable { onSelect(message, false, false) },
+                        )
                     }
                     accountLabel?.let {
                         Spacer(Modifier.width(8.dp))

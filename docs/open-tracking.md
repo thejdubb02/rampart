@@ -8,6 +8,18 @@ runs on knowing whether outreach was read" is a better reason than that was.
 **Built** (2026-09-18), both halves. The server is in `server/`; the client is the toggle
 on the composer, the pixel in the outgoing message, the local record and the poll.
 
+**Expanded** (2026-09-29). Tracking can now default on for every account or selected
+accounts. A new message, reply, or forward then starts with open and click tracking on,
+and its composer switches change only that message. Messages to any address owned by the
+sending account are never tracked. Labels are on by default so alerts name the recipient
+and subject; the setting can be turned off when subjects must not be stored by the
+companion.
+
+One message still has one tracking id and one Message-ID. For a message with several To or
+Cc recipients, a fetch cannot identify which recipient caused it. Rampart therefore says
+`one of Dana Reyes, Sam Lee and 2 others` in alerts and statistics. It never attributes the
+event to the first recipient, and it does not send separate copies.
+
 Four things settled by building the client half rather than by reasoning about it:
 
 - **The copy in Sent has to be a replacement, not an edit.** This file said the Sent copy
@@ -83,8 +95,9 @@ was for is a leak to anyone who sees the URL, including every mail server it pas
 through.
 
 The client keeps `id -> (message id, recipient, subject, sent at)` locally. The server
-keeps only the id and when it was fetched. Nothing on the server needs to know who the
-message was to, so it does not get to.
+keeps the id and fetch time. By default it also keeps a label with the recipient wording
+and subject so a phone alert is useful while Rampart is closed. That label can be disabled
+in Settings, in which case the companion receives neither field.
 
 ### The endpoint, and the fact that a desktop app does not have one
 
@@ -138,11 +151,11 @@ store keywords, the open still shows in Rampart, from the local store.
 
 ### In the composer
 
-**Off by default, and per message.** A toggle next to Send, remembered per recipient
-domain so outreach can be on and your accountant can be off without thinking about it
-every time. Never a global "track everything": tracking every message you write to your
-family is a different thing from tracking a sales email, and a single switch pretends
-they are the same.
+**An account default and a per-message choice.** Settings has one all-account switch and
+one switch for each account. When its default is on, every new message, reply, and forward
+starts with both open and click tracking on. The two composer toggles can turn either off
+for that message and do not teach a future default. Mail to the account owner's own
+addresses is never tracked.
 
 The composer says it in one line when it is on, so there is no chance of sending a tracked
 message without knowing.
@@ -174,11 +187,8 @@ says "Opened" where it happened and says nothing at all where it did not, rather
 
 - **No tracking of incoming mail.** Rampart blocks pixels aimed at its own reader and that
   does not change. This feature is about mail we send.
-- **No click tracking.** Rewriting the links in somebody's message to route through our
-  server breaks them when the server is down, makes every link look like a redirector to a
-  spam filter, and is a much bigger promise than a pixel.
-- **No tracking on a message to a list**, and no per-recipient pixels on one message. One
-  message, one id.
+- **No per-recipient tracking on group mail.** One message has one id, so a fetch can only
+  say that one of the recipients opened or clicked it.
 - **Nothing reaches a third party.** The endpoint is ours, on our own box.
 
 ---

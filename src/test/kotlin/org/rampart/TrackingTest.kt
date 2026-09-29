@@ -247,4 +247,52 @@ class TrackingTest {
         assertEquals("example.org", trackingDomain("Dana Whitfield <dana@example.org>"))
         assertEquals("example.org", trackingDomain("someone.else@example.org"))
     }
+
+    @Test
+    fun `labels name one recipient or honestly describe a group and fit the server limit`() {
+        assertEquals("Dana Reyes", trackingRecipient("Dana Reyes <dana@example.org>", ""))
+        assertEquals(
+            "one of Dana Reyes, Sam Lee and 2 others",
+            trackingRecipient(
+                "Dana Reyes <dana@example.org>, Sam Lee <sam@example.org>",
+                "Pat <pat@example.org>, Jo <jo@example.org>",
+            ),
+        )
+        val label = trackingLabel("Dana Reyes", "Q3 proposal " + "x".repeat(200))
+        assertEquals(120, label.length)
+        assertTrue(label.startsWith("Dana Reyes\nQ3 proposal"))
+    }
+
+    @Test
+    fun `account default enables both trackers but excludes every own address`() {
+        val external = Draft(from = "me@example.org", to = "Dana <dana@example.org>")
+        assertEquals(external, trackingDefault(false, external, listOf("me@example.org")))
+        assertTrue(trackingDefault(true, external, listOf("me@example.org")).tracked)
+        assertTrue(trackingDefault(true, external, listOf("me@example.org")).clickTracked)
+        val own = Draft(from = "me@example.org", to = "Me <ME@example.org>")
+        assertFalse(trackingDefault(true, own, listOf("me@example.org")).tracked)
+        assertFalse(trackingDefault(true, own, listOf("me@example.org")).clickTracked)
+    }
+
+    @Test
+    fun `tracking rates count only person events`() {
+        val now = Instant.parse("2026-09-29T12:00:00Z")
+        fun row(id: String, events: List<Fetch>) =
+            Tracked(id, id, "", "Dana", id, now.minusSeconds(3600)) to events
+        val stats = trackingStats(
+            listOf(
+                row("opened", listOf(Fetch("opened", now, "", "", "person"))),
+                row("clicked", listOf(Fetch("clicked", now, "", "", "person", "click", "https://example.org"))),
+                row("machines", listOf(
+                    Fetch("machines", now, "", "", "apple_privacy"),
+                    Fetch("machines", now, "", "", "gmail_proxy", "click"),
+                    Fetch("machines", now, "", "", "security_scanner"),
+                )),
+            ),
+            now,
+        )
+        assertEquals(33, stats.openRate)
+        assertEquals(33, stats.clickRate)
+        assertEquals(3, stats.automatic)
+    }
 }

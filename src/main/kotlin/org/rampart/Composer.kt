@@ -417,8 +417,10 @@ internal fun Composer(
     onFull: (Boolean) -> Unit = {},
     /** Whether a companion server is set up, which is the only thing that shows the toggle. */
     trackingReady: Boolean = false,
-    /** Whether tracking was last on for this recipient's domain. */
-    trackedBefore: (String) -> Boolean = { false },
+    /** Whether every new message for this account starts with both kinds of tracking. */
+    trackingDefaultOn: Boolean = false,
+    /** Every address owned by this account, which must never receive a tracked message. */
+    ownAddresses: Collection<String> = emptyList(),
     /** Thread messages context for AI compose replies. */
     replyContext: List<Turn> = emptyList(),
     /** Whose mailbox this is, for [Assistant.whyNot]'s denied-folder check. */
@@ -452,13 +454,13 @@ internal fun Composer(
      * being overridden as the To line is edited is one nobody trusts. `chosen` is what
      * remembers that they touched it.
      */
-    var chosen by remember(initial) { mutableStateOf(initial.tracked) }
+    var chosen by remember(initial) { mutableStateOf(initial.tracked || initial.clickTracked) }
     /** Whether the reader has asked why the tracking toggle does nothing. */
     var needsTracker by remember { mutableStateOf(false) }
-    val firstRecipient = draft.recipients.firstOrNull().orEmpty()
-    LaunchedEffect(firstRecipient, trackingReady) {
-        if (!chosen && trackingReady && firstRecipient.isNotBlank()) {
-            draft = draft.copy(tracked = trackedBefore(trackingDomain(firstRecipient)))
+    val recipients = draft.recipients
+    LaunchedEffect(recipients, trackingReady, trackingDefaultOn) {
+        if (!chosen && trackingReady && recipients.isNotEmpty()) {
+            draft = trackingDefault(trackingDefaultOn, draft, ownAddresses)
         }
     }
     // The selection has to live here, not be derived from the string, or every formatting
@@ -811,7 +813,10 @@ internal fun Composer(
                 }
                 TextButton(
                     onClick = {
-                        if (trackingReady) draft = draft.copy(clickTracked = !draft.clickTracked)
+                        if (trackingReady) {
+                            chosen = true
+                            draft = draft.copy(clickTracked = !draft.clickTracked)
+                        }
                         else needsTracker = !needsTracker
                     },
                 ) {

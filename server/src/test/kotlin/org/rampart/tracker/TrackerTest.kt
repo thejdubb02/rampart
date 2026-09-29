@@ -202,15 +202,15 @@ class TrackerTest {
         server.start()
         try {
             NtfyClient("http://127.0.0.1:${server.address.port}/topic", "secret").send(
-                openNotification("Susan, site audit", 2),
+                openNotification("Susan\nsite audit", 2, 0),
             )
             assertEquals(
                 mapOf(
-                    "title" to "Email opened",
+                    "title" to "Email tracking",
                     "tags" to "envelope",
                     "priority" to "default",
                     "authorization" to "Bearer secret",
-                    "body" to "Susan, site audit opened it (2nd time)",
+                    "body" to "Susan opened again, 2nd time in \"site audit\" at 00:00 UTC",
                 ),
                 received.take(),
             )
@@ -239,7 +239,7 @@ class TrackerTest {
         server.start()
         try {
             GotifyClient("http://127.0.0.1:${server.address.port}/", "app-token-123").send(
-                openNotification("Susan, site audit", 2),
+                openNotification("Susan\nsite audit", 2, 0),
             )
             assertEquals(
                 mapOf(
@@ -247,13 +247,30 @@ class TrackerTest {
                     "method" to "POST",
                     "key" to "app-token-123",
                     "contentType" to "application/json",
-                    "body" to """{"title":"Email opened","message":"Susan, site audit opened it (2nd time)","priority":5}""",
+                    "body" to """{"title":"Email tracking","message":"Susan opened again, 2nd time in \"site audit\" at 00:00 UTC","priority":5}""",
                 ),
                 received.take(),
             )
         } finally {
             server.stop(0)
         }
+    }
+
+    @Test
+    fun `notification wording covers first opens repeats and clicks`() {
+        val label = "Dana Reyes\nQ3 proposal"
+        assertEquals(
+            "Dana Reyes opened in \"Q3 proposal\" at 00:00 UTC",
+            openNotification(label, 1, 0).message,
+        )
+        assertEquals(
+            "Dana Reyes opened again, 3rd time in \"Q3 proposal\" at 00:00 UTC",
+            openNotification(label, 3, 0).message,
+        )
+        assertEquals(
+            "Dana Reyes clicked example.com in \"Q3 proposal\" at 00:00 UTC",
+            trackingNotificationText(label, "clicked example.com", 0),
+        )
     }
 
     @Test
