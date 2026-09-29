@@ -118,6 +118,145 @@ named in the evidence column.
 | WebDAV ACL (CalDAV/CardDAV/WebDAV) | Same sharing model, for non-JMAP clients | N/A until calendars/files exist | skip for now |
 | `allowDirectoryQueries` / principal lookup | Lets a user search for another account to share with | None (no sharing UI to need it) | skip for now |
 
+### Sharing in Stalwart 0.16, read from the source (RAM-45, 2026-09-29)
+
+Read from `stalwartlabs/stalwart` at commit `af37a23` (27 September 2026, workspace version
+0.16.24), not from the docs site. Every claim below names the file it came from. Nothing
+here was checked against a live server yet; the list of what to check is at the end.
+
+**Accounts beyond your own, in the session.** `crates/jmap/src/api/session.rs` builds the
+session. The login's own account is added with `isPersonal: true` and is the only one named
+under `primaryAccounts`. Then every id from `access_token.secondary_ids()` is added as a
+further account with `isPersonal: false`. `isReadOnly` is always `false`, for every account,
+so it says nothing and Rampart does not read it. `secondary_ids()`
+(`crates/common/src/auth/access_token.rs`) is two lists joined:
+
+- `member_of`: every group the login belongs to. A member is treated as the group's owner:
+  `is_member()` is true, `is_shared()` is false, and `Mailbox/get` answers `myRights` with
+  every right set (`crates/jmap/src/mailbox/get.rs`, `JmapRights::all_rights`). So a group
+  mailbox is simply a second account the member can do anything in.
+- `access_to`: every account that granted this login anything, built from the ACL index
+  when the access token is built. **Any** collection counts: a shared calendar, address
+  book or file folder puts the owner's account in the session too, with the mail
+  capability, and its `Mailbox/get` then answers an empty list. An account with no mail
+  shared is therefore hidden in Rampart rather than drawn as an empty heading.
+
+Each secondary account carries `accountCapabilities` for every capability the login's
+permissions allow. For calendars, contacts and files the `may create` flag
+(`mayCreateCalendar`, `mayCreateAddressBook`, `mayCreateTopLevelFileNode`) is set from
+`is_owner`, which is group membership (`to_account_capabilities` in
+`crates/jmap-proto/src/request/capability.rs`). The mail capability's
+`mayCreateTopLevelMailbox` is copied unchanged and says nothing about the account. Rampart
+reads those three flags to tell a group account from a delegated one, which is an inference
+about Stalwart and is written down as one.
+
+The access token, and so the session, is rebuilt when an ACL changes (`refresh_acls` in
+`crates/common/src/sharing/acl.rs` invalidates both sides), but a client only sees the new
+account list when it fetches the session again. Rampart reads the session at sign-in, so a
+folder shared with you appears the next time Rampart starts.
+
+**Capabilities.** `urn:ietf:params:jmap:mail:share` is `Capability::MailShare`
+(`crates/jmap-proto/src/request/capability.rs`) and is advertised per account wherever the
+login has `JmapEmailGet`. It is parsed in `using` but no method requires it: `Mailbox` is
+gated on `urn:ietf:params:jmap:mail` alone (`crates/jmap-proto/src/request/method.rs`).
+`Principal` and `ShareNotification` methods require `urn:ietf:params:jmap:principals`.
+`urn:ietf:params:jmap:principals:owner` exists in the enum but is never advertised.
+
+**Mailbox properties** (`crates/jmap-proto/src/object/mailbox.rs`, `crates/jmap/src/mailbox/`):
+
+- `myRights`: returned by default. On an account shared with you it is the effective ACL:
+  the union of every grant to you and to any group you are in
+  (`crates/common/src/sharing/mod.rs`, `effective_acl`). On your own or a group's account
+  every right is true.
+- `shareWith`: **not** returned by default and has to be asked for by name. It is a map of
+  account id to a map of right name to boolean, and it is null unless you own the account
+  or hold `mayShare` on the folder. Set as a whole object, or patched one grantee at a time
+  as `shareWith/<accountId>`, or one right at a time as `shareWith/<accountId>/<right>`
+  (`JmapRights::acl_set` and `acl_patch`, `crates/jmap/src/api/acl.rs`). Setting it needs
+  `mayRename` as well as `mayShare` on a folder you do not own, because any change other
+  than `isSubscribed` needs the `Modify` ACL first (`crates/jmap/src/mailbox/set.rs`). Every
+  grantee id must be an existing account and the number of grantees per folder is capped by
+  the server's `maxShares` setting (`acl_validate`).
+- `isSubscribed`: per person, not per folder. A shared folder records subscribers by the
+  reader's own account id (`personal_id`), and anyone who can read the folder may change
+  their own subscription. Rampart shows every folder it can read and does not use
+  subscriptions.
+
+**The rights, and the ACL each one is stored as** (`impl JmapRight for MailboxRight`):
+
+| JMAP right | Stalwart ACL | IMAP letter(s) that set it (`crates/imap-proto/src/protocol/acl.rs`) |
+|---|---|---|
+| `mayReadItems` | `Read` + `ReadItems` | `l` gives `Read`, `r` gives `ReadItems` |
+| `mayAddItems` | `AddItems` | `i` |
+| `mayRemoveItems` | `RemoveItems` | `t`, `e` (and the obsolete `d`) |
+| `maySetSeen` | `ModifyItems` | `s`, `w` |
+| `maySetKeywords` | `ModifyItems` | `s`, `w` |
+| `mayCreateChild` | `CreateChild` | `k` (and the obsolete `c`) |
+| `mayRename` | `Modify` | none: IMAP cannot grant it |
+| `mayDelete` | `Delete` | `x` |
+| `maySubmit` | `Submit` | `p` |
+| `mayShare` | `Share` | `a` |
+
+Two consequences shape the UI. `maySetSeen` and `maySetKeywords` are one ACL, so there is
+no "may mark read but not star" on Stalwart and Rampart does not offer one. And a folder
+shared over IMAP can never be renamed by the person it was shared with.
+
+**What the server enforces on an account shared with you** (`is_shared`, not a group):
+keywords change only when at least one of the message's folders grants `ModifyItems`;
+adding to a folder needs `AddItems`; deleting a message needs `RemoveItems`
+(`crates/jmap/src/email/set.rs`); a new folder needs `CreateChild` on its parent and a
+top-level folder is refused outright ("You are not allowed to create root folders.",
+`crates/jmap/src/mailbox/set.rs`); deleting a folder needs `Delete`, plus `RemoveItems` to
+take its mail with it (`crates/email/src/mailbox/destroy.rs`). `Email/query` and
+`Email/changes` only ever show messages in folders you can read.
+
+**Principals** (`crates/jmap/src/principal/`). `Principal/get` returns `id`, `type`, `name`,
+`description`, `email`, `timeZone`, `capabilities` and `accounts`. `Principal/query` filters
+on `name`, `email` (both an exact address lookup through `account_id_from_email`),
+`accountIds`, `text` and `type` (`individual` or `group`). Both refuse with `forbidden`
+unless the server's `allowDirectoryQueries` sharing setting is on or the login holds the
+`JmapPrincipalGet` or `JmapPrincipalQuery` permission. A principal id is the account id, so
+the id `Principal/query` answers is the key `shareWith` takes. When the directory is closed
+there is no other way over JMAP to turn an address into an id, and sharing from Rampart says
+so instead of offering a box that cannot work.
+
+**ShareNotification** (`crates/jmap/src/share_notification/`, `crates/common/src/storage/index.rs`).
+Written for every grant, change and revocation on any shared object, mail folders included,
+to the account that gained or lost access, with `changedBy`, `objectType`,
+`objectAccountId`, `objectId`, `oldRights` and `newRights`. `get`, `query` (filters
+`after`, `before`, `objectType`, `objectAccountId`) and `set` with destroy only; create and
+update are refused. Real, and left out of this first slice: a folder shared with you already
+turns up on its own at the next start, and a notification list is a second screen to
+design.
+
+**IMAP** (`crates/imap/src/op/acl.rs`, `namespace.rs`, `crates/imap/src/core/mailbox.rs`).
+`ACL` and `NAMESPACE` are advertised to every signed-in session
+(`crates/imap-proto/src/protocol/capability.rs`). `GETACL`, `SETACL` (replace, `+` and `-`),
+`DELETEACL`, `MYRIGHTS` and `LISTRIGHTS` are implemented, each behind its own permission
+(`ImapAclGet`, `ImapAclSet`, `ImapMyRights`, `ImapListRights`). `SETACL` takes the grantee as
+an address and looks it up the same way `Principal/query` does. `NAMESPACE` answers
+`(("" "/")) (("Shared Folders" "/")) NIL` whenever anything is shared: the prefix is in the
+**Other Users** position and there is no Shared namespace. The prefix is configurable (the
+`Shared` special-use folder name) and defaults to `Shared Folders`; another person's folders
+are listed as `Shared Folders/<their account name>/<folder>` in the same `LIST` as your own,
+for groups and for grants alike (`shared_accounts(Collection::Mailbox)`).
+
+**Not in 0.16, so not in Rampart:** `isReadOnly` on an account (always false); a way to
+resolve an address to a principal when directory queries are closed; granting rename over
+IMAP; separate seen and keyword rights. **In 0.16 and left out of the first slice:**
+ShareNotification, sending from a shared account (`maySubmit`, which needs an identity in
+that account), and gating IMAP actions on `MYRIGHTS`.
+
+**To check against a live server, with two accounts where one shares with the other:** that
+the second account appears in the first's session after a restart with `isPersonal: false`;
+that `Mailbox/get` there lists only the shared folder, with the `myRights` the table above
+predicts for each of the three levels; that `shareWith` comes back on your own folder when
+asked for and is null on theirs; that `Principal/query` with an `email` filter answers on a
+default install or is refused, which decides whether sharing from Rampart works out of the
+box; that starring in a read-only shared folder is refused by Rampart before the server is
+asked; and that a group mailbox appears for a member with every right.
+
+
 ## Account security
 
 | Capability | What it does | Rampart today | Action |
