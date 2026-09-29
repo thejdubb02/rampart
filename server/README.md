@@ -77,6 +77,8 @@ Three things worth getting right:
 | `RAMPART_DIAG_TOKEN` | none, optional | A second secret, valid on `/diag` only, never `/opens`. See below |
 | `RAMPART_NTFY_URL` | none, optional | A full ntfy topic URL. Real person opens are posted here when set |
 | `RAMPART_NTFY_TOKEN` | none, optional | The Bearer access token for a protected ntfy topic |
+| `RAMPART_GOTIFY_URL` | none, optional | The Gotify server base URL. Real person opens are posted here when set |
+| `RAMPART_GOTIFY_TOKEN` | none, optional | The application token for Gotify |
 | `RAMPART_TRACKER_KEEP_DAYS` | `400` | How long a fetch or a diagnostics batch is kept before it is thrown away. One knob for both |
 | `RAMPART_TRACKER_DB` | `/data/tracker.db` | Where the database lives |
 | `PORT` | `8080` | The port inside the container |
@@ -108,20 +110,22 @@ anyone who asked which ids exist, and a mail client that gets an error draws a b
 in the middle of somebody's message.
 
 Each fetch returned by `/opens` includes a `classification`: `person`, `apple_privacy`,
-`gmail_proxy`, `security_scanner` or `repeat`. Only `person` fetches produce ntfy alerts.
-Apple privacy downloads, Gmail's image proxy, named security products, cloud scanner user
-agents, suspicious immediate non-browser fetches and repeats within 60 seconds are kept in
-the log without buzzing a phone. Gmail can only establish that its proxy fetched the image,
-so the client describes it as a first open only.
+`gmail_proxy`, `security_scanner` or `repeat`. Only `person` fetches produce phone alerts (ntfy
+or Gotify). Apple privacy downloads, Gmail's image proxy, named security products, cloud
+scanner user agents, suspicious immediate non-browser fetches and repeats within 60 seconds are
+kept in the log without buzzing a phone. Gmail can only establish that its proxy fetched the
+image, so the client describes it as a first open only.
 
 `/labels` accepts `{"id":"...","label":"Susan, site audit"}`. Rampart calls it only
 after the user opts in to named phone alerts. Without that opt-in, the companion still knows
 only the random id and request metadata. Labels expire under `RAMPART_TRACKER_KEEP_DAYS`
 with the tracking records they describe.
 
-When `RAMPART_NTFY_URL` is set, a person open is posted away from the pixel request with a
-short timeout. The native ntfy request uses the title `Email opened`, the `envelope` tag and
-default priority. Failures are logged and the pixel remains a successful image response.
+When `RAMPART_NTFY_URL` or `RAMPART_GOTIFY_URL` is set, a person open is posted away from the
+pixel request with a short timeout. The native ntfy request uses the title `Email opened`, the
+`envelope` tag and default priority. Gotify posts JSON to `/message` with priority 5 and header
+`X-Gotify-Key`. Either or both providers can be configured. Failures are logged and the pixel
+remains a successful image response.
 
 `/diag` takes a small JSON body: `{"items":[{"metric":"...", "category":"...", "count":N,
 "sum":N, "min":N, "max":N}, ...]}`, `category`, `sum`, `min` and `max` all optional. Each

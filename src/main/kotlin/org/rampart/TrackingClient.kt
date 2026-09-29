@@ -80,11 +80,8 @@ internal object TrackingClient {
         if (response.statusCode() !in 200..299) throw TrackingError("The tracking server did not accept the label.")
     }
 
-    private fun jsonString(value: String): String = buildString {
-        append('"')
-        value.forEach { if (it == '"' || it == '\\') append('\\'); append(it) }
-        append('"')
-    }
+    // The serialiser's own escaping, so a label with a line break or a tab is still valid JSON.
+    private fun jsonString(value: String): String = kotlinx.serialization.json.JsonPrimitive(value).toString()
 
     /**
      * Whether the server is there and the token is right, for the Test button in settings.

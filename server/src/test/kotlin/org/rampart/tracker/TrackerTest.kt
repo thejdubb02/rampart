@@ -179,6 +179,74 @@ class TrackerTest {
     }
 
     @Test
+    fun `gotify request carries base path header and JSON body`() {
+        val received = ArrayBlockingQueue<Map<String, String>>(1)
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/message") { exchange ->
+            received.put(
+                mapOf(
+                    "path" to exchange.requestURI.path,
+                    "method" to exchange.requestMethod,
+                    "key" to exchange.requestHeaders.getFirst("X-Gotify-Key"),
+                    "contentType" to exchange.requestHeaders.getFirst("Content-Type"),
+                    "body" to exchange.requestBody.bufferedReader().readText(),
+                ),
+            )
+            exchange.sendResponseHeaders(200, 0)
+            exchange.responseBody.close()
+        }
+        server.start()
+        try {
+            GotifyClient("http://127.0.0.1:${server.address.port}/", "app-token-123").send(
+                openNotification("Susan, site audit", 2),
+            )
+            assertEquals(
+                mapOf(
+                    "path" to "/message",
+                    "method" to "POST",
+                    "key" to "app-token-123",
+                    "contentType" to "application/json",
+                    "body" to """{"title":"Email opened","message":"Susan, site audit opened it (2nd time)","priority":5}""",
+                ),
+                received.take(),
+            )
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun `failing push client does not prevent other push clients from running`() {
+        val successfulReceived = ArrayBlockingQueue<PushNotification>(1)
+        val failingClient = object : PushClient {
+            override val name: String = "failing"
+            override fun send(notification: PushNotification) {
+                error("network down")
+            }
+        }
+        val succeedingClient = object : PushClient {
+            override val name: String = "succeeding"
+            override fun send(notification: PushNotification) {
+                successfulReceived.put(notification)
+            }
+        }
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(2)
+        try {
+            val clients = listOf(failingClient, succeedingClient)
+            val notification = openNotification("Alex", 1)
+            clients.forEach { client ->
+                pool.execute {
+                    runCatching { client.send(notification) }
+                }
+            }
+            val received = successfulReceived.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+            assertEquals(notification, received)
+        } finally {
+            pool.shutdown()
+        }
+    }
+
+    @Test
     fun `the pixel is a real GIF and is as small as one gets`() {
         assertEquals(42, PIXEL.size)
         assertEquals("GIF89a", PIXEL.take(6).map { it.toInt().toChar() }.joinToString(""))

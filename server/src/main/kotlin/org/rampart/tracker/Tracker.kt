@@ -54,8 +54,14 @@ fun main() {
     val log = Log(System.getenv("RAMPART_TRACKER_DB") ?: "/data/tracker.db")
     val keepDays = System.getenv("RAMPART_TRACKER_KEEP_DAYS")?.toIntOrNull() ?: 400
     log.forgetOlderThan(keepDays)
-    val ntfy = System.getenv("RAMPART_NTFY_URL")?.trim()?.takeIf { it.isNotEmpty() }?.let {
-        NtfyClient(it, System.getenv("RAMPART_NTFY_TOKEN").orEmpty().takeIf(String::isNotBlank))
+    val pushClients = mutableListOf<PushClient>()
+    System.getenv("RAMPART_NTFY_URL")?.trim()?.takeIf { it.isNotEmpty() }?.let {
+        pushClients.add(NtfyClient(it, System.getenv("RAMPART_NTFY_TOKEN").orEmpty().takeIf(String::isNotBlank)))
+    }
+    System.getenv("RAMPART_GOTIFY_URL")?.trim()?.takeIf { it.isNotEmpty() }?.let { url ->
+        System.getenv("RAMPART_GOTIFY_TOKEN")?.trim()?.takeIf { it.isNotEmpty() }?.let { token ->
+            pushClients.add(GotifyClient(url, token))
+        }
     }
     val pushes = Executors.newFixedThreadPool(2)
 
@@ -64,8 +70,8 @@ fun main() {
     // single thread, which would let one slow client hold up somebody's image loading.
     server.executor = Executors.newFixedThreadPool(8)
 
-    server.createContext("/o/") { exchange -> pixel(exchange, log, ntfy, pushes) }
-    server.createContext("/opens") { exchange -> opens(exchange, log, token, ntfy != null) }
+    server.createContext("/o/") { exchange -> pixel(exchange, log, pushClients, pushes) }
+    server.createContext("/opens") { exchange -> opens(exchange, log, token, pushClients.isNotEmpty()) }
     server.createContext("/labels") { exchange -> labels(exchange, log, token) }
     server.createContext("/diag") { exchange -> diag(exchange, log, token, diagToken) }
     /*
@@ -85,7 +91,7 @@ fun main() {
  * broken-image icon in the middle of somebody's message. An id we have never seen is
  * simply recorded, because it costs nothing and the alternative leaks.
  */
-private fun pixel(exchange: HttpExchange, log: Log, ntfy: NtfyClient?, pushes: java.util.concurrent.Executor) {
+private fun pixel(exchange: HttpExchange, log: Log, pushClients: List<PushClient>, pushes: java.util.concurrent.Executor) {
     val id = exchange.requestURI.path.removePrefix("/o/").removeSuffix(".gif")
     if (id.isNotBlank() && id.length <= 64 && id.all { it.isLetterOrDigit() || it == '-' || it == '_' }) {
         runCatching {
@@ -103,12 +109,15 @@ private fun pixel(exchange: HttpExchange, log: Log, ntfy: NtfyClient?, pushes: j
                     ),
                 ).also(log::record)
             }
-            if (fetch.classification == OpenClassification.PERSON && ntfy != null) {
+            if (fetch.classification == OpenClassification.PERSON && pushClients.isNotEmpty()) {
                 val count = log.fetchesFor(id).count { it.classification == OpenClassification.PERSON }
                 val label = log.labelFor(id)
-                pushes.execute {
-                    runCatching { ntfy.send(openNotification(label, count)) }
-                        .onFailure { System.err.println("ntfy notification failed: ${it.message ?: it::class.simpleName}") }
+                val notification = openNotification(label, count)
+                pushClients.forEach { client ->
+                    pushes.execute {
+                        runCatching { client.send(notification) }
+                            .onFailure { System.err.println("${client.name} notification failed: ${it.message ?: it::class.simpleName}") }
+                    }
                 }
             }
         }
@@ -126,7 +135,7 @@ private fun pixel(exchange: HttpExchange, log: Log, ntfy: NtfyClient?, pushes: j
  * Authenticated, because this is the half that is about somebody's mail: which of their
  * messages were opened and when. The pixel above is public by necessity; this never is.
  */
-private fun opens(exchange: HttpExchange, log: Log, token: String, ntfyConfigured: Boolean) {
+private fun opens(exchange: HttpExchange, log: Log, token: String, pushesConfigured: Boolean) {
     val given = exchange.requestHeaders.getFirst("Authorization").orEmpty().removePrefix("Bearer ").trim()
     if (!sameToken(given, token)) {
         // No detail. "Wrong token" and "no token" are the same answer to anyone guessing.
@@ -138,7 +147,7 @@ private fun opens(exchange: HttpExchange, log: Log, token: String, ntfyConfigure
         ?.removePrefix("since=")?.toLongOrNull() ?: 0L
     val found = log.since(since)
     val body = buildString {
-        append("""{"ntfyConfigured":$ntfyConfigured,"fetches":[""")
+        append("""{"companionPushes":$pushesConfigured,"ntfyConfigured":$pushesConfigured,"fetches":[""")
         found.forEachIndexed { at, fetch ->
             if (at > 0) append(',')
             append("{")
@@ -185,16 +194,23 @@ internal fun labelAuthorised(given: String, token: String): Boolean = sameToken(
 private fun validTrackingId(id: String): Boolean =
     id.isNotBlank() && id.length <= 64 && id.all { it.isLetterOrDigit() || it == '-' || it == '_' }
 
-internal data class NtfyNotification(val message: String, val click: String? = null)
+internal interface PushClient {
+    val name: String
+    fun send(notification: PushNotification)
+}
 
-internal fun openNotification(label: String?, count: Int): NtfyNotification {
+internal data class PushNotification(val title: String, val message: String, val click: String? = null)
+internal typealias NtfyNotification = PushNotification
+
+internal fun openNotification(label: String?, count: Int): PushNotification {
     val times = when (count) {
         2 -> "2nd time"
         3 -> "3rd time"
         else -> "${count}th time"
     }
-    return NtfyNotification(
-        when {
+    return PushNotification(
+        title = "Email opened",
+        message = when {
             label.isNullOrBlank() -> if (count == 1) "A tracked email was opened" else "A tracked email was opened ($times)"
             count == 1 -> "$label opened it"
             else -> "$label opened it ($times)"
@@ -206,11 +222,13 @@ internal class NtfyClient(
     private val topicUrl: String,
     private val token: String?,
     private val http: HttpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build(),
-) {
-    fun send(notification: NtfyNotification) {
+) : PushClient {
+    override val name: String get() = "ntfy"
+
+    override fun send(notification: PushNotification) {
         val builder = HttpRequest.newBuilder(URI.create(topicUrl))
             .timeout(Duration.ofSeconds(4))
-            .header("Title", "Email opened")
+            .header("Title", notification.title)
             .header("Tags", "envelope")
             .header("Priority", "default")
             .POST(HttpRequest.BodyPublishers.ofString(notification.message))
@@ -218,6 +236,26 @@ internal class NtfyClient(
         notification.click?.let { builder.header("Click", it) }
         val response = http.send(builder.build(), HttpResponse.BodyHandlers.discarding())
         if (response.statusCode() !in 200..299) error("ntfy returned HTTP ${response.statusCode()}")
+    }
+}
+
+internal class GotifyClient(
+    private val serverUrl: String,
+    private val token: String,
+    private val http: HttpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build(),
+) : PushClient {
+    override val name: String get() = "Gotify"
+
+    override fun send(notification: PushNotification) {
+        val endpoint = URI.create(serverUrl.trim().trimEnd('/') + "/message")
+        val body = """{"title":${quoted(notification.title)},"message":${quoted(notification.message)},"priority":5}"""
+        val builder = HttpRequest.newBuilder(endpoint)
+            .timeout(Duration.ofSeconds(4))
+            .header("X-Gotify-Key", token)
+            .header("Content-Type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(body))
+        val response = http.send(builder.build(), HttpResponse.BodyHandlers.discarding())
+        if (response.statusCode() !in 200..299) error("Gotify returned HTTP ${response.statusCode()}")
     }
 }
 

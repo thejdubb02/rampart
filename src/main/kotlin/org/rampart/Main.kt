@@ -1082,10 +1082,20 @@ private fun Reader(
 ) {
     val scope = rememberCoroutineScope()
     fun phoneAlert(title: String, message: String) {
-        val topic = Settings.ntfyServer()
-        if (topic.isBlank()) return
-        scope.launch(Dispatchers.IO) {
-            runCatching { Ntfy.send(topic, Secrets.loadNamed(Secrets.NTFY_TOKEN), title, message) }
+        val provider = Settings.phoneAlertProvider()
+        if (provider.equals("gotify", ignoreCase = true)) {
+            val server = Settings.gotifyServer()
+            val token = Secrets.loadNamed(Secrets.GOTIFY_TOKEN)
+            if (server.isBlank() || token.isNullOrBlank()) return
+            scope.launch(Dispatchers.IO) {
+                runCatching { Gotify.send(server, token, title, message) }
+            }
+        } else {
+            val topic = Settings.ntfyServer()
+            if (topic.isBlank()) return
+            scope.launch(Dispatchers.IO) {
+                runCatching { Ntfy.send(topic, Secrets.loadNamed(Secrets.NTFY_TOKEN), title, message) }
+            }
         }
     }
     var identities by remember { mutableStateOf<Map<String, List<Identity>>>(emptyMap()) }

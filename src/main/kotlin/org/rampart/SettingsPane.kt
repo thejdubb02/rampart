@@ -776,45 +776,122 @@ private fun NotificationsPage(
 
     Spacer(Modifier.height(18.dp))
     Section(
-        "Phone alerts (ntfy)",
-        "Posts selected events to a full ntfy topic URL while Rampart is running. The access token stays in the operating system credential store.",
+        "Phone alerts",
+        "Posts selected events to your phone while Rampart is running. Access tokens stay in the operating system credential store.",
     )
+    var alertProvider by remember { mutableStateOf(Settings.phoneAlertProvider()) }
     var ntfyServer by remember { mutableStateOf(Settings.ntfyServer()) }
     var ntfyToken by remember { mutableStateOf(Secrets.loadNamed(Secrets.NTFY_TOKEN).orEmpty()) }
-    var ntfyResult by remember { mutableStateOf<String?>(null) }
-    var ntfyBusy by remember { mutableStateOf(false) }
-    OutlinedTextField(
-        value = ntfyServer,
-        onValueChange = { ntfyServer = it; ntfyResult = null },
-        label = { Text("Server topic URL") },
-        placeholder = { Text("https://ntfy.example.org/rampart") },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-    )
-    Spacer(Modifier.height(8.dp))
-    OutlinedTextField(
-        value = ntfyToken,
-        onValueChange = { ntfyToken = it; ntfyResult = null },
-        label = { Text("Access token, optional") },
-        singleLine = true,
-        visualTransformation = PasswordVisualTransformation(),
-        modifier = Modifier.fillMaxWidth(),
-    )
-    Spacer(Modifier.height(8.dp))
-    Button(enabled = !ntfyBusy, onClick = {
-        ntfyBusy = true
-        scope.launch {
-            val problem = withContext(Dispatchers.IO) { Ntfy.check(ntfyServer, ntfyToken) }
-            if (problem == null) {
-                Settings.setNtfyServer(ntfyServer)
-                ntfyResult = Secrets.storeNamed(Secrets.NTFY_TOKEN, ntfyToken) ?: "Test sent and settings saved."
-            } else {
-                ntfyResult = problem
-            }
-            ntfyBusy = false
+    var gotifyServer by remember { mutableStateOf(Settings.gotifyServer()) }
+    var gotifyToken by remember { mutableStateOf(Secrets.loadNamed(Secrets.GOTIFY_TOKEN).orEmpty()) }
+    var alertResult by remember { mutableStateOf<String?>(null) }
+    var alertBusy by remember { mutableStateOf(false) }
+
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.clickable {
+                alertProvider = "ntfy"
+                Settings.setPhoneAlertProvider("ntfy")
+                alertResult = null
+            }.padding(vertical = 4.dp, horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(
+                selected = alertProvider != "gotify",
+                onClick = {
+                    alertProvider = "ntfy"
+                    Settings.setPhoneAlertProvider("ntfy")
+                    alertResult = null
+                },
+            )
+            Spacer(Modifier.width(4.dp))
+            Text("ntfy", style = MaterialTheme.typography.bodyMedium)
         }
-    }) { Text(if (ntfyBusy) "Sending" else "Send a test") }
-    ntfyResult?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        Spacer(Modifier.width(16.dp))
+        Row(
+            Modifier.clickable {
+                alertProvider = "gotify"
+                Settings.setPhoneAlertProvider("gotify")
+                alertResult = null
+            }.padding(vertical = 4.dp, horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(
+                selected = alertProvider == "gotify",
+                onClick = {
+                    alertProvider = "gotify"
+                    Settings.setPhoneAlertProvider("gotify")
+                    alertResult = null
+                },
+            )
+            Spacer(Modifier.width(4.dp))
+            Text("Gotify", style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+    Spacer(Modifier.height(8.dp))
+
+    if (alertProvider == "gotify") {
+        OutlinedTextField(
+            value = gotifyServer,
+            onValueChange = { gotifyServer = it; alertResult = null },
+            label = { Text("Gotify server URL") },
+            placeholder = { Text("https://gotify.example.org") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = gotifyToken,
+            onValueChange = { gotifyToken = it; alertResult = null },
+            label = { Text("Application token") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth(),
+        )
+    } else {
+        OutlinedTextField(
+            value = ntfyServer,
+            onValueChange = { ntfyServer = it; alertResult = null },
+            label = { Text("Server topic URL") },
+            placeholder = { Text("https://ntfy.example.org/rampart") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = ntfyToken,
+            onValueChange = { ntfyToken = it; alertResult = null },
+            label = { Text("Access token, optional") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+    Spacer(Modifier.height(8.dp))
+    Button(enabled = !alertBusy, onClick = {
+        alertBusy = true
+        scope.launch {
+            if (alertProvider == "gotify") {
+                val problem = withContext(Dispatchers.IO) { Gotify.check(gotifyServer, gotifyToken) }
+                if (problem == null) {
+                    Settings.setGotifyServer(gotifyServer)
+                    alertResult = Secrets.storeNamed(Secrets.GOTIFY_TOKEN, gotifyToken) ?: "Test sent and settings saved."
+                } else {
+                    alertResult = problem
+                }
+            } else {
+                val problem = withContext(Dispatchers.IO) { Ntfy.check(ntfyServer, ntfyToken) }
+                if (problem == null) {
+                    Settings.setNtfyServer(ntfyServer)
+                    alertResult = Secrets.storeNamed(Secrets.NTFY_TOKEN, ntfyToken) ?: "Test sent and settings saved."
+                } else {
+                    alertResult = problem
+                }
+            }
+            alertBusy = false
+        }
+    }) { Text(if (alertBusy) "Sending" else "Send a test") }
+    alertResult?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
 
     var important by remember { mutableStateOf(Settings.ntfyImportantMail()) }
     var scheduled by remember { mutableStateOf(Settings.ntfyScheduledSend()) }

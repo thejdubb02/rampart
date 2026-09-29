@@ -59,6 +59,14 @@ object Settings {
 
     fun setNotifyOnOpen(value: Boolean) = write { put("notifyOpen", JsonPrimitive(value)) }
 
+    fun phoneAlertProvider(): String = read()["phoneAlertProvider"]?.jsonPrimitive?.contentOrNull?.ifBlank { "ntfy" } ?: "ntfy"
+
+    fun setPhoneAlertProvider(value: String) = write { put("phoneAlertProvider", JsonPrimitive(value.trim())) }
+
+    fun gotifyServer(): String = read()["gotifyServer"]?.jsonPrimitive?.contentOrNull.orEmpty()
+
+    fun setGotifyServer(value: String) = write { put("gotifyServer", JsonPrimitive(value.trim())) }
+
     fun ntfyServer(): String = read()["ntfyServer"]?.jsonPrimitive?.contentOrNull.orEmpty()
 
     fun setNtfyServer(value: String) = write { put("ntfyServer", JsonPrimitive(value.trim())) }

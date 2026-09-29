@@ -56,4 +56,16 @@ class SettingsWriteTest {
         assertTrue("ntfy-token" !in text)
         assertTrue("access-token-value" !in text)
     }
+
+    @Test
+    fun `gotify settings persist without writing the application token`() {
+        Settings.setPhoneAlertProvider("gotify")
+        Settings.setGotifyServer("https://gotify.example.org")
+
+        val text = java.nio.file.Files.readString(Accounts.file().resolveSibling("settings.json"))
+        assertEquals("gotify", Settings.phoneAlertProvider())
+        assertEquals("https://gotify.example.org", Settings.gotifyServer())
+        assertTrue("gotify-token" !in text)
+        assertTrue("app-token-value" !in text)
+    }
 }

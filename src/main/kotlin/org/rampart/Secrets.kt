@@ -160,6 +160,7 @@ object Secrets {
     }
 
     const val NTFY_TOKEN = "ntfy-token"
+    const val GOTIFY_TOKEN = "gotify-token"
 
     fun forget(account: SavedAccount) {
         runCatching {
