@@ -184,6 +184,7 @@ internal fun SettingsPane(
                         when (page) {
                             "accounts" -> Column {
                                 AccountsPage(accounts, onAddAccount, quotas)
+                                AccountColoursSection(accounts)
                                 SettingsSyncSection()
                             }
                             "security" -> SecurityPage(security, accounts, account, onAccount)
@@ -659,6 +660,7 @@ private fun ThemesPage(
         Spacer(Modifier.width(12.dp))
         Text("Colour a tagged row with its tag", style = MaterialTheme.typography.bodyMedium)
     }
+    HoverActionsSection()
 }
 
 /**

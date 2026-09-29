@@ -89,6 +89,10 @@ internal class SyncSource(
  * - Senders whose remote images load: that widens what the reader fetches, and widening
  *   the reader is a decision made in front of the message, not carried in from elsewhere.
  * - Cursors and markers (the tracking cursor, the last changelog seen): machine state.
+ * - Account colours. They are keyed by account, and the file goes to every account's own
+ *   storage, so syncing them would write the address and server of each account into the
+ *   others. The colour an account starts with is worked out from its key, so it is the
+ *   same on every computer anyway until somebody changes it on one.
  * - The sync switch itself, and the stamps sync keeps.
  */
 internal val SYNCED_SETTINGS: Map<String, SyncShape> = mapOf(
@@ -100,6 +104,10 @@ internal val SYNCED_SETTINGS: Map<String, SyncShape> = mapOf(
     "tintRowsByTag" to SyncShape.TEXT,
     "tagColours" to SyncShape.MAP_OF_TEXT,
     "sharing" to SyncShape.MAP_OF_TEXT,
+    // Account colours stay behind (see above). Whether to tint by account, and which
+    // buttons a row shows on hover, are how somebody likes the list and travel with them.
+    "tintRowsByAccount" to SyncShape.TEXT,
+    "hoverActions" to SyncShape.LIST_OF_TEXT,
     "savedSearches" to SyncShape.LIST_OF_OBJECTS,
     "order" to SyncShape.TEXT,
     "markReadDelay" to SyncShape.TEXT,

@@ -272,6 +272,33 @@ object Settings {
 
     fun setTintRowsByTag(value: Boolean) = write { put("tintRowsByTag", JsonPrimitive(value)) }
 
+    /** Whether a row in the merged inbox carries its account's colour. Off by default. See [accountTints]. */
+    fun tintRowsByAccount(): Boolean = read()["tintRowsByAccount"]?.jsonPrimitive?.booleanOrNull == true
+
+    fun setTintRowsByAccount(value: Boolean) = write { put("tintRowsByAccount", JsonPrimitive(value)) }
+
+    /**
+     * The colour chosen for each account, by account key. An account with nothing stored
+     * uses the colour worked out from its key. Kept on this computer only, see [SYNCED_SETTINGS].
+     */
+    fun accountColours(): Map<String, Long> =
+        (read()["accountColours"] as? JsonObject)?.mapNotNull { (key, value) ->
+            (value as? JsonPrimitive)?.longOrNull?.let { key to it }
+        }?.toMap() ?: emptyMap()
+
+    /** [colour] null puts an account back to the colour worked out from its key. */
+    fun setAccountColour(key: String, colour: Long?) = write {
+        val current = (this["accountColours"] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
+        if (colour == null) current.remove(key) else current[key] = JsonPrimitive(colour)
+        put("accountColours", JsonObject(current))
+    }
+
+    /** The buttons a row shows under the pointer, as [HoverAction] keys. Null when never chosen. */
+    fun hoverActions(): List<String>? =
+        (read()["hoverActions"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+
+    fun setHoverActions(keys: List<String>) = write { put("hoverActions", JsonArray(keys.map(::JsonPrimitive))) }
+
     /**
      * Where the companion server is, or empty when there is not one.
      *

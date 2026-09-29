@@ -459,4 +459,45 @@ class StoreTest {
         assertEquals(Instant.ofEpochMilli(10), rows.getValue("one").first.repliedAt)
         assertNull(rows.getValue("two").first.repliedAt)
     }
+
+    @Test
+    fun `joins and splits are kept across closing and opening the store`() {
+        val path = Files.createTempDirectory("rampart-store").resolve("mail.db")
+        val joined = Rethreading().joined(listOf("tA", "tB")).split("m1")
+        try {
+            Store.open(path, null).use { store ->
+                assertEquals(Rethreading(), store.rethreading())
+                store.setRethreading(joined)
+            }
+            Store.open(path, null).use { store ->
+                assertEquals(joined, store.rethreading())
+                // Replaced rather than added to, so an undo that puts fewer back leaves fewer.
+                store.setRethreading(Rethreading())
+                assertEquals(Rethreading(), store.rethreading())
+            }
+        } finally {
+            path.deleteIfExists()
+        }
+    }
+
+    /** A file from before joins existed gains the table when it is opened, and keeps its mail. */
+    @Test
+    fun `a store file made before joins existed takes them on open`() {
+        val path = Files.createTempDirectory("rampart-store").resolve("mail.db")
+        try {
+            Store.open(path, null).use { it.put("inbox", messages) }
+            DriverManager.getConnection("jdbc:sqlite:$path").use { connection ->
+                connection.createStatement().use { it.execute("DROP TABLE rethread") }
+            }
+            Store.open(path, null).use { store ->
+                assertEquals(3, store.messages("inbox").size)
+                assertEquals(Rethreading(), store.rethreading())
+                val joined = Rethreading().joined(listOf("tA", "tB"))
+                store.setRethreading(joined)
+                assertEquals(joined, store.rethreading())
+            }
+        } finally {
+            path.deleteIfExists()
+        }
+    }
 }

@@ -152,6 +152,8 @@ class SettingsSyncTest {
             "collapsedSections", "notify", "notifyOpen", "closeToTray", "trackingServer",
             "diagnosticsServer", "gotifyServer", "ntfyServer", "phoneAlertProvider",
             "diagnosticsReporting", "trackingCursor", "changelogSeen", "imageSenders",
+            // Keyed by account, so syncing it would write each account's address into the others.
+            "accountColours",
             SYNC_SWITCH, SYNC_STAMPS,
         )
         assertTrue(never.none { it in SYNCED_SETTINGS }, "A machine-specific key is on the allowlist.")

@@ -35,6 +35,13 @@ Google or Microsoft as the person signing in and to nobody else. The one thing i
 client ID registered with each provider, which is done once by whoever builds Rampart, not by
 the person installing it; docs/connecting.md has the details and how to use your own.
 
+These too: a collapsed
+conversation showing its newest message and whole-conversation unread and star, rows
+coloured by account in All inboxes, and the choice of hover buttons. Joining two
+conversations into one and splitting a message out of one, which are kept in the
+account's local copy on this computer because JMAP has no way to change a message's
+thread and IMAP has no thread to change.
+
 **This is the default shape and the one to aim for.** The dashboard is the worked example:
 every number on it is counted from mail already in the mailbox, so it needs no pixel, no
 endpoint, no DNS and no configuration, and it works on Stalwart, on Gmail and on plain

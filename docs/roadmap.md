@@ -458,6 +458,61 @@ because the planner then walks the whole index looking for the few that match.
 copy, a split search's children follow arriving mail, the table sorts and resizes, and
 all three layouts have been looked at in a running window on both test servers.
 
+#### The rest of the list extras (RAM-42)
+
+*Built 2026-09-29 on branch `claude/list-extras`, not released, not compiled with Compose
+and not yet looked at in a running window.* Class 1: a mailbox and nothing else.
+
+**A collapsed conversation says what its newest message says.** Sender, subject, preview
+and time are the newest message in the conversation, drafts passed over and a tie on the
+time going to the later one in the server's thread order. The row is unread when any
+message in it is and starred when any is. A reply in Trash or Junk does not count as the
+newest, except in Trash or Junk. One place decides a row (`threadRows` in
+`ThreadRows.kt`) and Normal, Table and Cards all draw what it gives back. The row still
+stands on the folder's own message: selecting it, opening it, replying, archiving and
+dragging all use that message exactly as before. Marking a collapsed row read marks every
+unread message in the conversation, and taking its star off takes it off every starred
+message, because otherwise the row would not change. Marking it unread is still the one
+message, which is enough to make the row unread. The
+rest of the conversation is fetched a page at a time (Thread/get and Email/get in one
+round trip, at most about 200 messages a request) and again after five minutes. A search,
+a saved search and a tag view are not collapsed: a result is the message that matched.
+
+**Rows coloured by account in All inboxes**, off by default and doing nothing with one
+account. Each account has a colour in Settings, Accounts, worked out from its key until
+somebody picks one, so it is the same on every computer. **Where a row has a tag's
+colour and an account's, the tag wins**: it is about that one message, and the row already
+names its account.
+
+**Join and split, by hand.** Pick two or more conversations and "Join into one
+conversation"; in the reader's More menu, "Split this message out". Both show in the undo
+strip. A join across accounts is refused in one sentence. **These are kept on this
+computer, in the account's local copy, and nothing changes on the server**, which is the
+one exception here to "if the server can hold it, the server holds it": JMAP's threadId is
+set by the server from the headers and cannot be changed by a client, and IMAP has no
+thread to change. Moving a message between conversations on the server would mean
+rewriting its References and saving it as a new message, which is changing somebody's mail
+to suit a view of it. So a join is seen on this computer only, and deleting the local copy
+forgets it.
+
+**Hover buttons are a choice**, in Settings, Appearance: any of mark read, archive, delete,
+star, snooze and move, up to four because that is what fits where the time was. The default
+is read, archive and delete, which is what the row always had.
+
+**Settings sync:** whether to tint by account and which hover buttons, yes. The account
+colours, no: they are keyed by account, and the synced file is written to every account's
+own storage, so it would carry each account's address into the others.
+
+**Known limits.** A row made for a split message is not in the list the multi-pick
+buttons read, so it is filed from its own hover buttons or menu rather than in a batch.
+Archiving a joined row files each conversation in it, and the undo strip offers the last
+of those moves only. Keyboard shortcuts act on the open message, as before, not on the
+whole conversation.
+
+**Done when:** a collapsed row shows the newest message and the whole conversation's
+unread and star on both test servers; a join and a split survive a restart and undo
+cleanly; tint by account and the hover choice have been looked at in a running window.
+
 ### 2.6 Command palette
 
 Ctrl+K. The spec calls it table stakes and every product it compares against has one.
@@ -1028,7 +1083,7 @@ Spark, Mailspring, Canary and Superhuman users rely on daily, ordered by real us
 | Contacts with history ("every mail from this person") | **Missing** |
 | Follow-up flags with a date | **Partial** (snooze and tasks, no flag with a due date) |
 | Folders and labels together | Built |
-| Colour by account | In the list extras brief (RAM-42) |
+| Colour by account | Built, not released (RAM-42): rows in All inboxes, off by default |
 
 **Trust.** Local credentials, phishing warnings that show the real address, PGP and
 S/MIME (RAM-37, in progress), faithful HTML rendering, reliable sync, and import (Maildir,
