@@ -193,4 +193,17 @@ class UnsubscribeTest {
         val result = unsubscribeFrom(junk, "\u0000 List-Unsubscribe = ???")
         assertNull(result, "junk must not throw, and this pile has nothing usable")
     }
+
+    @Test
+    fun unsubscribeStatusAndLabelFollowOneClickProgress() {
+        assertFalse(isUnsubscribed(null))
+        assertFalse(isUnsubscribed(UNSUBSCRIBE_PENDING))
+        assertFalse(isUnsubscribed(UNSUBSCRIBE_FAILED))
+        assertTrue(isUnsubscribed(UNSUBSCRIBE_DONE))
+
+        assertEquals("Unsubscribe", unsubscribeLabel(null))
+        assertEquals("Unsubscribe", unsubscribeLabel(UNSUBSCRIBE_PENDING))
+        assertEquals("Unsubscribe", unsubscribeLabel(UNSUBSCRIBE_FAILED))
+        assertEquals("Unsubscribed", unsubscribeLabel(UNSUBSCRIBE_DONE))
+    }
 }

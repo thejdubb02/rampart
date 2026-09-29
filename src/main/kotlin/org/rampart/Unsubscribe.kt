@@ -12,6 +12,17 @@ internal data class Unsubscribe(
     val oneClick: Boolean,
 )
 
+internal const val UNSUBSCRIBE_PENDING = "Asking to be taken off the list."
+internal const val UNSUBSCRIBE_DONE = "Asked to be taken off the list. It can take a few days."
+internal const val UNSUBSCRIBE_FAILED = "That did not go through. Try the link instead."
+
+/** True when a one-click unsubscribe request has completed successfully. */
+internal fun isUnsubscribed(unsubscribed: String?): Boolean = unsubscribed == UNSUBSCRIBE_DONE
+
+/** The label to show for the header unsubscribe action. */
+internal fun unsubscribeLabel(unsubscribed: String?): String =
+    if (isUnsubscribed(unsubscribed)) "Unsubscribed" else "Unsubscribe"
+
 /**
  * @param listUnsubscribe the raw List-Unsubscribe header value, or null
  * @param listUnsubscribePost the raw List-Unsubscribe-Post header value, or null

@@ -4476,16 +4476,16 @@ private fun Reader(
                     // One-click is the only route that finishes without leaving Rampart,
                     // and it is the only one the sender promised would work that way.
                     off.oneClick && off.url != null -> {
-                        if (key != null) updateCard(key, cardSummary.id) { copy(unsubscribed = "Asking to be taken off the list.") }
+                        if (key != null) updateCard(key, cardSummary.id) { copy(unsubscribed = UNSUBSCRIBE_PENDING) }
                         scope.launch {
                             val done = withContext(Dispatchers.IO) { oneClickPost(off.url) }
                             if (key != null) updateCard(key, cardSummary.id) {
                                 copy(
                                     unsubscribed = if (done) {
-                                        "Asked to be taken off the list. It can take a few days."
+                                        UNSUBSCRIBE_DONE
                                     } else {
                                         // Not an error worth a dialog: the link is still there.
-                                        "That did not go through. Try the link instead."
+                                        UNSUBSCRIBE_FAILED
                                     },
                                 )
                             }
@@ -8533,6 +8533,7 @@ internal fun Message(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         val (who, address) = displaySender(summary.from, summary.fromEmail)
+                        val off = unsubscribeFrom(body?.listUnsubscribe, body?.listUnsubscribePost)
                         Avatar(
                             who,
                             summary.fromEmail.ifBlank { who },
@@ -8548,6 +8549,7 @@ internal fun Message(
                                     fontWeight = FontWeight.SemiBold,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false),
                                 )
                                 // Only when the message went out through somewhere other
                                 // than the domain it claims, which is the ordinary
@@ -8564,15 +8566,26 @@ internal fun Message(
                                                 .padding(horizontal = 7.dp, vertical = 2.dp),
                                         )
                                     }
+                                if (address == null && off != null) {
+                                    Spacer(Modifier.width(8.dp))
+                                    UnsubscribeLink(off, unsubscribed, onUnsubscribe)
+                                }
                             }
                             if (address != null) {
-                                Text(
-                                    address,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.outline,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        address,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.outline,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false),
+                                    )
+                                    if (off != null) {
+                                        Spacer(Modifier.width(8.dp))
+                                        UnsubscribeLink(off, unsubscribed, onUnsubscribe)
+                                    }
+                                }
                             }
                         }
                         Column(horizontalAlignment = Alignment.End) {
@@ -9253,6 +9266,34 @@ private fun ThreadRow(message: Summary, onClick: () -> Unit) {
             color = MaterialTheme.colorScheme.outline,
         )
     }
+}
+
+/**
+ * A text link beside the sender that invokes the unsubscribe action or indicates completed unsubscribe.
+ */
+@Composable
+private fun UnsubscribeLink(
+    off: Unsubscribe,
+    unsubscribed: String?,
+    onUnsubscribe: (Unsubscribe) -> Unit,
+) {
+    val done = isUnsubscribed(unsubscribed)
+    val pending = unsubscribed == UNSUBSCRIBE_PENDING
+    val canClick = !done && !pending
+    Text(
+        unsubscribeLabel(unsubscribed),
+        style = MaterialTheme.typography.bodySmall,
+        color = if (done) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.primary,
+        modifier = Modifier.clip(MaterialTheme.shapes.small)
+            .then(
+                if (canClick) {
+                    Modifier.clickable { onUnsubscribe(off) }
+                } else {
+                    Modifier
+                },
+            )
+            .padding(horizontal = 4.dp, vertical = 2.dp),
+    )
 }
 
 /**
