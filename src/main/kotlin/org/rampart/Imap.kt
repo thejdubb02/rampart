@@ -1058,6 +1058,8 @@ internal fun bodyFromHeaders(headers: List<Pair<String, String>>): Body {
         sentAt = first("Date")?.let(::sentAtFrom),
         received = values("Received"),
         serverVerdicts = VERDICT_HEADERS.mapNotNull { name -> first(name)?.let { name to it } }.toMap(),
+        deliveredTo = values("Delivered-To").flatMap(::addressesFrom),
+        originalTo = values("X-Original-To").flatMap(::addressesFrom),
     )
 }
 

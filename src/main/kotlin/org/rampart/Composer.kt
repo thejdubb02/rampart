@@ -89,6 +89,7 @@ import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 /**
  * A message on its way out, in the terms the writer used: addresses as they typed them,
@@ -176,6 +177,17 @@ data class Draft(
     val sign: Boolean = false,
     /** Encrypt to every recipient and to the sender. Never sent readable instead; see SealedSend.kt. */
     val encrypt: Boolean = false,
+    /**
+     * Who the message being answered was addressed to, and where it was delivered.
+     *
+     * The composer reads these to warn when From is a different address. Empty on
+     * a new message. Not part of what is sent: the original already carries them,
+     * and repeating them on the way out would be writing headers nobody asked for.
+     */
+    @Transient val sourceTo: List<String> = emptyList(),
+    @Transient val sourceCc: List<String> = emptyList(),
+    @Transient val sourceDeliveredTo: List<String> = emptyList(),
+    @Transient val sourceOriginalTo: List<String> = emptyList(),
 ) {
     val recipients: List<String> get() = (parseAddressList(to) + parseAddressList(cc)).map { it.email }
 }
@@ -240,7 +252,7 @@ internal fun replyTo(
         inReplyTo = answered,
         references = body?.references.orEmpty() + listOfNotNull(answered),
         replying = true,
-    )
+    ).withAnswered(body)
 }
 
 /**
@@ -328,7 +340,7 @@ internal fun forwardOf(summary: Summary, body: Body?, from: String): Draft {
             append("Subject: ${summary.subject.trim()}\n\n")
             append(plainTextOf(body))
         },
-    )
+    ).withAnswered(body)
 }
 
 /**
@@ -338,11 +350,29 @@ internal fun forwardOf(summary: Summary, body: Body?, from: String): Draft {
  * text on the page as well is the forward this is the alternative to. The subject follows
  * [forwardedSubject], so a message that is already a forward is not labelled twice.
  */
-internal fun forwardAsAttachment(summary: Summary, from: String, file: Attachment): Draft = Draft(
+internal fun forwardAsAttachment(
+    summary: Summary,
+    from: String,
+    file: Attachment,
+    source: Body? = null,
+): Draft = Draft(
     from = from,
     subject = forwardedSubject(summary.subject),
     body = "",
     attachments = listOf(file),
+).withAnswered(source)
+
+/**
+ * Keeps who [body] was addressed to on the draft the composer opens.
+ *
+ * The warning is decided later, once From can still be changed, so the headers
+ * have to survive that far. They are not part of the message that gets sent.
+ */
+private fun Draft.withAnswered(body: Body?): Draft = copy(
+    sourceTo = body?.to.orEmpty(),
+    sourceCc = body?.cc.orEmpty(),
+    sourceDeliveredTo = body?.deliveredTo.orEmpty(),
+    sourceOriginalTo = body?.originalTo.orEmpty(),
 )
 
 /** The message as text, whichever way it arrived, so a quote never carries markup. */
@@ -425,6 +455,14 @@ internal fun Composer(
     trackingDefaultOn: Boolean = false,
     /** Every address owned by this account, which must never receive a tracked message. */
     ownAddresses: Collection<String> = emptyList(),
+    /**
+     * Every identity of every signed-in account.
+     *
+     * The From menu is only this account. The warning is not: a message in All
+     * inboxes can have been delivered to a different account than the one the
+     * reply is open on.
+     */
+    signedInAddresses: Collection<String> = emptyList(),
     /** Thread messages context for AI compose replies. */
     replyContext: List<Turn> = emptyList(),
     /** Whose mailbox this is, for [Assistant.whyNot]'s denied-folder check. */
@@ -649,6 +687,50 @@ internal fun Composer(
         color = MaterialTheme.colorScheme.surfaceBright,
     ) {
         Column(Modifier.fillMaxSize()) {
+            /*
+             * A reply from the wrong address is easy to send and hard to undo. The
+             * strip names the address the message came to and can put From back.
+             * It never blocks Send.
+             */
+            val accountNote = replyAccountWarning(
+                to = initial.sourceTo,
+                cc = initial.sourceCc,
+                deliveredTo = initial.sourceDeliveredTo,
+                originalTo = initial.sourceOriginalTo,
+                own = signedInAddresses,
+                from = draft.from,
+            )
+            if (accountNote != null) {
+                val canSwitch = identities.any { it.email.equals(accountNote.cameTo, ignoreCase = true) }
+                Row(
+                    Modifier.fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.secondaryContainer)
+                        .padding(start = 20.dp, end = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        accountNote.line,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (canSwitch) {
+                        TextButton(
+                            onClick = {
+                                draft = withFrom(
+                                    draft,
+                                    accountNote.cameTo,
+                                    identities,
+                                    Settings.signatureAboveQuote(),
+                                )
+                            },
+                            enabled = !sending && !attaching,
+                        ) { Text(accountNote.switchLabel, maxLines = 1) }
+                    }
+                }
+            }
             // A title bar, a shade off the panel it caps, the way a compose window has one
             // in every webmail. It is what tells you where the thing you are writing starts.
             Row(

@@ -4016,7 +4016,7 @@ private fun Reader(
                     val path = dir.resolve(name)
                     Files.writeString(path, raw)
                     val uploaded = session(key).jmap.upload(path)
-                    forwardAsAttachment(message, from, uploaded.copy(type = "message/rfc822"))
+                    forwardAsAttachment(message, from, uploaded.copy(type = "message/rfc822"), letter)
                 } finally {
                     runCatching { dir.toFile().deleteRecursively() }
                 }
@@ -4842,6 +4842,7 @@ private fun Reader(
             trackingReady = trackingServer.isNotBlank(),
             trackingDefaultOn = key?.let(Settings::trackNewMail) ?: Settings.trackNewMail(),
             ownAddresses = accountIdentities.map { it.email },
+            signedInAddresses = identities.values.flatten().map { it.email },
             sendExtensions = sessions.firstOrNull { it.key == key }?.jmap?.submissionExtensions.orEmpty(),
             onSend = { draft ->
                 val account = key?.let(::session)

@@ -232,6 +232,16 @@ data class Body(
      * the spam filter's findings and any virus scanner's result.
      */
     val serverVerdicts: Map<String, String> = emptyMap(),
+    /**
+     * Delivered-To, when the server wrote one. The mailbox the message was
+     * handed to, which a mailing list does not put on To.
+     */
+    val deliveredTo: List<String> = emptyList(),
+    /**
+     * X-Original-To, the same fact under the name some other servers use.
+     * Read only when [deliveredTo] did not name one of our addresses.
+     */
+    val originalTo: List<String> = emptyList(),
 )
 
 /**
@@ -670,6 +680,10 @@ internal class Jmap private constructor(
                 add("htmlBody"); add("textBody"); add("bodyValues")
                 add("messageId"); add("references"); add("header:In-Reply-To:asMessageIds")
                 add("to"); add("cc"); add("replyTo")
+                // The mailbox a list or an alias actually handed the message to, when
+                // To names the list. A header nobody asks for is not sent.
+                add("header:Delivered-To:asText:all")
+                add("header:X-Original-To:asText:all")
                 // Asked for by name. These are not JMAP properties, they are ordinary
                 // headers, and a header nobody asks for is not sent.
                 add("header:List-Unsubscribe:asText")
@@ -718,6 +732,8 @@ internal class Jmap private constructor(
          */
         fun ids(field: String) = stringsIn(email[field])
         fun addresses(field: String) = addressesIn(email[field])
+        fun headerAddresses(field: String) =
+            stringsIn(email[field]).flatMap { header -> parseAddressList(header).map { it.email } }
         val body = Body(
             html = join("htmlBody", wantedType = "text/html"),
             text = join("textBody"),
@@ -738,6 +754,8 @@ internal class Jmap private constructor(
             serverVerdicts = VERDICT_HEADERS.mapNotNull { name ->
                 stringsIn(email["header:$name:asText:all"]).firstOrNull()?.let { name to it }
             }.toMap(),
+            deliveredTo = headerAddresses("header:Delivered-To:asText:all"),
+            originalTo = headerAddresses("header:X-Original-To:asText:all"),
         )
         val attachments = attachmentsIn(email)
         val calendar = attachments.firstOrNull {
