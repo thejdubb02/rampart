@@ -19,6 +19,40 @@ import kotlin.test.assertTrue
 class TrackingTest {
 
     @Test
+    fun `click rewriting leaves non-web and quoted links alone`() {
+        val source = """<p><a href="https://example.org/a?q=1">web</a> <a href="mailto:a@example.org">mail</a> """ +
+            """<a href="tel:+15551212">phone</a></p><blockquote><a href="https://old.example">old</a></blockquote>"""
+        val rewritten = rewriteTrackedLinks(source, "https://companion.example/", "token")
+        assertEquals(listOf("https://example.org/a?q=1"), rewritten.originals)
+        assertTrue(rewritten.html.contains("href=\"https://companion.example/c/token/0\""))
+        assertTrue(rewritten.html.contains("href=\"mailto:a@example.org\""))
+        assertTrue(rewritten.html.contains("href=\"tel:+15551212\""))
+        assertTrue(rewritten.html.contains("href=\"https://old.example\""))
+    }
+
+    @Test
+    fun `rewriting the html part never changes the plain part`() {
+        val draft = Draft(from = "a@example.org", body = "Visit [the site](https://example.org)")
+        val plain = draft.body
+        rewriteTrackedLinks(htmlPartOf(draft)!!, "https://companion.example", "token")
+        assertEquals("Visit [the site](https://example.org)", plain)
+    }
+
+    @Test
+    fun `timeline keeps events newest first and counts only person opens`() {
+        val tracked = Tracked("id", "message", "", "susan@example.org", "Audit", Instant.ofEpochMilli(0))
+        val events = listOf(
+            Fetch("id", Instant.ofEpochMilli(30_000), "Mozilla Firefox", "", "person"),
+            Fetch("id", Instant.ofEpochMilli(40_000), "scanner", "", "security_scanner"),
+            Fetch("id", Instant.ofEpochMilli(50_000), "Mozilla Firefox", "", "person", "click", "https://example.org"),
+        )
+        val timeline = trackingTimeline(tracked, events)
+        assertEquals(1, timeline.reads)
+        assertTrue(timeline.clicked)
+        assertEquals(50_000, timeline.events.first().at.toEpochMilli())
+    }
+
+    @Test
     fun `server classifications have plain language labels`() {
         val fetch = Fetch("id", Instant.EPOCH, "", "")
         assertEquals("Read", classificationText(fetch.copy(classification = "person")))

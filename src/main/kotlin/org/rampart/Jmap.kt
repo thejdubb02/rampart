@@ -153,6 +153,8 @@ data class Summary(
     val threadId: String = "",
     /** How many messages are in that conversation, counting this one. */
     val threadSize: Int = 1,
+    /** The RFC Message-ID, used to join a Sent row to local tracking history. */
+    val messageId: String = "",
 )
 
 /**
@@ -1853,7 +1855,7 @@ private class PushListener(
 }
 
 private val emailGetProperties =
-    listOf("id", "threadId", "from", "subject", "receivedAt", "preview", "keywords")
+    listOf("id", "threadId", "from", "subject", "receivedAt", "preview", "keywords", "messageId")
 
 private fun jsonToSummary(o: JsonObject): Summary = Summary(
     id = o["id"].require("id"),
@@ -1868,6 +1870,7 @@ private fun jsonToSummary(o: JsonObject): Summary = Summary(
     flagged = o["keywords"]?.jsonObject?.containsKey("\$flagged") == true,
     keywords = o["keywords"]?.jsonObject?.keys.orEmpty(),
     threadId = o["threadId"]?.str().orEmpty(),
+    messageId = (o["messageId"] as? JsonArray)?.firstOrNull()?.str().orEmpty(),
 )
 
 private fun kotlinx.serialization.json.JsonElement.str(): String? = jsonPrimitive.contentOrNull

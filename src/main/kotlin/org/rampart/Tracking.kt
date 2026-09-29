@@ -4,6 +4,7 @@ import java.security.SecureRandom
 import java.time.Duration
 import java.time.Instant
 import java.util.Base64
+import org.jsoup.Jsoup
 
 /**
  * Knowing whether a message was read, and being honest about what that means.
@@ -32,7 +33,43 @@ internal data class Tracked(
     val recipient: String,
     val subject: String,
     val sentAt: Instant,
+    val repliedAt: Instant? = null,
 )
+
+internal data class TrackingTimeline(
+    val recipient: String,
+    val firstRead: Instant?,
+    val lastRead: Instant?,
+    val reads: Int,
+    val clicked: Boolean,
+    val repliedAt: Instant?,
+    val events: List<Fetch>,
+)
+
+internal fun trackingTimeline(tracked: Tracked, events: List<Fetch>): TrackingTimeline {
+    val reads = events.filter { it.event == "open" && classify(it, tracked.sentAt) == Opened.READ }
+    return TrackingTimeline(
+        recipient = tracked.recipient,
+        firstRead = reads.minOfOrNull { it.at },
+        lastRead = reads.maxOfOrNull { it.at },
+        reads = reads.size,
+        clicked = events.any { it.event == "click" && classify(it, tracked.sentAt) == Opened.READ },
+        repliedAt = tracked.repliedAt,
+        events = events.sortedByDescending { it.at },
+    )
+}
+
+internal fun trackingBadgesOf(rows: List<Pair<Tracked, List<Fetch>>>): Map<String, String> =
+    rows.groupBy { it.first.messageId }.mapValues { (_, grouped) ->
+        val timelines = grouped.map { trackingTimeline(it.first, it.second) }
+        val reads = timelines.sumOf { it.reads }
+        when {
+            timelines.any { it.repliedAt != null } -> "Replied"
+            timelines.any { it.clicked } -> "Clicked"
+            reads > 0 -> "Read ${reads}x"
+            else -> "Tracked"
+        }
+    }
 
 /** One fetch of a tracked pixel, as the companion recorded it. */
 internal data class Fetch(
@@ -41,10 +78,12 @@ internal data class Fetch(
     val userAgent: String,
     val network: String,
     val classification: String = "",
+    val event: String = "open",
+    val url: String = "",
 )
 
 internal fun classificationText(fetch: Fetch): String = when (fetch.classification) {
-    "person" -> "Read"
+    "person" -> if (fetch.event == "click") "Clicked by a person" else "Read"
     "apple_privacy" -> "Apple privacy download, may not have been read"
     "security_scanner" -> "Security scanner, not a person"
     "gmail_proxy" -> "Gmail, first open only"
@@ -130,7 +169,7 @@ internal data class Opens(val reads: Int, val automatic: Int, val firstRead: Ins
 }
 
 internal fun opensOf(fetches: List<Fetch>, sentAt: Instant): Opens {
-    val judged = fetches.map { it to classify(it, sentAt) }
+    val judged = fetches.filter { it.event == "open" }.map { it to classify(it, sentAt) }
     val reads = judged.filter { it.second == Opened.READ }
     return Opens(
         reads = reads.size,
@@ -157,7 +196,9 @@ internal fun opensOf(fetches: List<Fetch>, sentAt: Instant): Opens {
 internal fun opensToAnnounce(fetches: List<Fetch>, tracked: Map<String, Tracked>): List<Tracked> {
     val seen = HashSet<String>()
     return fetches.sortedBy { it.at }.mapNotNull { fetch ->
+        if (fetch.event != "open") return@mapNotNull null
         val row = tracked[fetch.id] ?: return@mapNotNull null
+        if (row.repliedAt != null) return@mapNotNull null
         if (classify(fetch, row.sentAt) != Opened.READ) return@mapNotNull null
         if (!seen.add(row.id)) return@mapNotNull null
         row
@@ -209,6 +250,25 @@ internal fun pixelHtml(base: String, id: String): String =
 /** The address the pixel is fetched from. */
 internal fun pixelUrl(base: String, id: String): String =
     base.trim().trimEnd('/') + "/o/" + id + ".gif"
+
+internal data class RewrittenLinks(val html: String, val originals: List<String>)
+
+/** Rewrites web destinations outside quoted replies and leaves every other href alone. */
+internal fun rewriteTrackedLinks(html: String, base: String, id: String): RewrittenLinks {
+    val document = Jsoup.parseBodyFragment(html)
+    document.outputSettings().prettyPrint(false)
+    val originals = mutableListOf<String>()
+    document.select("a[href]").forEach { anchor ->
+        if (anchor.parents().any { it.tagName().equals("blockquote", ignoreCase = true) }) return@forEach
+        val original = anchor.attr("href").trim()
+        val scheme = runCatching { java.net.URI(original).scheme?.lowercase() }.getOrNull()
+        if (scheme !in setOf("http", "https")) return@forEach
+        val number = originals.size
+        originals += original
+        anchor.attr("href", base.trim().trimEnd('/') + "/c/$id/$number")
+    }
+    return RewrittenLinks(document.body().html(), originals)
+}
 
 /**
  * Whether a base URL can carry a pixel at all.

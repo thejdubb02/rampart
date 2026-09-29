@@ -62,6 +62,8 @@ internal object TrackingClient {
                 userAgent = o["userAgent"]?.jsonPrimitive?.content.orEmpty(),
                 network = o["network"]?.jsonPrimitive?.content.orEmpty(),
                 classification = o["classification"]?.jsonPrimitive?.content.orEmpty(),
+                event = o["event"]?.jsonPrimitive?.content ?: "open",
+                url = o["url"]?.jsonPrimitive?.content.orEmpty(),
             )
         }
     }
@@ -78,6 +80,32 @@ internal object TrackingClient {
             HttpResponse.BodyHandlers.discarding(),
         )
         if (response.statusCode() !in 200..299) throw TrackingError("The tracking server did not accept the label.")
+    }
+
+    fun registerLinks(base: String, token: String, id: String, sentAt: Instant, links: List<String>) {
+        if (links.isEmpty()) return
+        val body = """{"id":${jsonString(id)},"sentAt":${sentAt.toEpochMilli()},"links":""" +
+            links.joinToString(prefix = "[", postfix = "]") { jsonString(it) } + "}"
+        val response = http.send(
+            HttpRequest.newBuilder(URI.create(base.trim().trimEnd('/') + "/links"))
+                .header("Authorization", "Bearer $token")
+                .header("Content-Type", "application/json")
+                .timeout(Duration.ofSeconds(10))
+                .POST(HttpRequest.BodyPublishers.ofString(body)).build(),
+            HttpResponse.BodyHandlers.discarding(),
+        )
+        if (response.statusCode() !in 200..299) throw TrackingError("The tracking server did not accept the links.")
+    }
+
+    fun stopAlerts(base: String, token: String, id: String) {
+        val response = http.send(
+            HttpRequest.newBuilder(URI.create(base.trim().trimEnd('/') + "/replied"))
+                .header("Authorization", "Bearer $token").header("Content-Type", "application/json")
+                .timeout(Duration.ofSeconds(10))
+                .POST(HttpRequest.BodyPublishers.ofString("""{"id":${jsonString(id)}}""")).build(),
+            HttpResponse.BodyHandlers.discarding(),
+        )
+        if (response.statusCode() !in 200..299) throw TrackingError("The tracking server did not accept the reply.")
     }
 
     // The serialiser's own escaping, so a label with a line break or a tab is still valid JSON.

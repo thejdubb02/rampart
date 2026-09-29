@@ -392,4 +392,17 @@ class StoreTest {
         assertTrue(a.all { it in "0123456789abcdef" })
         assertFalse(a == b, "two generated keys were the same")
     }
+
+    @Test
+    fun `a recipient reply marks the matching tracked message only`() = withStore { store ->
+        store.track(Tracked("one", "message-one", "", "susan@example.org", "Audit", Instant.ofEpochMilli(1)))
+        store.track(Tracked("two", "message-two", "", "other@example.org", "Other", Instant.ofEpochMilli(2)))
+        assertEquals(
+            listOf("one"),
+            store.markReplied("susan@example.org", listOf("message-one"), Instant.ofEpochMilli(10)),
+        )
+        val rows = store.tracking().associateBy { it.first.id }
+        assertEquals(Instant.ofEpochMilli(10), rows.getValue("one").first.repliedAt)
+        assertNull(rows.getValue("two").first.repliedAt)
+    }
 }

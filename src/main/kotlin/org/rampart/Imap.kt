@@ -810,6 +810,7 @@ internal class Imap private constructor(
             seen = flags.contains(Flags.Flag.SEEN),
             flagged = flags.contains(Flags.Flag.FLAGGED),
             keywords = runCatching { flags.userFlags.toSet() }.getOrDefault(emptySet()),
+            messageId = runCatching { message.getHeader("Message-ID")?.firstOrNull()?.trim('<', '>') }.getOrNull().orEmpty(),
         )
     }
 
@@ -864,6 +865,7 @@ private val summaryFields = FetchProfile().apply {
     add(FetchProfile.Item.ENVELOPE)
     add(FetchProfile.Item.FLAGS)
     add(UIDFolder.FetchProfileItem.UID)
+    add("Message-ID")
 }
 
 /** The UID half, or -1 when this is not one of ours, which finds no message. */

@@ -165,5 +165,6 @@ class ChatTest {
         override fun markRead(ids: List<String>, read: Boolean) = ids.size
         override fun tag(ids: List<String>, keyword: String, on: Boolean) = ids.size
         override fun draftReply(id: String, text: String) = true
+        override fun trackingToday() = "No person opens or clicks were recorded today."
     }
 }

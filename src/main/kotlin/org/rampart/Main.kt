@@ -1329,6 +1329,9 @@ private fun Reader(
     var messageScale by remember { mutableStateOf(Settings.messageScale()) }
     var chatOpen by remember { mutableStateOf(false) }
     var said by remember { mutableStateOf<List<Said>>(emptyList()) }
+    var trackingBadges by remember(sessions) {
+        mutableStateOf(trackingBadgesOf(sessions.flatMap { it.store?.tracking().orEmpty() }))
+    }
     var chatThinking by remember { mutableStateOf(false) }
     // Told by the composer and the filter box whenever either has a request of its own
     // in flight, so the sidebar's Rook button can animate for those too, not only chat.
@@ -2635,6 +2638,21 @@ private fun Reader(
             // A stored copy that still matches the server opens with no further fetch.
             // loadCard is what decides, and it builds the page before the card is shown.
             loadCard(key, message.id, force = true)
+            cardFor(message).body?.let { opened ->
+                val answered = opened.inReplyTo + opened.references
+                if (answered.isNotEmpty()) {
+                    val ids = withContext(Dispatchers.IO) {
+                        session(key).store?.markReplied(message.fromEmail, answered, Instant.now()).orEmpty()
+                    }
+                    if (ids.isNotEmpty()) {
+                        val base = Settings.trackingServer()
+                        val token = withContext(Dispatchers.IO) { Secrets.trackingToken() }
+                        if (base.isNotBlank() && !token.isNullOrBlank()) withContext(Dispatchers.IO) {
+                            ids.forEach { runCatching { TrackingClient.stopAlerts(base, token, it) } }
+                        }
+                    }
+                }
+            }
 
             /*
              * The meeting, when the open did not already bring it back.
@@ -3046,6 +3064,7 @@ private fun Reader(
                         TrackingClient.since(trackingServer, token, since)
                     }
                     if (found.isNotEmpty()) {
+                        val rookActivity = mutableListOf<String>()
                         val notices = withContext(Dispatchers.IO) {
                             buildList {
                                 sessions.forEach { open ->
@@ -3053,10 +3072,19 @@ private fun Reader(
                                         val store = open.store ?: return@runCatching
                                         val inserted = store.recordFetches(found)
                                         if (inserted.isEmpty()) return@runCatching
+                                        val tracked = store.trackedByIds(inserted.map { it.id })
+                                        inserted.filter { fetch ->
+                                            val row = tracked[fetch.id]
+                                            row != null && row.repliedAt == null && classify(fetch, row.sentAt) == Opened.READ
+                                        }.forEach { fetch ->
+                                            val row = tracked.getValue(fetch.id)
+                                            val action = if (fetch.event == "click") "clicked a link in" else "opened"
+                                            rookActivity += "${row.recipient} $action ${row.subject.ifBlank { "your email" }}."
+                                        }
                                         openText(
                                             opensToAnnounce(
                                                 inserted,
-                                                store.trackedByIds(inserted.map { it.id }),
+                                                tracked,
                                             ),
                                         )?.let { add(it) }
                                     }
@@ -3064,6 +3092,8 @@ private fun Reader(
                             }
                         }
                         if (notifyOnOpen) notices.forEach { (title, body) -> notify(title, body) }
+                        if (rookActivity.isNotEmpty()) said = said + rookActivity.map { Said("assistant", it) }
+                        trackingBadges = trackingBadgesOf(sessions.flatMap { it.store?.tracking().orEmpty() })
                         if (Settings.ntfyTrackedOpen() && !TrackingClient.companionPushes) {
                             notices.forEach { (title, body) -> phoneAlert(title, body) }
                         }
@@ -3102,21 +3132,28 @@ private fun Reader(
     ): Result<String?> = tried {
         val trackingBase = Settings.trackingServer()
         var tracked: Tracked? = null
-        val outgoing = if (!draft.tracked || trackingBase.isBlank()) {
+        var clickLinks: List<String> = emptyList()
+        val outgoing = if ((!draft.tracked && !draft.clickTracked) || trackingBase.isBlank()) {
             draft
         } else {
             val id = newTrackingId()
+            val sentAt = Instant.now()
+            val rewritten = if (draft.clickTracked) {
+                htmlPartOf(draft)?.let { rewriteTrackedLinks(it, trackingBase, id) }
+            } else null
             draft.copy(
-                trackingPixel = pixelHtml(trackingBase, id),
+                html = rewritten?.html ?: draft.html,
+                trackingPixel = if (draft.tracked) pixelHtml(trackingBase, id) else "",
                 messageId = newTrackingId() + "@" + (domainOf(identity.email).ifBlank { "rampart.invalid" }),
             ).also { ready ->
+                clickLinks = rewritten?.originals.orEmpty()
                 tracked = Tracked(
                     id = id,
                     messageId = ready.messageId.orEmpty(),
                     account = key,
                     recipient = draft.recipients.firstOrNull().orEmpty(),
                     subject = draft.subject,
-                    sentAt = Instant.now(),
+                    sentAt = sentAt,
                 )
             }
         }
@@ -3126,6 +3163,10 @@ private fun Reader(
         var cleanupDraft: String? = null
         val notice = Diagnostics.time(Metric.SEND_COMPOSE_TO_SENT) {
             withContext(Dispatchers.IO) {
+                if (clickLinks.isNotEmpty()) {
+                    val token = Secrets.trackingToken() ?: throw TrackingError("The tracking token is missing.")
+                    TrackingClient.registerLinks(trackingBase, token, tracked!!.id, tracked!!.sentAt, clickLinks)
+                }
                 val filed = account.jmap.send(outgoing, identity, draftsId, sentId)
                 // Written down only once it has actually gone. A tracked id for a
                 // message that failed to send would sit in the list forever waiting
@@ -3170,6 +3211,7 @@ private fun Reader(
         draft.recipients.firstOrNull()?.let {
             Settings.rememberTracking(trackingDomain(it), draft.tracked)
         }
+        trackingBadges = trackingBadgesOf(sessions.flatMap { it.store?.tracking().orEmpty() })
         var book = books[key] ?: AddressBook.read(AddressBook.file(key))
         // Somebody new also goes on the server's address book, so phones see them too.
         scope.launch {
@@ -3212,27 +3254,38 @@ private fun Reader(
     ): Result<DelayedSend> = tried {
         val trackingBase = Settings.trackingServer()
         var tracked: Tracked? = null
-        val outgoing = if (!draft.tracked || trackingBase.isBlank()) {
+        var clickLinks: List<String> = emptyList()
+        val outgoing = if ((!draft.tracked && !draft.clickTracked) || trackingBase.isBlank()) {
             draft
         } else {
             val id = newTrackingId()
+            val sentAt = Instant.now()
+            val rewritten = if (draft.clickTracked) {
+                htmlPartOf(draft)?.let { rewriteTrackedLinks(it, trackingBase, id) }
+            } else null
             draft.copy(
-                trackingPixel = pixelHtml(trackingBase, id),
+                html = rewritten?.html ?: draft.html,
+                trackingPixel = if (draft.tracked) pixelHtml(trackingBase, id) else "",
                 messageId = newTrackingId() + "@" + (domainOf(identity.email).ifBlank { "rampart.invalid" }),
             ).also { ready ->
+                clickLinks = rewritten?.originals.orEmpty()
                 tracked = Tracked(
                     id = id,
                     messageId = ready.messageId.orEmpty(),
                     account = key,
                     recipient = draft.recipients.firstOrNull().orEmpty(),
                     subject = draft.subject,
-                    sentAt = Instant.now(),
+                    sentAt = sentAt,
                 )
             }
         }
         var cleanupDraft: String? = null
         val delayed = Diagnostics.time(Metric.SEND_COMPOSE_TO_SENT) {
             withContext(Dispatchers.IO) {
+                if (clickLinks.isNotEmpty()) {
+                    val token = Secrets.trackingToken() ?: throw TrackingError("The tracking token is missing.")
+                    TrackingClient.registerLinks(trackingBase, token, tracked!!.id, tracked!!.sentAt, clickLinks)
+                }
                 val made = account.jmap.sendDelayed(outgoing, identity, draftsId, sentId, holdUntil)
                 tracked?.let { account.store?.track(it) }
                 val cleanup = draftId?.let { id ->
@@ -3258,6 +3311,7 @@ private fun Reader(
         draft.recipients.firstOrNull()?.let {
             Settings.rememberTracking(trackingDomain(it), draft.tracked)
         }
+        trackingBadges = trackingBadgesOf(sessions.flatMap { it.store?.tracking().orEmpty() })
         var book = books[key] ?: AddressBook.read(AddressBook.file(key))
         draft.recipients.forEach { book = noted(book, it) }
         books = books + (key to book)
@@ -3586,6 +3640,17 @@ private fun Reader(
                 write(key, reply.copy(body = text.trim() + "\n\n" + reply.body))
             }
             return true
+        }
+
+        override fun trackingToday(): String {
+            val start = java.time.LocalDate.now().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant()
+            val lines = session(key).store?.tracking().orEmpty().flatMap { (tracked, events) ->
+                events.filter { it.at >= start && classify(it, tracked.sentAt) == Opened.READ }.map { event ->
+                    val action = if (event.event == "click") "clicked ${event.url}" else "opened"
+                    "${tracked.recipient} $action ${tracked.subject.ifBlank { "(no subject)" }} at ${WHEN.format(event.at)}"
+                }
+            }
+            return if (lines.isEmpty()) "No person opens or clicks were recorded today." else lines.joinToString("\n")
         }
     }
 
@@ -4212,6 +4277,9 @@ private fun Reader(
             body = card.body,
             accountKey = key.orEmpty(),
             sentBy = if (ours.any { it.equals(cardSummary.fromEmail, ignoreCase = true) }) sessions.firstOrNull { it.key == key }?.jmap else null,
+            tracking = key?.let { account ->
+                session(account).store?.tracking()?.filter { it.first.messageId in card.body?.messageId.orEmpty() }
+            }.orEmpty(),
             onReply = { all ->
                 sendError = null; sendDetail = null
                 val account = key ?: writingAccount()
@@ -5311,6 +5379,7 @@ private fun Reader(
                     onOrder = { order = it; Settings.setOrder(it) },
                     rowActions = rowActions,
                     scheduled = scheduledSends.associate { it.draftId to it.sendAt },
+                    trackingBadges = trackingBadges,
                     filters = quick,
                     onFilters = { next ->
                         quick = next
@@ -6974,6 +7043,8 @@ internal fun MessageList(
     rowActions: RowActions = RowActions(),
     /** Drafts waiting for a time, by message id, as epoch millis. */
     scheduled: Map<String, Long> = emptyMap(),
+    /** RFC Message-ID to the compact tracking state shown on Sent rows. */
+    trackingBadges: Map<String, String> = emptyMap(),
     /** Dragging a row onto a tag. See [MessageRow]. */
     onDrag: ((Summary, Offset?) -> Unit)? = null,
     /**
@@ -7152,6 +7223,7 @@ internal fun MessageList(
                             actions = rowActions,
                             showHover = showHover,
                             scheduledAt = scheduled[message.id],
+                            trackingBadge = trackingBadges[message.messageId],
                             onDrag = onDrag,
                             onSelect = onSelect,
                         )
@@ -7250,6 +7322,7 @@ private fun MessageRow(
     showHover: Boolean = false,
     /** When this draft is due to be sent, or null when it is an ordinary message. */
     scheduledAt: Long? = null,
+    trackingBadge: String? = null,
     /**
      * Dragging the row onto a tag. Called with where the pointer is, in window
      * coordinates, and with null when the drag ends.
@@ -7378,6 +7451,10 @@ private fun MessageRow(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
+                trackingBadge?.let {
+                    Spacer(Modifier.width(8.dp))
+                    Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                }
                 accountLabel?.let {
                     Spacer(Modifier.width(8.dp))
                     Text(
@@ -7773,6 +7850,8 @@ internal fun Message(
     accountKey: String = summary?.account.orEmpty(),
     /** The account that sent this, when it was one of the reader's own. See [DeliveryLine]. */
     sentBy: MailBackend? = null,
+    /** Tracking history for this sent message, grouped by recipient. */
+    tracking: List<Pair<Tracked, List<Fetch>>> = emptyList(),
     onReply: (all: Boolean) -> Unit = {},
     replyAll: Boolean = false,
     /** Why the message would not open, when it would not. */
@@ -8241,6 +8320,11 @@ internal fun Message(
                             color = MaterialTheme.colorScheme.outline,
                             modifier = Modifier.padding(bottom = 12.dp),
                         )
+                    }
+
+                    if (tracking.isNotEmpty()) {
+                        TrackingSection(tracking)
+                        Spacer(Modifier.height(14.dp))
                     }
 
                     // Only on the card the conversation opened on: this is a paragraph
@@ -8897,6 +8981,38 @@ private fun SummaryCard(summarise: SummariseActions) {
  * exists to avoid. So the preview is left out rather than drawn as a gap, and the row is
  * just the name and the date, which is still a row worth reading.
  */
+@Composable
+private fun TrackingSection(rows: List<Pair<Tracked, List<Fetch>>>) {
+    Column(
+        Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small)
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+            .padding(12.dp),
+    ) {
+        Text("Tracking", style = MaterialTheme.typography.titleSmall)
+        rows.forEach { (tracked, events) ->
+            val timeline = trackingTimeline(tracked, events)
+            Spacer(Modifier.height(8.dp))
+            Text(timeline.recipient.ifBlank { "Recipient" }, fontWeight = FontWeight.SemiBold)
+            val summary = buildList {
+                timeline.firstRead?.let { add("First read ${WHEN.format(it)}") }
+                timeline.lastRead?.let { add("Last read ${WHEN.format(it)}") }
+                if (timeline.reads > 0) add("${timeline.reads} read${if (timeline.reads == 1) "" else "s"}")
+                if (timeline.clicked) add("Clicked")
+                timeline.repliedAt?.let { add("Replied ${WHEN.format(it)}") }
+            }.ifEmpty { listOf("No activity yet") }
+            Text(summary.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+            timeline.events.forEach { event ->
+                val action = if (event.event == "click") "Clicked ${event.url}" else "Opened"
+                Text(
+                    "${WHEN.format(event.at)}  $action. ${classificationText(event)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun ThreadRow(message: Summary, onClick: () -> Unit) {
     val (who, _) = displaySender(message.from, message.fromEmail)

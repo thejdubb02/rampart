@@ -158,6 +158,8 @@ data class Draft(
      * is minted at send time, so the composer can carry the decision around without one.
      */
     val tracked: Boolean = false,
+    /** Whether web links in this message use the companion redirect. Off for every new draft. */
+    val clickTracked: Boolean = false,
     /**
      * Whether the message may only travel over encrypted connections (RFC 8689 REQUIRETLS).
      *
@@ -808,6 +810,22 @@ internal fun Composer(
                                 trackingReady -> MaterialTheme.colorScheme.onSurfaceVariant
                                 // Muted further than an ordinary button, so it reads as
                                 // unavailable before it is pressed rather than after.
+                                else -> MaterialTheme.colorScheme.outline
+                            },
+                        )
+                    }
+                    TextButton(
+                        onClick = {
+                            if (trackingReady) draft = draft.copy(clickTracked = !draft.clickTracked)
+                            else needsTracker = !needsTracker
+                        },
+                    ) {
+                        Text(
+                            if (draft.clickTracked && trackingReady) "Clicks on" else "Track clicks",
+                            maxLines = 1,
+                            color = when {
+                                draft.clickTracked && trackingReady -> MaterialTheme.colorScheme.primary
+                                trackingReady -> MaterialTheme.colorScheme.onSurfaceVariant
                                 else -> MaterialTheme.colorScheme.outline
                             },
                         )

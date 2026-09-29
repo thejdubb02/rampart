@@ -69,6 +69,8 @@ internal object Chat {
         {"tool":"tag","args":{"ids":["..."],"keyword":"word","on":true}}
         {"tool":"draft_reply","args":{"id":"...","text":"the reply"}}
           Opens a reply in the composer for the person to read and send. You never send.
+        {"tool":"tracking_today","args":{}}
+          Read-only. Lists person opens and clicks on tracked mail today.
 
         Folders on this account: ${folders.joinToString(", ")}.
 
@@ -132,6 +134,9 @@ internal interface MailTools {
 
     /** Opens the composer on a reply to that message. Never sends. */
     fun draftReply(id: String, text: String): Boolean
+
+    /** Person tracking activity today. This never changes mail or tracking state. */
+    fun trackingToday(): String
 }
 
 /**
@@ -229,6 +234,7 @@ private fun carryOut(asked: Asked, shown: MutableSet<String>, tools: MailTools):
             if (tools.draftReply(id, text("text"))) "The reply is in the composer, unsent."
             else "That reply could not be opened."
         }
+        "tracking_today" -> tools.trackingToday()
         else -> "There is no tool called ${asked.tool}."
     }
 }

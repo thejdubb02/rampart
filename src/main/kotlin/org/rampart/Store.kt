@@ -8,6 +8,7 @@ import java.nio.file.Path
 import java.security.MessageDigest
 import java.sql.Connection
 import java.sql.DriverManager
+import java.time.Instant
 import kotlin.io.path.createDirectories
 import kotlin.io.path.deleteIfExists
 import kotlin.io.path.exists
@@ -181,13 +182,13 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             """
             CREATE TABLE IF NOT EXISTS tracked (
                 id TEXT PRIMARY KEY, messageId TEXT NOT NULL, recipient TEXT NOT NULL,
-                subject TEXT NOT NULL, sentAt INTEGER NOT NULL
+                subject TEXT NOT NULL, sentAt INTEGER NOT NULL, repliedAt INTEGER
             )
             """,
             """
             CREATE TABLE IF NOT EXISTS fetched (
                 id TEXT NOT NULL, at INTEGER NOT NULL, userAgent TEXT NOT NULL, network TEXT NOT NULL,
-                classification TEXT NOT NULL DEFAULT '',
+                classification TEXT NOT NULL DEFAULT '', event TEXT NOT NULL DEFAULT 'open', url TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY (id, at)
             )
             """,
@@ -215,6 +216,12 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             )
             """,
         )
+        val messageColumns = connection.prepareStatement("PRAGMA table_info(message)").use { s ->
+            s.executeQuery().use { rows -> buildList { while (rows.next()) add(rows.getString("name")) } }
+        }
+        if ("messageId" !in messageColumns) connection.createStatement().use {
+            it.execute("ALTER TABLE message ADD COLUMN messageId TEXT NOT NULL DEFAULT ''")
+        }
         // A cache file from before the cap has no used column. CREATE does not add
         // one to a table that already exists, and without it there is no order to
         // evict in. The bytes are disposable, so a missing column is just added.
@@ -231,10 +238,22 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         val fetchedColumns = connection.prepareStatement("PRAGMA table_info(fetched)").use { s ->
             s.executeQuery().use { rows -> buildList { while (rows.next()) add(rows.getString("name")) } }
         }
+        val trackedColumns = connection.prepareStatement("PRAGMA table_info(tracked)").use { s ->
+            s.executeQuery().use { rows -> buildList { while (rows.next()) add(rows.getString("name")) } }
+        }
+        if ("repliedAt" !in trackedColumns) connection.createStatement().use {
+            it.execute("ALTER TABLE tracked ADD COLUMN repliedAt INTEGER")
+        }
         if ("classification" !in fetchedColumns) {
             connection.createStatement().use {
                 it.execute("ALTER TABLE fetched ADD COLUMN classification TEXT NOT NULL DEFAULT ''")
             }
+        }
+        if ("event" !in fetchedColumns) connection.createStatement().use {
+            it.execute("ALTER TABLE fetched ADD COLUMN event TEXT NOT NULL DEFAULT 'open'")
+        }
+        if ("url" !in fetchedColumns) connection.createStatement().use {
+            it.execute("ALTER TABLE fetched ADD COLUMN url TEXT NOT NULL DEFAULT ''")
         }
     }
 
@@ -266,13 +285,14 @@ internal class Store(private val connection: Connection) : AutoCloseable {
     /** Remembers that a message went out tracked. */
     @Synchronized fun track(tracked: Tracked) {
         connection.prepareStatement(
-            "INSERT OR REPLACE INTO tracked (id, messageId, recipient, subject, sentAt) VALUES (?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO tracked (id, messageId, recipient, subject, sentAt, repliedAt) VALUES (?, ?, ?, ?, ?, ?)",
         ).use { s ->
             s.setString(1, tracked.id)
             s.setString(2, tracked.messageId)
             s.setString(3, tracked.recipient)
             s.setString(4, tracked.subject)
             s.setLong(5, tracked.sentAt.toEpochMilli())
+            if (tracked.repliedAt == null) s.setNull(6, java.sql.Types.BIGINT) else s.setLong(6, tracked.repliedAt.toEpochMilli())
             s.executeUpdate()
         }
     }
@@ -295,7 +315,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         if (fetches.isEmpty()) return emptyList()
         val inserted = ArrayList<Fetch>(fetches.size)
         connection.prepareStatement(
-            "INSERT OR IGNORE INTO fetched (id, at, userAgent, network, classification) VALUES (?, ?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO fetched (id, at, userAgent, network, classification, event, url) VALUES (?, ?, ?, ?, ?, ?, ?)",
         ).use { s ->
             fetches.forEach { fetch ->
                 s.setString(1, fetch.id)
@@ -303,6 +323,8 @@ internal class Store(private val connection: Connection) : AutoCloseable {
                 s.setString(3, fetch.userAgent)
                 s.setString(4, fetch.network)
                 s.setString(5, fetch.classification)
+                s.setString(6, fetch.event)
+                s.setString(7, fetch.url)
                 if (s.executeUpdate() > 0) inserted.add(fetch)
             }
         }
@@ -321,7 +343,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         if (ids.isEmpty()) return emptyMap()
         val placeholders = ids.joinToString(",") { "?" }
         return connection.prepareStatement(
-            "SELECT id, messageId, recipient, subject, sentAt FROM tracked WHERE id IN ($placeholders)",
+            "SELECT id, messageId, recipient, subject, sentAt, repliedAt FROM tracked WHERE id IN ($placeholders)",
         ).use { s ->
             ids.forEachIndexed { index, id -> s.setString(index + 1, id) }
             s.executeQuery().use { rows ->
@@ -337,6 +359,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
                                 recipient = rows.getString(3),
                                 subject = rows.getString(4),
                                 sentAt = java.time.Instant.ofEpochMilli(rows.getLong(5)),
+                                repliedAt = rows.getLong(6).let { if (rows.wasNull()) null else java.time.Instant.ofEpochMilli(it) },
                             ),
                         )
                     }
@@ -348,7 +371,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
     /** Everything sent tracked, newest first, with what has been fetched for each. */
     @Synchronized fun tracking(limit: Int = 500): List<Pair<Tracked, List<Fetch>>> {
         val sent = connection.prepareStatement(
-            "SELECT id, messageId, recipient, subject, sentAt FROM tracked ORDER BY sentAt DESC LIMIT ?",
+            "SELECT id, messageId, recipient, subject, sentAt, repliedAt FROM tracked ORDER BY sentAt DESC LIMIT ?",
         ).use { s ->
             s.setInt(1, limit)
             s.executeQuery().use { rows ->
@@ -362,6 +385,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
                                 recipient = rows.getString(3),
                                 subject = rows.getString(4),
                                 sentAt = java.time.Instant.ofEpochMilli(rows.getLong(5)),
+                                repliedAt = rows.getLong(6).let { if (rows.wasNull()) null else java.time.Instant.ofEpochMilli(it) },
                             ),
                         )
                     }
@@ -370,7 +394,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         }
         if (sent.isEmpty()) return emptyList()
         val byId = HashMap<String, MutableList<Fetch>>()
-        connection.prepareStatement("SELECT id, at, userAgent, network, classification FROM fetched ORDER BY at ASC").use { s ->
+        connection.prepareStatement("SELECT id, at, userAgent, network, classification, event, url FROM fetched ORDER BY at ASC").use { s ->
             s.executeQuery().use { rows ->
                 while (rows.next()) {
                     byId.getOrPut(rows.getString(1)) { ArrayList() }.add(
@@ -380,12 +404,32 @@ internal class Store(private val connection: Connection) : AutoCloseable {
                             rows.getString(3),
                             rows.getString(4),
                             rows.getString(5),
+                            rows.getString(6),
+                            rows.getString(7),
                         ),
                     )
                 }
             }
         }
         return sent.map { it to byId[it.id].orEmpty() }
+    }
+
+    /** Marks tracked recipients who answered a Message-ID minted for tracking. */
+    @Synchronized fun markReplied(from: String, references: Collection<String>, at: Instant): List<String> {
+        if (references.isEmpty()) return emptyList()
+        val placeholders = references.joinToString(",") { "?" }
+        val normalized = references.map { it.trim('<', '>') }
+        val ids = connection.prepareStatement(
+            "SELECT id FROM tracked WHERE repliedAt IS NULL AND lower(recipient) = lower(?) AND messageId IN ($placeholders)",
+        ).use { s ->
+            s.setString(1, from); normalized.forEachIndexed { index, id -> s.setString(index + 2, id) }
+            s.executeQuery().use { rows -> buildList { while (rows.next()) add(rows.getString(1)) } }
+        }
+        if (ids.isEmpty()) return emptyList()
+        connection.prepareStatement("UPDATE tracked SET repliedAt = ? WHERE id IN (${ids.joinToString(",") { "?" }})").use { s ->
+            s.setLong(1, at.toEpochMilli()); ids.forEachIndexed { index, id -> s.setString(index + 2, id) }; s.executeUpdate()
+        }
+        return ids
     }
 
     private fun exec(vararg statements: String) {
@@ -415,13 +459,13 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             connection.prepareStatement(
                 """
                 INSERT INTO message (id, mailbox, thread, threadSize, sender, senderEmail,
-                    subject, receivedAt, preview, seen, flagged, keywords)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    subject, receivedAt, preview, seen, flagged, keywords, messageId)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(id) DO UPDATE SET
                     mailbox=excluded.mailbox, thread=excluded.thread, threadSize=excluded.threadSize,
                     sender=excluded.sender, senderEmail=excluded.senderEmail, subject=excluded.subject,
                     receivedAt=excluded.receivedAt, preview=excluded.preview, seen=excluded.seen,
-                    flagged=excluded.flagged, keywords=excluded.keywords
+                    flagged=excluded.flagged, keywords=excluded.keywords, messageId=excluded.messageId
                 """.trimIndent(),
             ).use { s ->
                 messages.forEach { m ->
@@ -437,6 +481,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
                     s.setInt(10, if (m.seen) 1 else 0)
                     s.setInt(11, if (m.flagged) 1 else 0)
                     s.setString(12, m.keywords.joinToString(" "))
+                    s.setString(13, m.messageId)
                     s.addBatch()
                 }
                 s.executeBatch()
@@ -1067,4 +1112,5 @@ private fun summaryOf(rows: java.sql.ResultSet) = Summary(
     keywords = rows.getString("keywords").split(' ').filter { it.isNotBlank() }.toSet(),
     threadId = rows.getString("thread"),
     threadSize = rows.getInt("threadSize"),
+    messageId = rows.getString("messageId"),
 )
