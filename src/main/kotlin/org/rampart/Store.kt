@@ -145,7 +145,8 @@ internal class Store(private val connection: Connection) : AutoCloseable {
      * Whether this file is SQLCipher with a key, which is the one condition under which
      * decrypted mail may be indexed here. See [EncryptedSearch] and [indexDecrypted].
      */
-    @Volatile
+    // Synchronized like every other public member, so StoreTest's lock check holds.
+    @get:Synchronized
     internal var encrypted: Boolean = false
         private set
 
