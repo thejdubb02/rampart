@@ -3973,6 +3973,8 @@ private fun Reader(
                         FolderJob.Rename -> jmap.updateMailbox(ask.mailbox!!.id, name = answer)
                         FolderJob.ToTop -> jmap.updateMailbox(ask.mailbox!!.id, reparent = true)
                         FolderJob.Delete -> jmap.destroyMailbox(ask.mailbox!!.id)
+                        // Handled before a dialog is ever shown, so it never reaches here.
+                        FolderJob.Export -> Unit
                     }
                 }
                 null
@@ -5327,12 +5329,28 @@ private fun Reader(
                 },
             )
             folderAsk?.let { ask ->
-                FolderDialog(
-                    ask = ask,
-                    error = folderError,
-                    onClose = { folderAsk = null; folderError = null },
-                    onConfirm = { answer -> doFolderJob(ask, answer) },
-                )
+                if (ask.job == FolderJob.Export && ask.mailbox != null) {
+                    val key = ask.account
+                    val backend = runCatching { session(key).jmap }.getOrNull()
+                    if (backend != null) {
+                        ExportFolderDialog(
+                            accountName = ask.account,
+                            mailbox = ask.mailbox,
+                            allMailboxes = mailboxes[key].orEmpty(),
+                            backend = backend,
+                            onClose = { folderAsk = null },
+                        )
+                    } else {
+                        folderAsk = null
+                    }
+                } else {
+                    FolderDialog(
+                        ask = ask,
+                        error = folderError,
+                        onClose = { folderAsk = null; folderError = null },
+                        onConfirm = { answer -> doFolderJob(ask, answer) },
+                    )
+                }
             }
             filterFor?.let { message ->
                 // The set kept for every account, so a folder has to exist on all of them.
@@ -5390,6 +5408,7 @@ private fun Reader(
                     },
                     account = currentSettingsAccount,
                     onAccount = { chosenSettingsAccount = it },
+                    backendFor = { key -> runCatching { session(key).jmap }.getOrNull() },
                     identities = identities[currentSettingsAccount].orEmpty(),
                     quotas = quotas,
                     onTintRowsByTag = { tintRows = it },
@@ -6171,7 +6190,7 @@ private fun TnefOverlay(
 internal data class FolderAsk(val account: String, val mailbox: Mailbox?, val job: FolderJob)
 
 /** What a right-click on a folder asked for. Answered by whoever owns the sidebar. */
-internal enum class FolderJob { CreateInside, Rename, ToTop, Delete }
+internal enum class FolderJob { CreateInside, Rename, ToTop, Delete, Export }
 
 /**
  * A hover label for an icon-only button, the row of five at the bottom of the sidebar
@@ -6651,6 +6670,7 @@ private fun FolderDialog(
         FolderJob.Rename -> "Rename ${ask.mailbox?.name.orEmpty()}"
         FolderJob.ToTop -> "Move ${ask.mailbox?.name.orEmpty()} to the top level"
         FolderJob.Delete -> "Delete ${ask.mailbox?.name.orEmpty()}"
+        FolderJob.Export -> "Export ${ask.mailbox?.name.orEmpty()}"
     }
 
     AlertDialog(
@@ -6902,6 +6922,11 @@ private fun FolderRow(
                         onClick = { menu = false; manage(FolderJob.Delete) },
                     )
                 }
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text("Export this folder") },
+                    onClick = { menu = false; manage(FolderJob.Export) },
+                )
             }
         }
         Box(contentAlignment = Alignment.Center) {

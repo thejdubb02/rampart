@@ -129,6 +129,8 @@ internal fun SettingsPane(
     /** Told while the filters page's "describe a filter" box has a request in flight. */
     onFilterBusy: (Boolean) -> Unit = {},
     onClose: () -> Unit,
+    /** Provider for an account's backend, for export and other operations. */
+    backendFor: (String) -> MailBackend? = { null },
     /** The account the Security and phone pages manage, the same one the other pages are about. */
     security: Session? = null,
     /** Which page opens first. Only ever passed by the screenshot tests. */
@@ -193,6 +195,7 @@ internal fun SettingsPane(
                             accounts, account, onAccount, identities, signatureError, onSignature, onPickSignatureImage,
                         )
                         "away" -> AwayPage(accounts, account, onAccount, vacation, vacationError, onVacation)
+                        "export" -> ExportMailPage(accounts, account, onAccount, backendFor)
                         "tracking" -> TrackingPage(onTrackingServer)
                         "assistant" -> AssistantPage(accounts)
                         "admin" -> AdminLoginPage()
@@ -224,6 +227,7 @@ private val SettingsPages: List<Triple<String, String, String>> = listOf(
     Triple("filters", "Filters", "Mail"),
     Triple("identities", "Identities and signatures", "Mail"),
     Triple("away", "Away reply", "Mail"),
+    Triple("export", "Export mail", "Mail"),
     Triple("tracking", "Open tracking", "Mail"),
     Triple("assistant", "Rook", "Mail"),
     Triple("admin", "Server admin", "Server"),
