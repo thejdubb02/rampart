@@ -794,10 +794,15 @@ under the rules above. Gemini's four jobs, and where Rook stands on each:
 - Change Rampart and Stalwart settings, each change a card the person confirms. *Built
   (RAM-97).*
 - Knows which message is open, so "this email" means the one on screen. *Built.*
-- Add to calendar from a message that mentions a date. *Cloud session,
-  claude/calendar-from-mail.*
+- Add to calendar from a message that mentions a date. *Started 2026-09-29 on branch
+  claude/calendar-from-mail, not released, not yet tried against a live server or a real
+  model.* The chip is a local check and costs nothing; pressing it is the model call, and
+  the editable card's Save is the only write. `docs/assistant.md`.
 - Help me schedule: three free slots from the Stalwart calendar inserted into a reply.
-  *Cloud session.*
+  *Started 2026-09-29 on the same branch, not released.* The free time search is local;
+  the model only reads the length and the window from the thread.
+- Rook's `agenda` (read a day of the calendar) and `propose_event` (an event card, never a
+  write). *Started 2026-09-29 on the same branch, not released.*
 - Tasks from mail: a to-do inferred from a message, written as a Stalwart task (JMAP
   Tasks, or a VTODO over CalDAV) so it shows on the phone too. *Not started.*
 - Pull a file from Stalwart Files into a draft or an answer, Gemini's `@file`. *Not

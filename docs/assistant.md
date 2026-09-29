@@ -90,6 +90,32 @@ when a person presses Confirm, and checked again at that moment. Mailbox setting
 person's own session; server settings need the separate admin sign-in and go through the
 admin console's own gates. `docs/rook-settings.md` has the map and the rules.
 
+**Calendar from mail.** Started 2026-09-29 on branch `claude/calendar-from-mail`, not
+released. Three pieces, all class 3 (they need a server that keeps a calendar over JMAP, and
+an IMAP account gets a sentence saying why they are not there):
+
+- *Add to calendar.* A message that mentions a date and a time close together gets a chip.
+  Deciding that is a local pattern check (`DateMentions.kt`), so showing the chip is never a
+  model call. Pressing it sends that one message, fenced as data, and the model answers with a
+  small flat object (title, start, end, zone, location) that is read into an editable card
+  (`EventFromMail.kt`). A missing end becomes an hour and a missing zone the reader's own, each
+  with a note on the card. Save checks every field (the end after the start, a real IANA zone)
+  and writes through the same `newEventObject` as the Calendar page, so the singular
+  `recurrenceRule` Stalwart wants and the rest of the shape are the same.
+- *Help me schedule*, in the composer. The model, if there is one, reads the thread for how
+  long and over which days; with none, or with the folder on the never-leaves list, it is
+  thirty minutes over the next two weeks. The free time search is local arithmetic over one
+  CalendarEvent query (`FreeSlots.kt`): weekdays 9:00 to 17:00 in the reader's zone, starts on
+  the hour and half hour, from tomorrow, a meeting has to end by 17:00, and entries marked free,
+  cancelled ones and all-day ones that do not say busy leave the time open. Three are offered,
+  one per day on the earliest days with room, alternating morning and afternoon; a second time
+  on one day only when fewer than three days have room, and two hours from the first. They go
+  in as plain lines at the end of the person's own words, above the sign-off and the quote.
+- *Rook's tools.* `agenda` reads one day and `propose_event` puts the same editable card on
+  screen. There is no tool for Save. `CalendarTools.kt`.
+
+The calendar features share one consent and one ledger line, `calendar`, beside the others.
+
 **Summarise a long thread.** Twenty messages, one paragraph, before you decide whether to
 read it. This is the one people ask for and the one with the least that can go wrong: it
 is read-only, it is per-thread, and a bad summary costs a few seconds.
