@@ -114,9 +114,9 @@ named in the evidence column.
 
 | Capability | What it does | Rampart today | Action |
 |---|---|---|---|
-| `urn:ietf:params:jmap:mail:share` (JMAP Sharing) | Share a mailbox, calendar, address book, or file folder with another account, fine-grained read-through-full-access | None. Grepped `jmap:mail:share`, `ShareNotification`, `Sharing`: no real hits (only unrelated comments in `Imap.kt`) | build (M) - card 45 on the roadmap; "a different idea of what an account is," correctly scoped as its own gap rather than three small ones |
+| `urn:ietf:params:jmap:mail:share` (JMAP Sharing) | Share a mailbox, calendar, address book, or file folder with another account, fine-grained read-through-full-access | **Mail folders built 2026-09-29 (RAM-45), branch `claude/shared-mailboxes`, not yet checked live.** Shared and group mailboxes in the sidebar, gated on `myRights`; Share this folder through `shareWith` (`SharedAccounts.kt`, `SharedBackend.kt`, `SharedMailboxes.kt`). Calendars, address books and files are not shared from Rampart yet | done for mail, pending a live check; see "Sharing in Stalwart 0.16" below |
 | WebDAV ACL (CalDAV/CardDAV/WebDAV) | Same sharing model, for non-JMAP clients | N/A until calendars/files exist | skip for now |
-| `allowDirectoryQueries` / principal lookup | Lets a user search for another account to share with | None (no sharing UI to need it) | skip for now |
+| `allowDirectoryQueries` / principal lookup | Lets a user search for another account to share with | Used by the share dialog: an address is turned into an account id with `Principal/query`. When the server keeps the directory closed the dialog says so in one sentence, since there is no other way to find the id | done, as the share dialog's lookup |
 
 ### Sharing in Stalwart 0.16, read from the source (RAM-45, 2026-09-29)
 
@@ -330,5 +330,5 @@ renderer plus a few dozen hand-written task flows, not 100 features.
 1. **The Stalwart admin console (L).** ~100 management object types behind one schema-driven renderer, per Rampart's own architecture plan; the project's stated reason to exist and still entirely unbuilt.
 2. **Files and a real calendar view (L each).** JMAP FileNode and JMAP Calendars are both fully live on the server (confirmed in the session) with zero Rampart code against either; correctly sequenced behind mail on the roadmap.
 3. **Account self-service: password change, TOTP, app passwords (S each).** The cheapest slice of tier 6, and the natural companion to OIDC login (M) - removing the one password Rampart currently has to store.
-4. **JMAP Sharing (M).** Roadmap card 45; a real gap ("a different idea of what an account is"), not yet started.
+4. **JMAP Sharing (M).** Roadmap card 45. Mail folders built on 2026-09-29, not yet checked against a live server; calendars, address books and files still to do.
 5. **Encryption at rest and S/MIME/PGP (L).** Deliberately last - "a half-built implementation is worse than none" - and still true.

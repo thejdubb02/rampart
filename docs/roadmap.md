@@ -753,6 +753,39 @@ attached, and it is the reason the open tracking sits behind it rather than in f
 times all render per account and combined, computed from the local store with the network
 off.
 
+### 2.12 Shared mailboxes, and views across accounts (RAM-45)
+
+**Built on 2026-09-29, on the branch `claude/shared-mailboxes`: not released, and not yet
+checked against a live server.** What Stalwart 0.16 does was read from its source first and
+is in `stalwart-inventory.md`, "Sharing in Stalwart 0.16"; nothing below goes past it.
+
+- **A group's mailbox, or a folder shared with you, appears in the sidebar** under the
+  owner's name with "(shared)" after it, once it holds a folder you can read. It is the
+  login's own JMAP session speaking for that account's id, so every request names the
+  shared account and nothing reaches your own (`SharedAccounts.kt`, `SharedBackend.kt`,
+  `Jmap.forAccount`). It keeps its own key, its own local copy and its own address book file.
+- **What the folder's `myRights` do not allow is refused before it is sent**, with one
+  sentence: greyed out in the folder menu, a line above the message list, and a refusal in
+  the red bar for anything tried from a message. Opening a message in a read-only folder
+  simply does not mark it read.
+- **Replies from a shared mailbox are written from your own account.** Sending as its owner
+  (`maySubmit` and an identity there) is left out.
+- **All unread, All starred and All mail** sit under All inboxes. A right-click chooses which
+  folders feed each one, by role or by name, and a switch per shared mailbox keeps it in or
+  out of every cross-account view. Both are synced with the rest of the settings.
+- **Share this folder** on the folder menu: Read, Read and write, or Manage, through
+  `shareWith` with the person found by address through `Principal/query`; IMAP `SETACL` on
+  an IMAP account whose server has ACL. Where the server cannot, the dialog says why.
+
+Left out because the server does not have it: `isReadOnly` (always false on Stalwart), a way
+to find a person when the directory is closed, renaming over IMAP ACL, separate seen and
+keyword rights. Left out for now although it does: share notifications, sending as a shared
+account, gating IMAP actions on `MYRIGHTS`, and noticing a new share without a restart.
+
+**Done when:** with two accounts on one server, one shares a folder at each level with the
+other from this dialog, the other sees it after a restart with exactly those rights, and a
+group mailbox shows for a member with every right.
+
 ---
 
 ## Tier 3, trust

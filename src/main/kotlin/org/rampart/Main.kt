@@ -1399,7 +1399,10 @@ private fun Reader(
     var showShortcuts by remember { mutableStateOf(false) }
     var showPalette by remember { mutableStateOf(false) }
 
-    fun session(key: String) = sessions.first { it.key == key }
+    /** Mailboxes shared with the signed-in logins, kept apart from them (SharedMailboxesUi.kt). */
+    val sharing = rememberSharing(sessions)
+
+    fun session(key: String) = sessions.firstOrNull { it.key == key } ?: sharing.shared.first { it.key == key }
 
     /** The red bar: a sentence, and the technical line under it when there is one. */
     fun report(title: String, detail: String? = null) {
@@ -1449,7 +1452,7 @@ private fun Reader(
      * The account a new message is written from. The one being replied to, when there is
      * one, so a reply in the merged inbox goes back out of the mailbox it arrived in.
      */
-    fun writingAccount(): String? = accountOf(selected) ?: sessions.firstOrNull()?.key
+    fun writingAccount(): String? = accountOf(selected)?.let(::sendingKey) ?: sessions.firstOrNull()?.key
 
     /**
      * The address to write as, given the message being answered.
@@ -1465,13 +1468,15 @@ private fun Reader(
     }
 
     /**
-     * Opens the composer on [account], which stays fixed for as long as this message is open.
+     * Opens the composer on [from], which stays fixed for as long as this message is open.
      *
      * [savedId] is the server draft this continues, or null for a message that has not been
      * saved yet. A new message must start at null. Reusing the previous message's id makes
      * the first autosave replace that draft, and the earlier message is gone.
      */
-    fun write(account: String?, draft: Draft, savedId: String? = null) {
+    fun write(from: String?, draft: Draft, savedId: String? = null) {
+        // A reply from a shared mailbox is written from the login it came through (SharedBackend.kt).
+        val account = from?.let(::sendingKey)
         val epoch = ++composeEpoch
         if (account == null) {
             composing = ComposeSession(account, draft, DraftSaves(savedId))
@@ -1523,7 +1528,7 @@ private fun Reader(
 
     /** Settings are always about one real account, never about the merged row. */
     fun settingsAccount(): String? =
-        here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key
+        here?.first?.takeIf { it != ALL_ACCOUNTS }?.let(::sendingKey) ?: sessions.firstOrNull()?.key
 
     /** The account the per-account settings pages show: the one picked there, while it is still signed in. */
     fun pickedSettingsAccount(): String? =
@@ -1543,7 +1548,7 @@ private fun Reader(
 
     /** The inbox of every signed in account, as one list. */
     suspend fun everyInbox(memory: Map<String, List<Person>>, asked: QuickFilters): List<Summary> = merged(
-        sessions.associate { open ->
+        sharing.inUnified(sessions, mailboxes).associate { open ->
             val inbox = folderFor("inbox", mailboxes[open.key].orEmpty())
             open.key to (
                 inbox?.let {
@@ -1880,11 +1885,20 @@ private fun Reader(
             }
             // Only once every account is in, or it would land on one account's inbox and
             // move under whoever was reading it a second later.
-            if (sessions.size > 1 && mailboxes.size == sessions.size && here?.first != ALL_ACCOUNTS) {
+            if (sessions.size > 1 && sessions.all { it.key in mailboxes } && here?.first != ALL_ACCOUNTS) {
                 here = ALL_ACCOUNTS to allInboxes(0)
             }
         }
         loading = false
+    }
+    // Shared mailboxes are read after your own, and one holding no folder you can see is
+    // simply not drawn (SharedMailboxesUi.kt).
+    LaunchedEffect(sharing) {
+        sharing.shared.filter { it.key !in mailboxes }.forEach { open ->
+            val found = withContext(Dispatchers.IO) { runCatching { open.jmap.mailboxes() } }
+            found.onSuccess { mailboxes = mailboxes + (open.key to it) }
+            found.onFailure { report("The mailbox shared as ${open.account.name} could not be read.", whyFailed(it)) }
+        }
     }
     /*
      * Folds the senders of whatever is on screen into that account's address book.
@@ -2068,6 +2082,14 @@ private fun Reader(
                         .map { it.copy(account = account) }
                 }
             }.sortedByDescending { it.receivedAt }
+        } else if (key == ALL_ACCOUNTS && UnifiedView.of(mailbox.id) != null) {
+            // All unread, all starred, all mail (UnifiedViews.kt), from the folders chosen for each.
+            val view = UnifiedView.of(mailbox.id)!!
+            val sources = sharing.inUnified(sessions, mailboxes)
+            val boxes = mailboxes
+            val prefs = sharing.prefs
+            withContext(Dispatchers.IO) { readUnified(view, sources, boxes, prefs) }
+                .also { filterNote = it.note }.messages
         } else if (key == ALL_ACCOUNTS) {
             // One account failing is not the whole list failing, so each is caught inside
             // rather than out here: the others still show.
@@ -3722,7 +3744,8 @@ private fun Reader(
             }
             if (notReady) gaveUp = true
             waited = 0
-            sessions.forEach { runCatching { wakeSnoozed(it.key) } }
+            // A group mailbox can hold snoozed mail too, and nothing else would wake it.
+            (sessions + sharing.shared).forEach { runCatching { wakeSnoozed(it.key) } }
             runCatching { fireDue() }
             delay(60_000)
         }
@@ -4176,7 +4199,7 @@ private fun Reader(
                         FolderJob.ToTop -> jmap.updateMailbox(ask.mailbox!!.id, reparent = true)
                         FolderJob.Delete -> jmap.destroyMailbox(ask.mailbox!!.id)
                         // Handled before a dialog is ever shown, so it never reaches here.
-                        FolderJob.Export, FolderJob.Import -> Unit
+                        FolderJob.Export, FolderJob.Import, FolderJob.Share -> Unit
                     }
                 }
                 null
@@ -5603,6 +5626,19 @@ private fun Reader(
                 },
                 accounts = sessions.map {
                     AccountMailboxes(it.key, it.account.name, it.account.email, mailboxes[it.key].orEmpty())
+                } + sharing.sidebarAccounts(mailboxes),
+                folderRefusal = sharing::folderRefusal,
+                unifiedViews = { narrowed ->
+                    UnifiedViewRows(
+                        collapsed = narrowed,
+                        selectedId = here?.takeIf { it.first == ALL_ACCOUNTS && activeSavedSearch == null }?.second?.id,
+                        onSelect = { box ->
+                            settingsOpen = false; contactsOpen = false; dashboardOpen = false; calendarOpen = false
+                            activeSavedSearch = null
+                            here = ALL_ACCOUNTS to box
+                        },
+                        onChoose = { sharing.choosing = it },
+                    )
                 },
                 here = here,
                 tags = remember(tagsSeen, tagColours) { mergedTags(tagsSeen, tagColours) },
@@ -5730,8 +5766,20 @@ private fun Reader(
                     },
                 )
             }
+            sharing.choosing?.let { view ->
+                UnifiedViewsDialog(
+                    state = sharing,
+                    view = view,
+                    mailboxes = mailboxes,
+                    onClose = { sharing.choosing = null },
+                    onChanged = { if (here?.first == ALL_ACCOUNTS) scope.launch { reload() } },
+                )
+            }
             folderAsk?.let { ask ->
-                if ((ask.job == FolderJob.Export || ask.job == FolderJob.Import) && ask.mailbox != null) {
+                if (ask.job == FolderJob.Share && ask.mailbox != null) {
+                    // Shared mailboxes (SharedMailboxesUi.kt): the dialog does its own asking.
+                    ShareFolderDialog(remember(ask) { folderSharingFor(ask.account, sessions) }, ask.mailbox) { folderAsk = null }
+                } else if ((ask.job == FolderJob.Export || ask.job == FolderJob.Import) && ask.mailbox != null) {
                     val key = ask.account
                     val backend = runCatching { session(key).jmap }.getOrNull()
                     if (backend != null) {
@@ -6037,7 +6085,7 @@ private fun Reader(
                         imapAccount = here?.first?.let { it != ALL_ACCOUNTS && session(it).jmap is Imap } == true,
                         mergedWithImap = here?.first == ALL_ACCOUNTS && sessions.any { it.jmap is Imap },
                     ),
-                    filterNote = filterNote,
+                    filterNote = filterNote ?: here?.let { (key, box) -> sharing.folderNote(key, box.id) },
                     loadingMore = loadingMore,
                     onNeedMore = ::loadMore,
                     searching = showingResults,
@@ -6636,7 +6684,7 @@ private fun TnefOverlay(
 internal data class FolderAsk(val account: String, val mailbox: Mailbox?, val job: FolderJob)
 
 /** What a right-click on a folder asked for. Answered by whoever owns the sidebar. */
-internal enum class FolderJob { CreateInside, Rename, ToTop, Delete, Export, Import }
+internal enum class FolderJob { CreateInside, Rename, ToTop, Delete, Export, Import, Share }
 
 /** A saved search job waiting on an answer. */
 internal data class SavedSearchAsk(val search: SavedSearch, val job: SavedSearchJob)
@@ -6712,6 +6760,10 @@ internal fun Sidebar(
     onTagBounds: (String, Rect) -> Unit = { _, _ -> },
     /** The search field, drawn at the top. Absent while the sidebar is narrowed. */
     search: @Composable () -> Unit = {},
+    /** Why a folder job cannot be done, for a folder shared with you (SharedMailboxesUi.kt). */
+    folderRefusal: (String, Mailbox, FolderJob) -> String? = { _, _, _ -> null },
+    /** The cross-account views under "All inboxes" (SharedMailboxesUi.kt), given whether the sidebar is narrowed. */
+    unifiedViews: @Composable (Boolean) -> Unit = {},
 ) {
     Column(
         Modifier.width(if (collapsed) 60.dp else 232.dp).fillMaxHeight()
@@ -6753,10 +6805,11 @@ internal fun Sidebar(
                     FolderRow(
                         mailbox = allInboxes(unread),
                         collapsed = collapsed,
-                        selected = selectedSavedSearchId == null && here?.first == ALL_ACCOUNTS,
+                        selected = selectedSavedSearchId == null && here?.first == ALL_ACCOUNTS && here.second.id == ALL_ACCOUNTS,
                         onClick = { onSelect(ALL_ACCOUNTS, allInboxes(unread)) },
                     )
                 }
+                item(key = "unified-views") { unifiedViews(collapsed) }
                 val allSavedSearches = savedSearchesForAccount(savedSearches, ALL_ACCOUNTS)
                 if (allSavedSearches.isNotEmpty()) {
                     if (!collapsed) {
@@ -6825,6 +6878,7 @@ internal fun Sidebar(
                             here.second.id == row.mailbox.id,
                         onClick = { onSelect(account.key, row.mailbox) },
                         onManage = folderMenu?.let { manage -> { what -> manage(account.key, row.mailbox, what) } },
+                        refusal = { job -> folderRefusal(account.key, row.mailbox, job) },
                     )
                 }
                 val accountSearches = if (accounts.size == 1) {
@@ -6904,7 +6958,7 @@ internal fun Sidebar(
              * in half.
              */
             if (collapsed) {
-                items(accounts, key = { "face-${it.key}" }) { account ->
+                items(accounts.filterNot { isSharedKey(it.key) }, key = { "face-${it.key}" }) { account ->
                     Box(Modifier.padding(vertical = 4.dp).rowHover()) {
                         Avatar(account.name, account.email, 26.dp)
                     }
@@ -6915,7 +6969,7 @@ internal fun Sidebar(
                         Modifier.fillMaxWidth().padding(vertical = 4.dp, horizontal = 4.dp).rowHover(),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        AccountStack(accounts, onClick = onSettings)
+                        AccountStack(accounts.filterNot { isSharedKey(it.key) }, onClick = onSettings)
                         Spacer(Modifier.weight(1f))
                         AddAccountFace(onClick = onAddAccount)
                     }
@@ -7155,6 +7209,7 @@ private fun FolderDialog(
         FolderJob.Delete -> "Delete ${ask.mailbox?.name.orEmpty()}"
         FolderJob.Export -> "Export ${ask.mailbox?.name.orEmpty()}"
         FolderJob.Import -> "Import into ${ask.mailbox?.name.orEmpty()}"
+        FolderJob.Share -> "Share ${ask.mailbox?.name.orEmpty()}"
     }
 
     AlertDialog(
@@ -7360,6 +7415,8 @@ private fun FolderRow(
     depth: Int = 0,
     /** What the right-click menu can do, or null where folders cannot be managed. */
     onManage: ((FolderJob) -> Unit)? = null,
+    /** Why a job cannot be done here, shown in place of doing it: a shared folder's rights. */
+    refusal: (FolderJob) -> String? = { null },
     onClick: () -> Unit,
 ) {
     val tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
@@ -7382,39 +7439,22 @@ private fun FolderRow(
     ) {
         onManage?.let { manage ->
             MenuLayer(expanded = menu, onDismissRequest = { menu = false }) {
-                DropdownMenuItem(
-                    text = { Text("New folder inside") },
-                    onClick = { menu = false; manage(FolderJob.CreateInside) },
-                )
+                FolderMenuItem("New folder inside", refusal(FolderJob.CreateInside)) { menu = false; manage(FolderJob.CreateInside) }
                 // A folder the server gave a role to is one the client should not offer to
                 // rename or delete: the role is what Archive and Trash are found by, and a
                 // renamed one still has it while looking like somebody's own folder.
                 if (!isProtected(mailbox)) {
-                    DropdownMenuItem(
-                        text = { Text("Rename") },
-                        onClick = { menu = false; manage(FolderJob.Rename) },
-                    )
+                    FolderMenuItem("Rename", refusal(FolderJob.Rename)) { menu = false; manage(FolderJob.Rename) }
                     if (mailbox.parentId != null) {
-                        DropdownMenuItem(
-                            text = { Text("Move to the top level") },
-                            onClick = { menu = false; manage(FolderJob.ToTop) },
-                        )
+                        FolderMenuItem("Move to the top level", refusal(FolderJob.ToTop)) { menu = false; manage(FolderJob.ToTop) }
                     }
                     HorizontalDivider()
-                    DropdownMenuItem(
-                        text = { Text("Delete") },
-                        onClick = { menu = false; manage(FolderJob.Delete) },
-                    )
+                    FolderMenuItem("Delete", refusal(FolderJob.Delete)) { menu = false; manage(FolderJob.Delete) }
                 }
                 HorizontalDivider()
-                DropdownMenuItem(
-                    text = { Text("Export this folder") },
-                    onClick = { menu = false; manage(FolderJob.Export) },
-                )
-                DropdownMenuItem(
-                    text = { Text("Import into this folder") },
-                    onClick = { menu = false; manage(FolderJob.Import) },
-                )
+                FolderMenuItem("Share this folder", refusal(FolderJob.Share)) { menu = false; manage(FolderJob.Share) }
+                FolderMenuItem("Export this folder", refusal(FolderJob.Export)) { menu = false; manage(FolderJob.Export) }
+                FolderMenuItem("Import into this folder", refusal(FolderJob.Import)) { menu = false; manage(FolderJob.Import) }
             }
         }
         Box(contentAlignment = Alignment.Center) {
