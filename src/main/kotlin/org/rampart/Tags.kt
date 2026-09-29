@@ -95,9 +95,10 @@ private val RESERVED = arrayOf(
  *
  * A prefix rather than a name, because the snooze keyword carries its due time in it and
  * there is therefore a different one on every snoozed message. Shown as a tag it would read
- * as "Snooze 1789742400", which is furniture leaking onto the furniture.
+ * as "Snooze 1789742400", which is furniture leaking onto the furniture. The follow-up
+ * flag (FollowUp.kt) is the same kind of thing, with its own view in the sidebar.
  */
-private val MACHINERY = arrayOf("\$snooze-")
+private val MACHINERY = arrayOf("\$snooze-", "\$followup")
 
 /** The user's own tags, in a stable order, from the keywords on a message. */
 internal fun tagsOf(keywords: Collection<String>, chosen: Map<String, Long> = emptyMap()): List<Tag> {
