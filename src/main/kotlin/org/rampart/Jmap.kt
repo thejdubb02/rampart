@@ -1995,6 +1995,21 @@ internal class Jmap private constructor(
         return Applied(requireApplied(response, ids, "updated", "notUpdated", "update"))
     }
 
+    override fun setKeywords(ids: List<String>, add: Set<String>, remove: Set<String>): Applied {
+        if (ids.isEmpty() || (add.isEmpty() && remove.isEmpty())) return Applied(null)
+        val response = call(invoke("Email/set", "k") {
+            putJsonObject("update") {
+                ids.forEach { id ->
+                    putJsonObject(id) {
+                        add.forEach { put("keywords/$it", JsonPrimitive(true)) }
+                        remove.forEach { put("keywords/$it", JsonNull) }
+                    }
+                }
+            }
+        })[0][1].jsonObject
+        return Applied(requireApplied(response, ids, "updated", "notUpdated", "update"))
+    }
+
     override fun destroy(ids: List<String>): Applied {
         if (ids.isEmpty()) return Applied(null)
         val response = call(invoke("Email/set", "d") {

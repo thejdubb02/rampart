@@ -128,6 +128,12 @@ internal class SharedBackend(
         return inner.setKeyword(ids, keyword, on)
     }
 
+    /** Only Rampart's own follow-up keywords come through here, and they are tags as far as rights go. */
+    override fun setKeywords(ids: List<String>, add: Set<String>, remove: Set<String>): Applied {
+        anyFolderAllows(ids, FolderAction.TAG)?.let { throw NotAllowedHere(it) }
+        return inner.setKeywords(ids, add, remove)
+    }
+
     /**
      * A move replaces every folder a message is in ([Jmap.move]), so it needs leave to take
      * the message out of all of them, and leave to put it into the one it is going to.

@@ -188,6 +188,21 @@ internal interface MailBackend {
 
     fun setKeyword(ids: List<String>, keyword: String, on: Boolean): Applied
 
+    /**
+     * Adds [add] and takes away [remove] on each of [ids], together where the protocol can.
+     *
+     * JMAP does it in one Email/set, so a follow-up date is replaced rather than briefly
+     * doubled. The default is one [setKeyword] per keyword, additions first, which is all
+     * IMAP can do: a failure part way leaves the new keyword on and the old one too, which
+     * reads as the earlier date and is put right by the next attempt.
+     */
+    fun setKeywords(ids: List<String>, add: Set<String>, remove: Set<String>): Applied {
+        var last = Applied(null)
+        add.forEach { last = setKeyword(ids, it, true) }
+        remove.forEach { last = setKeyword(ids, it, false) }
+        return last
+    }
+
     fun move(ids: List<String>, toMailboxId: String): Applied
 
     fun destroy(ids: List<String>): Applied
