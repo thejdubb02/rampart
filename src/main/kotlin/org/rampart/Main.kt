@@ -2452,6 +2452,22 @@ private fun Reader(
         othersOpen = settingsOpen || contactsOpen || dashboardOpen || calendarOpen,
         place = listOf(here?.first, here?.second?.id, viewingTag, showingResults),
     ) { settingsOpen = false; contactsOpen = false; dashboardOpen = false; calendarOpen = false }
+    // Settings another computer changed, redrawn the way Rook's confirmed cards are.
+    SettingsSyncFollows(sessions) { changed ->
+        if ("settings.theme" in changed || "settings.customThemes" in changed) {
+            (THEMES + Settings.customThemes()).firstOrNull { it.key == Settings.theme() }?.let(onTheme)
+        }
+        if ("settings.iconPack" in changed) onIcons(iconPack(Settings.iconPack()))
+        if ("settings.loader" in changed) loader = Loader.of(Settings.loader())
+        if ("settings.density" in changed) density = Density.of(Settings.density())
+        if ("settings.tintRowsByTag" in changed) tintRows = Settings.tintRowsByTag()
+        if ("settings.tagColours" in changed) tagColours = Settings.tagColours()
+        if ("settings.undoBarSeconds" in changed) undoBarSeconds = Settings.undoBarSeconds()
+        if ("settings.order" in changed) order = Settings.order()
+        if ("settings.messageMode" in changed) messageMode = Settings.messageMode()
+        if ("settings.messageScale" in changed) messageScale = Settings.messageScale()
+        if ("settings.savedSearches" in changed) savedSearches = Settings.savedSearches()
+    }
     CalendarJumpFollows(calendarOpen) {
         calendarOpen = true; settingsOpen = false; contactsOpen = false; dashboardOpen = false
     }
