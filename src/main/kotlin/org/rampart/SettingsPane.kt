@@ -989,6 +989,102 @@ private fun ReadingPage(
 
     Spacer(Modifier.height(18.dp))
     Section(
+        "Spelling and grammar",
+        "Checked on this computer as you type. Nothing is sent anywhere.",
+    )
+    var checkSpelling by remember { mutableStateOf(Settings.checkSpelling()) }
+    Row(
+        Modifier.fillMaxWidth().clickable {
+            checkSpelling = !checkSpelling
+            Settings.setCheckSpelling(checkSpelling)
+        }.padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Check spelling as I type", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "A red line under a misspelt word. Turning this off leaves the draft unmarked, grammar included.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+        Switch(
+            checked = checkSpelling,
+            onCheckedChange = { checkSpelling = it; Settings.setCheckSpelling(it) },
+        )
+    }
+    var checkGrammar by remember { mutableStateOf(Settings.checkGrammar()) }
+    Row(
+        Modifier.fillMaxWidth().clickable {
+            checkGrammar = !checkGrammar
+            Settings.setCheckGrammar(checkGrammar)
+        }.padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Check grammar", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "A blue line under a sentence that does not read right. Spelling stays a red line either way.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+        Switch(
+            checked = checkGrammar,
+            onCheckedChange = { checkGrammar = it; Settings.setCheckGrammar(it) },
+        )
+    }
+    var dictionary by remember { mutableStateOf(Settings.personalDictionary()) }
+    var addingWord by remember { mutableStateOf("") }
+    Text(
+        "Personal dictionary",
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = Modifier.padding(top = 8.dp),
+    )
+    Text(
+        "Words that should not be marked. One word at a time. A phrase saved from a message is listed too, and can be removed.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.outline,
+    )
+    Spacer(Modifier.height(6.dp))
+    dictionary.forEach { word ->
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(word, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            TextButton(onClick = {
+                Settings.removeFromDictionary(word)
+                dictionary = Settings.personalDictionary()
+            }) { Text("Remove") }
+        }
+    }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.weight(1f)) {
+            Entry(addingWord, "Add a word") { typed ->
+                addingWord = typed.replace("\n", "").replace("\r", "")
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        TextButton(
+            onClick = {
+                val word = addingWord.trim()
+                if (word.isEmpty() || word.any { it.isWhitespace() }) return@TextButton
+                Settings.addToDictionary(word)
+                dictionary = Settings.personalDictionary()
+                addingWord = ""
+            },
+            enabled = addingWord.isNotBlank() && addingWord.none { it.isWhitespace() },
+        ) { Text("Add") }
+    }
+    if (addingWord.any { it.isWhitespace() }) {
+        Text(
+            "Add one word at a time, with no spaces.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+    }
+
+    Spacer(Modifier.height(18.dp))
+    Section(
         "Archiving",
         "A folder with fifteen years of mail in it is a folder nobody opens.",
     )

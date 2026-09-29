@@ -118,6 +118,11 @@ internal val SYNCED_SETTINGS: Map<String, SyncShape> = mapOf(
     "undoBarSeconds" to SyncShape.TEXT,
     "signatureAboveQuote" to SyncShape.TEXT,
     "confirmBeforeSend" to SyncShape.TEXT,
+    // How someone likes a draft marked, and the words that are not mistakes for them.
+    // The check itself still runs on each computer.
+    "checkSpelling" to SyncShape.TEXT,
+    "checkGrammar" to SyncShape.TEXT,
+    "personalDictionary" to SyncShape.LIST_OF_TEXT,
     "defaultReplyAll" to SyncShape.TEXT,
     "exactIdentitiesOnly" to SyncShape.TEXT,
     "subAddressDelimiter" to SyncShape.TEXT,
