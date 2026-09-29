@@ -1,5 +1,6 @@
 package org.rampart
 
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -171,8 +172,14 @@ internal class PersonHistory(private val sources: List<PersonSource>, private va
     /** Who answered, by account. */
     fun answered(): Map<String, Answered> = lanes.associate { it.source.account to it.source.answered }
 
+    // One page at a time: a scroll that asks for more while the first page is still
+    // loading would otherwise interleave two runs over the same lanes.
+    private val paging = kotlinx.coroutines.sync.Mutex()
+
     /** The next page of the merged list. The first call also gathers the counts. */
-    suspend fun next(): List<Summary> {
+    suspend fun next(): List<Summary> = paging.withLock { nextPage() }
+
+    private suspend fun nextPage(): List<Summary> {
         val first = !asked
         asked = true
         var withStats = first
