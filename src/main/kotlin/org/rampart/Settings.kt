@@ -105,6 +105,31 @@ object Settings {
     fun setNotifyOnArrival(value: Boolean) = write { put("notify", JsonPrimitive(value)) }
 
     /**
+     * Accounts whose new mail raises no notification, by account key.
+     *
+     * Kept on this computer rather than synced: the key names an account as this machine
+     * signed in to it, and "the work account is quiet on my home computer" is a choice about
+     * one computer anyway.
+     */
+    fun silencedAccounts(): Set<String> =
+        (read()["notifySilenced"] as? JsonArray)?.mapNotNull { it.jsonPrimitive.contentOrNull }?.toSet() ?: emptySet()
+
+    fun setAccountNotifies(key: String, on: Boolean) = write {
+        val now = (this["notifySilenced"] as? JsonArray)?.mapNotNull { it.jsonPrimitive.contentOrNull }?.toSet() ?: emptySet()
+        put("notifySilenced", JsonArray((if (on) now - key else now + key).sorted().map { JsonPrimitive(it) }))
+    }
+
+    /**
+     * Quiet hours as "22:00-07:00", or null when off. See [QuietHours].
+     *
+     * Synced, unlike the per-account switches: a person's night is the same night on every
+     * computer they own, and setting it twice is the kind of chore that gets skipped.
+     */
+    fun quietHours(): String? = read()["quietHours"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+
+    fun setQuietHours(value: String?) = write { put("quietHours", JsonPrimitive(value.orEmpty())) }
+
+    /**
      * On by default. Tracking is already a deliberate per-message choice, so somebody who
      * turned it on for a message is choosing to know when it is read. A notification that
      * started off would mean the person who wants this most has to find the switch first.

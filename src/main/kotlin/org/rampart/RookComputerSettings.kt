@@ -140,6 +140,19 @@ internal class ComputerPlace(private val choices: ComputerChoices) : SettingPlac
                 "notifyOnArrival", "Notify when mail arrives", "A desktop notification for new mail while Rampart is open.",
                 "Notifications", "notification alert new mail desktop popup", Settings::notifyOnArrival, Settings::setNotifyOnArrival,
             ),
+            Local(
+                entry(
+                    "quietHours", "Quiet hours", "A daily stretch with no new-mail notifications, written 22:00-07:00, or empty for none.",
+                    SettingKind.Words(11), "Notifications", "quiet hours night do not disturb silence notification",
+                ),
+                { JsonPrimitive(Settings.quietHours().orEmpty()) },
+                { v -> Settings.setQuietHours(QuietHours.parse(v.text())?.encoded()) },
+                problem = { v ->
+                    val text = v.text().trim()
+                    if (text.isEmpty() || QuietHours.parse(text) != null) null
+                    else "Write it as two times, like 22:00-07:00, or leave it empty for none."
+                },
+            ),
             onOff(
                 "notifyOnOpen", "Notify when a tracked message is opened", "A desktop notification when somebody opens a message you sent with tracking on.",
                 "Notifications", "notification tracking opened read", Settings::notifyOnOpen, Settings::setNotifyOnOpen,
