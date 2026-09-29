@@ -311,11 +311,16 @@ object Assistant {
      * preference either, and keeping it separate means a reset of one is not a reset of the
      * other. The key itself is in neither: that is in the operating system's store.
      */
-    private val store = JsonStore("assistant.json")
+    internal val store = JsonStore("assistant.json")
 
     private fun read(): JsonObject = store.read()
 
-    private fun write(change: MutableMap<String, JsonElement>.() -> Unit) = store.write(change)
+    /** Stamps a change to the one synced key, the never-read folders; see SettingsSync.kt. */
+    private fun write(change: MutableMap<String, JsonElement>.() -> Unit) = store.write {
+        val before = toMap()
+        change()
+        if (stampChanges(SYNCED_ASSISTANT, before, this, System.currentTimeMillis())) SettingsSync.localChanged()
+    }
 
     private fun JsonElement.asObject(): JsonObject? = this as? JsonObject
 
