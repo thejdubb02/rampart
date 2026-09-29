@@ -22,7 +22,9 @@ which means offline. The mailbox dashboard: volume in and out, how much junk you
 who you talk to, who you never reply to, how fast you answer and what is still waiting on
 you. Folder management. The command palette and the shortcuts. Templates. Undo-send, which
 is held in the client. Read receipts, which are a standard mail header and not a tracker.
-Recipient autocomplete.
+Recipient autocomplete. Saved searches, including nested conditions and child folders
+split by sender, mailing list or tag, which are a line in your settings file and move
+nothing on the server. The table and card layouts of the message list.
 
 **This is the default shape and the one to aim for.** The dashboard is the worked example:
 every number on it is counted from mail already in the mailbox, so it needs no pixel, no

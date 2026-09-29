@@ -386,6 +386,66 @@ Confirming a send with no subject rather than refusing it.
 **Done when:** every item in that paragraph works. It is one pass on purpose, because
 shipping them one at a time is six releases where the list still feels unfinished.
 
+#### Saved searches with conditions, and list layouts (RAM-32, RAM-42)
+
+*Built 2026-09-29 on branch `claude/search-and-layouts`, not released and not yet
+looked at in a running window.* Class 1: a mailbox and nothing else.
+
+**Saved searches, second half.** A saved search now holds a tree of conditions, groups
+inside groups joined by all of, any of or none of, edited in a builder drawn like the
+filter rule editor. The same tree becomes the JMAP filter (a FilterOperator with AND, OR
+and NOT, RFC 8620 5.5) and the local copy's WHERE clause, with every typed value bound as
+a parameter, so the server and the copy cannot disagree about what a search means. A
+search can split into child folders by sender, by mailing list (the identifier half of
+List-Id) or by tag. The children are counted from the local copy with the unread counts,
+so a folder appears when a new sender writes and goes when their mail does. Nothing moves
+on the server and deleting a search deletes no mail. Searches saved before this keep their
+old shape and run exactly as they did; opening one in the builder converts it.
+
+What the copy cannot answer it says rather than guesses: recipients and attachments are not
+columns in the local store, so on an IMAP account, or with the server unreachable, a
+search using either shows one sentence instead of a wrong list. The IMAP account is
+answered from its copy in every case, because IMAP cannot be handed a JMAP filter.
+
+**List layouts, beside density.** Appearance has Normal, Table and Cards. Normal is the
+list exactly as it was. Table has star, sender, subject, date, size and tags columns,
+sorted by clicking a heading and resized by dragging its edge, both remembered. Cards
+draws each message on its own card with three lines of preview. Size and List-Id are new
+columns in the local store and new properties on every list fetch, JMAP and IMAP both.
+
+**Measured** on 2026-09-29, against a 50,000 message local store (30,000 in the inbox),
+unencrypted, median of fifteen runs, with `ListBenchmarkTest` (off unless `RAMPART_BENCH`
+is set). Real numbers from a scratch build on the development box, not from the app:
+
+| What | Time |
+|---|---|
+| Folder open, inbox, first 100 | 21 to 30 ms |
+| Folder open, unread only | 20 ms |
+| Saved search open, nested unread or starred and not a list | 27 ms |
+| Saved search open, rare tag and sender | 27 ms |
+| Saved search open, text and a date | 70 to 83 ms |
+| Split child open, one list | 26 to 37 ms |
+| Count and split by sender, whole store | 54 to 67 ms |
+| Table sort of a 200 row page, any column | under 1 ms |
+
+Folder open stays well under the 100 ms budget. Drawing each layout was not measured:
+that needs the app running, and Compose could not be built where this was written.
+
+**Found on the way, and fixed:** writing a page back into the store replaced each row in
+the full-text index with its own `DELETE FROM search WHERE id = ?`, and `id` is an
+unindexed FTS column, so every row written read the whole index. A page of a hundred took
+1,475 ms at 50,000 messages, with the store locked, which any folder open behind it had to
+wait out. One delete per few hundred ids takes it to about 30 ms, and filling the test
+store went from 347 seconds to 3.
+
+**Tried and left out:** an index on `receivedAt` alone. It took the common saved searches
+from 27 ms to 4 and the rare ones from 27 ms to between 85 and 94, next to the budget,
+because the planner then walks the whole index looking for the few that match.
+
+**Done when:** a nested search returns the same messages from the server and from the
+copy, a split search's children follow arriving mail, the table sorts and resizes, and
+all three layouts have been looked at in a running window on both test servers.
+
 ### 2.6 Command palette
 
 Ctrl+K. The spec calls it table stakes and every product it compares against has one.
