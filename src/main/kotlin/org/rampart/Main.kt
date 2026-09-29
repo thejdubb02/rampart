@@ -1368,6 +1368,8 @@ private fun Reader(
     var summariseFor by remember { mutableStateOf<String?>(null) }
     // Read once rather than on every recomposition, for the same reason as chatAgreed.
     var summariseAgreed by remember { mutableStateOf(Assistant.agreed(Assistant.SUMMARISE)) }
+    /** Suggested replies for the open conversation, made only when asked. `WritingHelpUi.kt`. */
+    val suggestReplies = remember { SuggestReplies(scope) }
     /**
      * Messages shown their remote pictures for this session alone, on top of whatever
      * [allowedSenders] remembers permanently.
@@ -4504,6 +4506,24 @@ private fun Reader(
             paneHeight = windowSize().height.value.toInt(),
             actions = actionsFor(cardSummary),
             summarise = if (isPrimary) summariseState else null,
+            // A suggestion opens as an ordinary reply with the words above the quote, unsent.
+            suggest = if (isPrimary && key != null) {
+                suggestReplies.actions(
+                    threadId = cardSummary.threadId.ifEmpty { cardSummary.id },
+                    account = key,
+                    folder = currentFolderName(key),
+                    subject = cardSummary.subject,
+                    turns = { summariseTurns(key, cardSummary) },
+                    onPick = { words ->
+                        sendError = null; sendDetail = null
+                        val all = bareReplyAll(Settings.defaultReplyAll(), hasOtherRecipients(cardSummary, card.body, ours))
+                        val reply = replyTo(cardSummary, card.body, writingIdentity(card.body, key), all, ours)
+                        write(key, reply.copy(body = words.trim() + reply.body))
+                    },
+                )
+            } else {
+                null
+            },
             attachments = card.attachments,
             savedTo = card.saved,
             source = card.source,
@@ -7988,6 +8008,7 @@ internal fun Message(
     onForwardFile: () -> Unit = {},
     actions: MessageActions = MessageActions(),
     summarise: SummariseActions? = null,
+    suggest: SuggestRepliesActions? = null,
     attachments: List<Attachment> = emptyList(),
     savedTo: String? = null,
     onDownload: (Attachment) -> Unit = {},
@@ -8407,6 +8428,7 @@ internal fun Message(
                     // about the whole thread, not about any one message in it, and belongs
                     // above whichever card is telling that story rather than on every card.
                     summarise?.let { SummaryCard(it) }
+                    suggest?.let { SuggestRepliesCard(it) }
 
                     Row(
                         Modifier.fillMaxWidth()

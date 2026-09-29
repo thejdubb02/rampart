@@ -75,7 +75,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.layout.PaddingValues
 import java.awt.FileDialog
 import java.awt.Frame
 import java.nio.file.Files
@@ -488,20 +487,14 @@ internal fun Composer(
     var scheduleMenu by remember { mutableStateOf(false) }
     var showSchedule by remember { mutableStateOf(false) }
     var showPromptBar by remember { mutableStateOf(false) }
-    var prompt by remember { mutableStateOf("") }
-    var running by remember { mutableStateOf(false) }
-    var runningRefine by remember { mutableStateOf<String?>(null) }
-    var aiError by remember { mutableStateOf<String?>(null) }
-    var aiDetail by remember { mutableStateOf<String?>(null) }
-    var composePacket by remember { mutableStateOf<String?>(null) }
-    var composeAgreed by remember { mutableStateOf(Assistant.agreed(Assistant.COMPOSE)) }
+    val writingHelp = remember(initial) { WritingHelpState() }
     val firstField = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
 
-    // Either kind of AI request counts as busy. A plain state read, not a callback fired
-    // from inside runComposeDraft and runRefine, so a caller that changes onBusy between
-    // recompositions cannot end up with the old one still holding the flag on.
-    LaunchedEffect(running, runningRefine) { onBusy(running || runningRefine != null) }
+    // A plain state read, not a callback fired from inside the writing help calls, so a
+    // caller that changes onBusy between recompositions cannot end up with the old one
+    // still holding the flag on.
+    LaunchedEffect(writingHelp.busy) { onBusy(writingHelp.busy) }
 
     /*
      * Saving as you type, with the pause built out of the effect rather than a timer: a
@@ -602,63 +595,6 @@ internal fun Composer(
         body = next
         draft = draft.withBody(next.text, initial)
         historyTick++
-    }
-
-    fun runComposeDraft(desc: String) {
-        val config = Assistant.config()
-        scope.launch {
-            running = true
-            aiError = null
-            aiDetail = null
-            try {
-                val fullPacket = Llm.packet(config.model, ComposeDraft.system(), ComposeDraft.user(desc, replyContext))
-                val reply = withContext(Dispatchers.IO) {
-                    Llm.ask(config, Secrets.loadNamed(Assistant.KEY), fullPacket)
-                }
-                Assistant.record(Assistant.COMPOSE, reply.tokensIn, reply.tokensOut, config)
-                apply(TextFieldValue(reply.text))
-            } catch (e: Exception) {
-                val title = "Rook could not write that."
-                aiError = title
-                aiDetail = faultDetail(e, title)
-            } finally {
-                running = false
-            }
-        }
-    }
-
-    fun runRefine(instruction: String) {
-        val config = Assistant.config()
-        val currentBody = body.text
-        if (currentBody.isBlank()) return
-        // Same gate as the first draft: replyContext came from [folder], and a refine call
-        // sends the current body (which may itself still carry that content) same as a draft
-        // does, so a folder marked never-leaves has to stop this too, not just the first call.
-        val why = Assistant.whyNot(Assistant.COMPOSE, config, account, folder)
-        if (why != null) {
-            aiError = why
-            aiDetail = null
-            return
-        }
-        scope.launch {
-            runningRefine = instruction
-            aiError = null
-            aiDetail = null
-            try {
-                val fullPacket = ComposeDraft.refinePacket(config.model, currentBody, instruction)
-                val reply = withContext(Dispatchers.IO) {
-                    Llm.ask(config, Secrets.loadNamed(Assistant.KEY), fullPacket)
-                }
-                Assistant.record(Assistant.COMPOSE, reply.tokensIn, reply.tokensOut, config)
-                apply(TextFieldValue(reply.text))
-            } catch (e: Exception) {
-                val title = "Rook could not write that."
-                aiError = title
-                aiDetail = faultDetail(e, title)
-            } finally {
-                runningRefine = null
-            }
-        }
     }
 
     fun format(before: String, after: String): Boolean {
@@ -1205,48 +1141,16 @@ internal fun Composer(
                     }
                 }
                 if (showPromptBar) {
-                    ComposePromptBar(
-                        prompt = prompt,
-                        onPromptChange = { prompt = it },
-                        running = running,
-                        onSubmit = {
-                            val config = Assistant.config()
-                            val why = Assistant.whyNot(Assistant.COMPOSE, config, account, folder)
-                            if (why != null) {
-                                aiError = why
-                                aiDetail = null
-                            } else if (!Assistant.agreed(Assistant.COMPOSE)) {
-                                composePacket = Llm.packet(config.model, ComposeDraft.system(), ComposeDraft.user(prompt, replyContext))
-                            } else {
-                                runComposeDraft(prompt)
-                            }
-                        }
+                    WritingHelpPanel(
+                        state = writingHelp,
+                        body = body.text,
+                        signature = draft.textSignature,
+                        subject = draft.subject,
+                        replyContext = replyContext,
+                        account = account,
+                        folder = folder,
+                        onReplace = { apply(TextFieldValue(it)) },
                     )
-                    if (composeAgreed && body.text.isNotBlank()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("Refine:", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.outline)
-                            listOf("Formalize", "Elaborate", "Shorten").forEach { option ->
-                                val runningThis = runningRefine == option
-                                RefineChip(
-                                    label = option,
-                                    enabled = !running && runningRefine == null,
-                                    running = runningThis,
-                                    onClick = { runRefine(option) }
-                                )
-                            }
-                        }
-                    }
-                    aiError?.let { title ->
-                        FaultText(
-                            title,
-                            aiDetail,
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
-                        )
-                    }
                 }
                 HorizontalDivider()
             }
@@ -1258,7 +1162,12 @@ internal fun Composer(
                     BasicTextField(
                         value = body,
                         onValueChange = ::edited,
-                        visualTransformation = MarkupStyling,
+                        // Proofreading marks only while the panel that can accept them is open.
+                        visualTransformation = proofreadStyling(
+                            if (showPromptBar) writingHelp.proofs else emptyList(),
+                            draft.textSignature,
+                            MaterialTheme.colorScheme.error,
+                        ),
                         textStyle = LocalTextStyle.current.copy(color = MaterialTheme.colorScheme.onSurface),
                         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                         modifier = Modifier.fillMaxSize()
@@ -1314,22 +1223,6 @@ internal fun Composer(
                 showSchedule = false
                 schedule(at)
             },
-        )
-    }
-
-    composePacket?.let { packet ->
-        PacketViewer(
-            packet = packet,
-            agreed = composeAgreed,
-            onSend = {
-                composePacket = null
-                runComposeDraft(prompt)
-            },
-            onAgree = {
-                Assistant.agree(Assistant.COMPOSE)
-                composeAgreed = true
-            },
-            onDismiss = { composePacket = null }
         )
     }
 
@@ -2168,98 +2061,4 @@ internal fun countsAsMine(
     if (identities.any { forMatching(it, delimiter) == key }) return true
     if (exactOnly) return false
     return domainOwned(address, identities)
-}
-
-@Composable
-private fun ComposePromptBar(
-    prompt: String,
-    onPromptChange: (String) -> Unit,
-    running: Boolean,
-    onSubmit: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp)
-            .background(MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(24.dp))
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(24.dp))
-            .padding(horizontal = 14.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            imageVector = RampartIcons.Write,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.outline,
-            modifier = Modifier.size(18.dp),
-        )
-        Spacer(Modifier.width(8.dp))
-        Box(Modifier.weight(1f)) {
-            if (prompt.isEmpty()) {
-                Text(
-                    "Describe your message",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.outline,
-                )
-            }
-            BasicTextField(
-                value = prompt,
-                onValueChange = onPromptChange,
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                modifier = Modifier.fillMaxWidth().onPreviewKeyEvent { event ->
-                    if (event.type == KeyEventType.KeyDown && (event.key == Key.Enter || event.key == Key.NumPadEnter)) {
-                        if (!running && prompt.isNotBlank()) onSubmit()
-                        true
-                    } else {
-                        false
-                    }
-                }
-            )
-        }
-        Spacer(Modifier.width(8.dp))
-        if (running) {
-            Spinner(size = 16.dp, thickness = 2.dp)
-        } else {
-            TextButton(
-                onClick = onSubmit,
-                enabled = prompt.isNotBlank(),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                modifier = Modifier.height(28.dp),
-            ) {
-                Text("Draft", style = MaterialTheme.typography.labelLarge)
-            }
-        }
-    }
-}
-
-@Composable
-private fun RefineChip(
-    label: String,
-    enabled: Boolean,
-    running: Boolean,
-    onClick: () -> Unit,
-) {
-    Box(
-        modifier = Modifier
-            .background(
-                color = if (enabled) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surfaceDim,
-                shape = RoundedCornerShape(12.dp)
-            )
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(enabled = enabled) { onClick() }
-            .padding(horizontal = 10.dp, vertical = 4.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            if (running) {
-                Spinner(size = 12.dp, thickness = 1.5.dp)
-            }
-            Text(label, style = MaterialTheme.typography.labelMedium, color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.outline)
-        }
-    }
 }
