@@ -82,6 +82,14 @@ The protocol is ours rather than OpenAI tool calling, for the same reason the fi
 builder's is: tool calling is uneven across the cheap and free models this is meant to run
 on, while "answer with one JSON object" works everywhere. `Chat.kt`.
 
+**It can read and change settings, behind a card.** Built 2026-09-28. `list_settings`,
+`get_setting` and `change_setting` reach one map of every Rampart preference, the mailbox's
+own settings on the server and every field the Stalwart schema describes. A change is never
+made by the model: it becomes a card showing each setting before and after, written only
+when a person presses Confirm, and checked again at that moment. Mailbox settings use the
+person's own session; server settings need the separate admin sign-in and go through the
+admin console's own gates. `docs/rook-settings.md` has the map and the rules.
+
 **Summarise a long thread.** Twenty messages, one paragraph, before you decide whether to
 read it. This is the one people ask for and the one with the least that can go wrong: it
 is read-only, it is per-thread, and a bad summary costs a few seconds.

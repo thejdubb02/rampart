@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -64,6 +65,10 @@ internal fun ChatPane(
     agreed: Boolean = true,
     onAgree: () -> Unit = {},
     onTyping: (Boolean) -> Unit = {},
+    /** Setting changes Rook has asked for, each waiting on a person's Confirm. See `RookChanges.kt`. */
+    cards: List<ChangeCard> = emptyList(),
+    onConfirmCard: (Int) -> Unit = {},
+    onDismissCard: (Int) -> Unit = {},
     /**
      * Its size. The fixed width it always had by default; the app bar's panel passes a fill
      * instead, because there the width is whatever the panel was dragged to.
@@ -79,8 +84,8 @@ internal fun ChatPane(
 
     // The newest line, whenever one arrives. A transcript that has to be scrolled to be
     // read is one where the answer appears somewhere nobody is looking.
-    LaunchedEffect(said.size, thinking) {
-        if (said.isNotEmpty()) scroll.animateScrollToItem(said.size - 1)
+    LaunchedEffect(said.size, thinking, cards.size) {
+        if (said.isNotEmpty()) scroll.animateScrollToItem(said.size - 1 + cards.size)
     }
 
     Column(
@@ -132,6 +137,11 @@ internal fun ChatPane(
                 // The model's own tool call is history, not something to read. What it did
                 // is on the next line, in words.
                 if (line.role != "call") SaidLine(line)
+            }
+            // After the transcript rather than inside it, so a card waiting for Confirm is
+            // always at the bottom where the person is looking, however the turn ended.
+            items(cards, key = { "card-${it.number}" }) { card ->
+                SettingChangeCard(card, onConfirmCard, onDismissCard)
             }
             if (thinking) {
                 item {
@@ -199,7 +209,8 @@ internal fun ChatPane(
                         "It can search, read, archive, delete to Trash, mark read and tag, " +
                             "and it can write a reply into the composer. It cannot send " +
                             "anything and cannot delete anything for good. Everything it " +
-                            "does appears here and can be undone.",
+                            "does appears here and can be undone. It can read your settings " +
+                            "and suggest a change, which happens only when you press Confirm.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -255,6 +266,7 @@ private fun Opening() {
             "What came in from the hotel this week?",
             "Archive everything from that newsletter.",
             "Draft a reply saying Tuesday works.",
+            "Set my away reply until Friday.",
         ).forEach {
             Text(
                 it,

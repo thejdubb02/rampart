@@ -1346,6 +1346,8 @@ private fun Reader(
      * here. Cleared with the transcript, because a new conversation has been shown nothing.
      */
     val chatShown = remember { mutableSetOf<String>() }
+    // Setting changes Rook has asked for. Only a Confirm press in the panel writes one.
+    var settingCards by remember { mutableStateOf(ChangeDesk()) }
     /*
      * The paragraph a thread was last summarised into, and everything about getting one.
      *
@@ -3694,24 +3696,83 @@ private fun Reader(
         val history = said
         val folders = mailboxes[key].orEmpty().map { it.name }
         val who = sessions.firstOrNull { it.key == key }?.account?.email.orEmpty()
+        val desk = settingCards
+        val here = sessions.firstOrNull { it.key == key }
+        val known = identities[key].orEmpty()
+        val signedIn = sessions.map { it.account.email }
+        val drafted = mutableListOf<ChangeCard>()
         scope.launch {
             val added = withContext(Dispatchers.IO) {
                 runCatching {
-                    converse(
-                        config = config,
-                        key = Secrets.loadNamed(Assistant.KEY),
-                        system = Chat.system(folders, who),
-                        history = history,
-                        shown = chatShown,
-                        tools = toolsFor(key),
-                        record = { tokensIn, tokensOut ->
-                            Assistant.record(Assistant.CHAT, tokensIn, tokensOut, config)
-                        },
-                    )
+                    val settings = SettingsTools(liveSettingsMap(here, known, signedIn), desk.nextNumber, desk.waiting.size)
+                    try {
+                        converse(
+                            config = config,
+                            key = Secrets.loadNamed(Assistant.KEY),
+                            system = Chat.system(folders, who) + "\n\n" + settingsPrompt(),
+                            history = history,
+                            shown = chatShown,
+                            tools = toolsFor(key),
+                            record = { tokensIn, tokensOut ->
+                                Assistant.record(Assistant.CHAT, tokensIn, tokensOut, config)
+                            },
+                            settings = settings,
+                        )
+                    } finally {
+                        drafted += settings.drafted
+                    }
                 }.getOrElse { listOf(Said("result", it.message ?: "The model could not be reached.")) }
             }
             said = said + added
+            settingCards = settingCards.add(drafted)
             chatThinking = false
+        }
+    }
+
+    /**
+     * Confirm, pressed on one of Rook's setting cards: the only path by which a change it
+     * asked for is written. [applyCard] checks the card again before writing, and the
+     * outcome goes into the transcript so Rook knows on its next turn.
+     */
+    fun confirmCard(number: Int) {
+        val card = settingCards.card(number)?.takeIf { it.status == CardStatus.WAITING } ?: return
+        val key = settingsAccount()
+        val here = sessions.firstOrNull { it.key == key }
+        val known = key?.let { identities[it] }.orEmpty()
+        val signedIn = sessions.map { it.account.email }
+        settingCards = settingCards.start(number)
+        scope.launch {
+            val failure = withContext(Dispatchers.IO) {
+                runCatching { applyCard(card, liveSettingsMap(here, known, signedIn)) }
+                    .getOrElse { it.message ?: "The change could not be made." }
+            }
+            settingCards = settingCards.finish(number, failure)
+            said = said + Said("result", failure?.let { "Card $number was not applied: $it" } ?: "Confirmed and changed: ${card.summary}.")
+            if (failure != null) return@launch
+            // The window holds some settings in memory so a change shows at once. Those
+            // are read again here, as the Settings pages' own callbacks would have.
+            for (line in card.lines) {
+                when (line.id) {
+                    "rampart.theme" -> THEMES.firstOrNull { it.key == Settings.theme() }?.let(onTheme)
+                    "rampart.icons" -> onIcons(iconPack(Settings.iconPack()))
+                    "rampart.loader" -> loader = Loader.of(Settings.loader())
+                    "rampart.tintRowsByTag" -> tintRows = Settings.tintRowsByTag()
+                    "rampart.undoBarSeconds" -> undoBarSeconds = Settings.undoBarSeconds()
+                    "rampart.notifyOnArrival" -> notifyOnArrival = Settings.notifyOnArrival()
+                    "rampart.notifyOnOpen" -> notifyOnOpen = Settings.notifyOnOpen()
+                    "rampart.order" -> order = Settings.order()
+                    "rampart.messageMode" -> messageMode = Settings.messageMode()
+                    "rampart.messageScale" -> messageScale = Settings.messageScale()
+                }
+            }
+            if (key != null && card.home == SettingHome.MAILBOX) {
+                withContext(Dispatchers.IO) {
+                    runCatching { session(key).jmap.vacation() to session(key).jmap.identities() }.getOrNull()
+                }?.let { (away, ids) ->
+                    vacation = away
+                    identities = identities + (key to ids)
+                }
+            }
         }
     }
 
@@ -5130,6 +5191,7 @@ private fun Reader(
                             // A new conversation has been shown nothing, so it may act on
                             // nothing until it looks something up again.
                             chatShown.clear()
+                            settingCards = settingCards.clear()
                         },
                         onClose = { AppBar.close(SideTool.ROOK) },
                         onSettings = { settingsOpen = true },
@@ -5137,6 +5199,9 @@ private fun Reader(
                         agreed = chatAgreed,
                         onAgree = { Assistant.agree(Assistant.CHAT); chatAgreed = true },
                         onTyping = { typing = it },
+                        cards = settingCards.cards,
+                        onConfirmCard = { confirmCard(it) },
+                        onDismissCard = { settingCards = settingCards.dismiss(it) },
                         modifier = Modifier.fillMaxSize(),
                     )
                     SideTool.CALENDAR -> {
