@@ -101,6 +101,25 @@ object Assistant {
      */
     const val COMPOSE = "compose"
 
+    /**
+     * A question typed in the search box, answered from the messages a search found.
+     *
+     * Its own agreement because what leaves is the text of up to five messages the reader
+     * did not pick one by one. See `AskInbox.kt`.
+     */
+    const val ASK = "ask"
+
+    /**
+     * The Today view: every unread message of the last two days, read at once.
+     *
+     * The widest read of any feature, so it is agreed to on its own and never runs unless
+     * the view is opened or Refresh is pressed. See `Briefing.kt`.
+     */
+    const val BRIEFING = "briefing"
+
+    /** Who owes what in the open thread. The same text leaves as for a summary. */
+    const val ACTIONS = "actions"
+
     /** Settings as saved, or the defaults, which are off. */
     fun config(): AssistantConfig {
         val saved = read()

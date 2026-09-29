@@ -120,6 +120,43 @@ The calendar features share one consent and one ledger line, `calendar`, beside 
 read it. This is the one people ask for and the one with the least that can go wrong: it
 is read-only, it is per-thread, and a bad summary costs a few seconds.
 
+Beside it, **Action items**: who owes what in the thread, and by when. The same text
+leaves as for a summary, and each due date is held to the thread's own words (below).
+
+**Ask the inbox, and a briefing of today.** Started 2026-09-29 on the branch
+`claude/ask-inbox`, not released, not yet run against a real key or server.
+`AskInbox.kt`, `Briefing.kt`, and their views in `AskInboxUi.kt` and `BriefingPane.kt`.
+
+- *Ask.* When the search box reads like a question, an Ask Rook button appears under it
+  (and a quiet "Ask Rook instead" for anything else typed there). Enter still searches:
+  a key that sometimes spends money is a key nobody can trust. Rook searches over the
+  account's own search path, reads the top five, and answers in two or three sentences
+  with the messages as links. Junk, Trash and never-leave folders are left out of the
+  search itself.
+- *It must cite, and the citation is checked.* The model names the ids it used. Any id
+  it was not given is dropped, and with none left the answer is "I could not find that."
+  A search that finds nothing never reaches the model.
+- *Figures are quoted, not paraphrased.* Every amount, date, time and reference number
+  in an answer has to appear word for word in the cited messages. When one does not,
+  the answer is replaced by the sentence of the message that carries that kind of thing
+  and shares most words with it, attributed to its sender; failing that, the answer is
+  shown flagged with what did not match. The briefing and action items hold their dates
+  to the source the same way and flag what does not match.
+- *Today.* A button on the dashboard opens a briefing of the unread mail of the last two
+  days: needs a reply from me, deadlines and bills with dates, and everything else by
+  topic, each line a link. Made when the view is opened or Refresh is pressed, never on a
+  timer, and kept for the rest of the day so opening it again costs nothing.
+- *Where today's briefing is kept.* It is a summary of somebody's mail, so it is kept
+  the way their mail is: one file per account beside the accounts file, encrypted with
+  AES-GCM under a key derived from the local mail store's key in the credential store.
+  Where there is no such key there is no local mail copy either, and the briefing lives
+  in memory only. One day per file, overwritten the next day.
+- *Fenced.* Everything that came out of the mailbox, sender and subject included, goes
+  between the `<<<MESSAGE` and `MESSAGE>>>` markers the chat panel already used, with
+  any marker inside the text broken up first, and every prompt says that text is data.
+- Each has its own agreement (`ask`, `briefing`, `actions`), shown with the exact packet
+  the first time, and its own line in the month's spending.
+
 **Draft a reply.** The model proposes, the composer opens with it, and nothing leaves
 until a person presses Send. The draft carries a mark saying it was drafted by a model,
 in the window, not in the message.

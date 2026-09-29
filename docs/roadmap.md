@@ -766,9 +766,11 @@ under the rules above. Gemini's four jobs, and where Rook stands on each:
 
 **Read for you.**
 - Thread summary at the top of a conversation. *Built* ("Summarise this thread").
-- Action items: who owes what, with dates. *Cloud session, claude/ask-inbox.*
+- Action items: who owes what, with dates. *Started 2026-09-29 on branch claude/ask-inbox,
+  not released.*
 - Briefing: unread mail turned into "needs a reply", "deadlines and bills" and topic
-  groups, each linked to its message. Gemini's "AI Inbox". *Cloud session, claude/ask-inbox.*
+  groups, each linked to its message. Gemini's "AI Inbox". *Started 2026-09-29 on branch
+  claude/ask-inbox, not released: the Today view, from the dashboard, cached per day.*
 - "Catch me up on mail from X this week" in the side panel. *Works through search and read
   today; the briefing makes it one click.*
 
@@ -783,8 +785,9 @@ under the rules above. Gemini's four jobs, and where Rook stands on each:
 
 **Find for you.**
 - A question typed in the search box answered in two or three sentences, with links to
-  the source messages, and "I could not find that" rather than a guess. *Cloud session,
-  claude/ask-inbox.*
+  the source messages, and "I could not find that" rather than a guess. *Started
+  2026-09-29 on branch claude/ask-inbox, not released and not yet run against a real key
+  or server. Citations and quoted figures are checked; see `assistant.md`.*
 - Comparisons across mail ("compare the contractor quotes"). *Works in the side panel
   today through search and read.*
 - Voice (Gmail Live). *Not planned. A desktop client is typed at.*
