@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="branding/Rampart_Logo_with_Lettering_Color.png" width="360" alt="Rampart">
+<img src="branding/Rampart_Logo_Color.png" width="360" alt="Rampart">
 
 ### Your mail and your whole mail server, in one native desktop window.
 
