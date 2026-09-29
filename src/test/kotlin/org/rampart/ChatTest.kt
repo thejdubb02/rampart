@@ -167,4 +167,14 @@ class ChatTest {
         override fun draftReply(id: String, text: String) = true
         override fun trackingToday() = "No person opens or clicks were recorded today."
     }
+
+    @Test
+    fun `the open message is fenced and cut to size`() {
+        val message = Summary("m1", "Susan Evans", "susan@example.com", "Free audit", "2026-09-28", "", false)
+        val told = Chat.openMessage(message, "x".repeat(Chat.OPEN_TEXT + 50))
+        assertTrue("id: m1" in told)
+        assertTrue("Free audit" in told)
+        assertTrue(told.endsWith("MESSAGE>>>"))
+        assertEquals(Chat.OPEN_TEXT, told.substringAfter("<<<MESSAGE\n").substringBefore("\nMESSAGE>>>").length)
+    }
 }

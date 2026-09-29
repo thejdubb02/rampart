@@ -3701,6 +3701,11 @@ private fun Reader(
         val known = identities[key].orEmpty()
         val signedIn = sessions.map { it.account.email }
         val drafted = mutableListOf<ChangeCard>()
+        // The message on screen is what "this email" means, so Rook is told about it
+        // without having to search for it first, and may act on it like a search result.
+        val open = selected?.takeIf { accountOf(it) == key }
+        val openText = open?.let { cardFor(it).body }?.let(::plainTextOf).orEmpty()
+        open?.let { chatShown += it.id }
         scope.launch {
             val added = withContext(Dispatchers.IO) {
                 runCatching {
@@ -3709,7 +3714,8 @@ private fun Reader(
                         converse(
                             config = config,
                             key = Secrets.loadNamed(Assistant.KEY),
-                            system = Chat.system(folders, who) + "\n\n" + settingsPrompt(),
+                            system = Chat.system(folders, who) + "\n\n" + settingsPrompt() +
+                                open?.let { "\n\n" + Chat.openMessage(it, openText) }.orEmpty(),
                             history = history,
                             shown = chatShown,
                             tools = toolsFor(key),
