@@ -13,8 +13,10 @@ import kotlinx.serialization.json.put
 /**
  * A saved search folder that runs a query against an account or all accounts.
  *
- * It stores a query string and quick filter toggles. Opening it runs the query
- * through the normal search path.
+ * The first shape stored a query string and quick filter toggles, and opening it runs
+ * the query through the normal search path. That shape still loads and still runs that
+ * way. A search saved from the condition builder carries [condition] instead, and opening
+ * it asks the server that tree, or the local copy when the server cannot be asked.
  */
 internal data class SavedSearch(
     val id: String = java.util.UUID.randomUUID().toString(),
@@ -23,6 +25,12 @@ internal data class SavedSearch(
     val account: String,
     val query: String = "",
     val filters: QuickFilters = QuickFilters(),
+    /** The nested conditions, or null for a search saved before the builder existed. */
+    val condition: Condition? = null,
+    /** Whether it divides into child folders, and by what. */
+    val split: Split = Split.NONE,
+    /** Set only on a child folder of a split search, which is never stored. */
+    val parentId: String? = null,
 )
 
 /** JSON encoder and decoder for saved searches. */
@@ -39,6 +47,10 @@ internal object SavedSearchJson {
             put("attachment", search.filters.attachment)
             put("knownSender", search.filters.knownSender)
         })
+        // Written only when there is something to write, so a search nobody has opened in
+        // the builder is stored exactly as it was and an older build still reads it.
+        search.condition?.let { put("condition", conditionJson(it)) }
+        if (search.split != Split.NONE) put("split", search.split.key)
     }
 
     fun decode(element: JsonElement): SavedSearch? {
@@ -66,6 +78,8 @@ internal object SavedSearchJson {
             account = account,
             query = query,
             filters = filters,
+            condition = conditionOf(obj["condition"]),
+            split = Split.of(obj["split"]?.jsonPrimitive?.contentOrNull),
         )
     }
 }

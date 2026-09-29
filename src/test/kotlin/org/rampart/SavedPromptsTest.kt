@@ -83,7 +83,7 @@ class SavedPromptsTest {
 
     @Test
     fun `the list lives in Files as Rampart saved-prompts json, made on the first save`() {
-        val server = FakeFiles()
+        val server = FakePromptFiles()
         val shelf = FilesPromptShelf(server)
         assertEquals(emptyList(), shelf.load())
         assertTrue(server.nodes.isEmpty(), "a read must not make anything")
@@ -122,7 +122,7 @@ class SavedPromptsTest {
  * FileNode/set create and update, upload and download. Enough of the server for the shelf
  * to be run end to end.
  */
-private class FakeFiles : FilesTransport {
+private class FakePromptFiles : FilesTransport {
     val nodes = LinkedHashMap<String, FileNode>()
     private val blobs = HashMap<String, ByteArray>()
     private var next = 0

@@ -155,6 +155,10 @@ data class Summary(
     val threadSize: Int = 1,
     /** The RFC Message-ID, used to join a Sent row to local tracking history. */
     val messageId: String = "",
+    /** The whole message in bytes, as the server counts it. Zero where it did not say. */
+    val size: Long = 0L,
+    /** The List-Id identifier, see [listIdOf]. Empty for mail that did not come from a list. */
+    val listId: String = "",
 )
 
 /**
@@ -1792,10 +1796,19 @@ internal class Jmap private constructor(
         return responses[1].list().map { jsonToSummary(it.jsonObject) }
     }
 
-    override fun search(text: String, mailboxId: String?, limit: Int, except: Collection<String>): List<Summary> {
+    override fun search(text: String, mailboxId: String?, limit: Int, except: Collection<String>): List<Summary> =
+        query(searchFilter(text, mailboxId, except), limit)
+
+    /**
+     * Email/query with a filter that is already built, newest first.
+     *
+     * Search builds its filter from one line of text. A saved search with conditions builds
+     * a tree of them in `SearchConditions.kt`, and this is the same request for either.
+     */
+    fun query(filter: JsonObject, limit: Int): List<Summary> {
         val responses = call(
             invoke("Email/query", "q") {
-                put("filter", searchFilter(text, mailboxId, except))
+                put("filter", filter)
                 putJsonArray("sort") {
                     add(buildJsonObject { put("property", "receivedAt"); put("isAscending", false) })
                 }
@@ -1909,7 +1922,11 @@ private class PushListener(
 }
 
 private val emailGetProperties =
-    listOf("id", "threadId", "from", "subject", "receivedAt", "preview", "keywords", "messageId")
+    listOf(
+        "id", "threadId", "from", "subject", "receivedAt", "preview", "keywords", "messageId",
+        // For the table's size column and for splitting a saved search by mailing list.
+        "size", "header:List-Id:asText",
+    )
 
 private fun jsonToSummary(o: JsonObject): Summary = Summary(
     id = o["id"].require("id"),
@@ -1925,6 +1942,8 @@ private fun jsonToSummary(o: JsonObject): Summary = Summary(
     keywords = o["keywords"]?.jsonObject?.keys.orEmpty(),
     threadId = o["threadId"]?.str().orEmpty(),
     messageId = (o["messageId"] as? JsonArray)?.firstOrNull()?.str().orEmpty(),
+    size = o["size"]?.num() ?: 0L,
+    listId = listIdOf((o["header:List-Id:asText"] as? JsonPrimitive)?.contentOrNull),
 )
 
 private fun kotlinx.serialization.json.JsonElement.str(): String? = jsonPrimitive.contentOrNull

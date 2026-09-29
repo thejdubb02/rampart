@@ -779,7 +779,7 @@ private fun RuleEditor(rule: Rule, folders: List<String>, onClose: () -> Unit, o
 
 /** A small menu that looks like a value rather than a control, which is what it is. */
 @Composable
-private fun Picker(options: List<String>, current: String, onPick: (String) -> Unit) {
+internal fun Picker(options: List<String>, current: String, onPick: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Text(
         current.ifBlank { "choose" },

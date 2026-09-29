@@ -77,6 +77,21 @@ object Settings {
 
     fun setDensity(key: String) = write { put("density", JsonPrimitive(key)) }
 
+    /** The message list layout beside density: "normal", "table" or "cards". See [ListLayout]. */
+    fun listLayout(): String? = read()["listLayout"]?.jsonPrimitive?.contentOrNull
+
+    fun setListLayout(key: String) = write { put("listLayout", JsonPrimitive(key)) }
+
+    /** The table view's dragged column widths, as [ColumnWidths.encoded] writes them. */
+    fun tableColumns(): String? = read()["tableColumns"]?.jsonPrimitive?.contentOrNull
+
+    fun setTableColumns(value: String) = write { put("tableColumns", JsonPrimitive(value)) }
+
+    /** The table view's sort, as [TableSort.encoded] writes it. */
+    fun tableSort(): String? = read()["tableSort"]?.jsonPrimitive?.contentOrNull
+
+    fun setTableSort(value: String) = write { put("tableSort", JsonPrimitive(value)) }
+
     /**
      * What the light/dark switch was set to before themes existed, and nothing writes it any
      * more. It is still read so that an existing install that had been switched to dark opens

@@ -237,6 +237,14 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         if ("messageId" !in messageColumns) connection.createStatement().use {
             it.execute("ALTER TABLE message ADD COLUMN messageId TEXT NOT NULL DEFAULT ''")
         }
+        // Size and List-Id arrived with the table view and split saved searches. A row
+        // written before has neither, which reads as zero and empty until it is next fetched.
+        if ("size" !in messageColumns) connection.createStatement().use {
+            it.execute("ALTER TABLE message ADD COLUMN size INTEGER NOT NULL DEFAULT 0")
+        }
+        if ("listId" !in messageColumns) connection.createStatement().use {
+            it.execute("ALTER TABLE message ADD COLUMN listId TEXT NOT NULL DEFAULT ''")
+        }
         if ("keywordsIndexed" !in messageColumns) connection.createStatement().use {
             it.execute("ALTER TABLE message ADD COLUMN keywordsIndexed INTEGER NOT NULL DEFAULT 0")
         }
@@ -583,14 +591,14 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             connection.prepareStatement(
                 """
                 INSERT INTO message (id, mailbox, thread, threadSize, sender, senderEmail,
-                    subject, receivedAt, preview, seen, flagged, keywords, messageId, keywordsIndexed)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+                    subject, receivedAt, preview, seen, flagged, keywords, messageId, size, listId, keywordsIndexed)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
                 ON CONFLICT(id) DO UPDATE SET
                     mailbox=excluded.mailbox, thread=excluded.thread, threadSize=excluded.threadSize,
                     sender=excluded.sender, senderEmail=excluded.senderEmail, subject=excluded.subject,
                     receivedAt=excluded.receivedAt, preview=excluded.preview, seen=excluded.seen,
                     flagged=excluded.flagged, keywords=excluded.keywords, messageId=excluded.messageId,
-                    keywordsIndexed=1
+                    size=excluded.size, listId=excluded.listId, keywordsIndexed=1
                 """.trimIndent(),
             ).use { s ->
                 located.values.forEach { (mailbox, m) ->
@@ -607,6 +615,8 @@ internal class Store(private val connection: Connection) : AutoCloseable {
                         s.setInt(11, if (m.flagged) 1 else 0)
                         s.setString(12, m.keywords.joinToString(" "))
                         s.setString(13, m.messageId)
+                        s.setLong(14, m.size)
+                        s.setString(15, m.listId)
                         s.addBatch()
                 }
                 s.executeBatch()
@@ -808,6 +818,70 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         .filter { it.isNotBlank() }
         .joinToString(" ") { "\"" + it.replace("\"", "") + "\"" }
         .takeIf { it.isNotBlank() }
+
+    /**
+     * The local copy of everything a saved search's conditions match, newest first.
+     *
+     * [query] comes from [localWhere], which is the only thing that makes one: its SQL is
+     * fixed text and every value in it is bound here, never pasted in.
+     */
+    @Synchronized fun matching(query: LocalQuery.Sql, limit: Int = 200, from: Int = 0): List<Summary> =
+        connection.prepareStatement(
+            "SELECT * FROM message WHERE ${query.where} ORDER BY receivedAt DESC LIMIT ? OFFSET ?",
+        ).use { s ->
+            var at = bind(s, query.args)
+            s.setInt(at++, limit)
+            s.setInt(at, from)
+            s.executeQuery().use { rows -> buildList { while (rows.next()) add(summaryOf(rows)) } }
+        }
+
+    /**
+     * Every match for [query], with only what counting and splitting need.
+     *
+     * No limit, because a split has to see every sender and not only the newest two
+     * hundred. No preview, subject or thread either: over fifty thousand rows those are
+     * most of the bytes, and nothing that counts looks at them.
+     */
+    @Synchronized fun matchingForCount(query: LocalQuery.Sql): List<Summary> =
+        connection.prepareStatement(
+            "SELECT id, sender, senderEmail, receivedAt, seen, flagged, keywords, listId FROM message " +
+                "WHERE ${query.where}",
+        ).use { s ->
+            bind(s, query.args)
+            s.executeQuery().use { rows ->
+                buildList {
+                    while (rows.next()) {
+                        add(
+                            Summary(
+                                id = rows.getString(1),
+                                from = rows.getString(2),
+                                fromEmail = rows.getString(3),
+                                subject = "",
+                                receivedAt = rows.getString(4),
+                                preview = "",
+                                seen = rows.getInt(5) == 1,
+                                flagged = rows.getInt(6) == 1,
+                                keywords = rows.getString(7).split(' ').filter { it.isNotBlank() }.toSet(),
+                                listId = rows.getString(8),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+
+    /** Binds [args] from the first parameter on, and says which one is next. */
+    private fun bind(statement: java.sql.PreparedStatement, args: List<Any>): Int {
+        var at = 1
+        for (arg in args) {
+            when (arg) {
+                is Long -> statement.setLong(at++, arg)
+                is Int -> statement.setInt(at++, arg)
+                else -> statement.setString(at++, arg.toString())
+            }
+        }
+        return at
+    }
 
     /**
      * Every tag anywhere in this account's local copy.
@@ -1322,4 +1396,6 @@ private fun summaryOf(rows: java.sql.ResultSet) = Summary(
     threadId = rows.getString("thread"),
     threadSize = rows.getInt("threadSize"),
     messageId = rows.getString("messageId"),
+    size = rows.getLong("size"),
+    listId = rows.getString("listId"),
 )
