@@ -247,9 +247,15 @@ internal fun prepareReading(
         val (type, bytes) = drawable(part.type, raw)
         cid to dataUri(type, bytes)
     }.toMap()
-    val images = pictures.mapNotNull { (id, raw) ->
-        runCatching { Image.makeFromEncoded(raw).toComposeImageBitmap() }.getOrNull()?.let { id to it }
-    }.toMap()
+    /*
+     * No decoded pictures here any more. Every cited picture was decoded to a bitmap on the
+     * way to opening the message, but the engine draws from the bytes in the document and
+     * never looks at a bitmap. Only the plain renderer and the click-to-preview do, and both
+     * now decode the bytes themselves when they are actually shown. That was the largest
+     * piece of local work between the fetch and the page for a message with pictures, and
+     * each bitmap held four bytes a pixel for as long as the card stayed open.
+     */
+    val images = emptyMap<String, ImageBitmap>()
     return Reading(
         page = body.html?.let { emailDocument(it, carried, showRemote, dark) },
         cited = carried.keys,

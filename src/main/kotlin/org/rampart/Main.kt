@@ -2848,6 +2848,11 @@ private fun Reader(
                 summarisePacket = null
                 summariseFor = null
                 cards = emptyMap()
+                // The load counters go with the cards they guard. Kept, they gained one
+                // entry for every message opened in the session and never lost any; a load
+                // still in flight for the old conversation now finds no counter and stops,
+                // which is what should happen to it anyway.
+                cardEpoch.clear()
                 openedByHand = emptySet()
                 filed = emptySet()
                 // The clicked message opens at once, before the rest of the thread is even
@@ -9027,11 +9032,15 @@ internal fun Message(
     }
     // The body refers to a picture it carries by its Content-ID, not by its blob, so the
     // two have to be joined up before anything can be drawn in place.
-    val carried = remember(attachments, images) {
-        attachments.mapNotNull { part ->
-            val cid = cidKey(part.cid) ?: return@mapNotNull null
-            images[part.blobId]?.let { cid to it }
-        }.toMap()
+    // Lazy, and decoded from the bytes where no bitmap was made: only the plain renderer
+    // reads this, and a message the engine draws should not pay to decode its pictures twice.
+    val carried = remember(attachments, images, imageBytes) {
+        lazy {
+            attachments.mapNotNull { part ->
+                val cid = cidKey(part.cid) ?: return@mapNotNull null
+                (images[part.blobId] ?: imageBytes[part.blobId]?.let(::bitmapOf))?.let { cid to it }
+            }.toMap()
+        }
     }
 
     // The background, the watermark and filling the whole pane are the reading pane's own,
@@ -9649,7 +9658,7 @@ internal fun Message(
                             )
                             Spacer(Modifier.height(10.dp))
                         }
-                        HtmlBody(rendered, carried, emptyMap())
+                        HtmlBody(rendered, carried.value, emptyMap())
                     }
                     }
 

@@ -251,6 +251,10 @@ internal fun WebBody(
                 view.zoom = zoom
                 val generation = documentGeneration.incrementAndGet()
                 ticker.getAndSet(null)?.stop()
+                // From the document being handed over to the engine saying it is loaded:
+                // the render third of opening a message, beside the fetch and the local
+                // work Main.kt already times. Recorded here because only the engine knows.
+                val handedOver = System.nanoTime()
                 lateinit var listener: javafx.beans.value.ChangeListener<Worker.State>
                 listener = javafx.beans.value.ChangeListener { _, _, state ->
                     if (state != Worker.State.SUCCEEDED && state != Worker.State.FAILED && state != Worker.State.CANCELLED) {
@@ -262,6 +266,7 @@ internal fun WebBody(
                         bridge.onBlank()
                         return@ChangeListener
                     }
+                    Diagnostics.duration(Metric.MESSAGE_OPEN_RENDER, (System.nanoTime() - handedOver) / 1_000_000.0)
                     (view.engine.executeScript("window") as JSObject).setMember("rampart", bridge)
                     view.engine.executeScript(darkSwitch(bridge.dark, bridge.paper, bridge.ink))
                     view.engine.executeScript(WIRING)

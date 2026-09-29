@@ -32,13 +32,12 @@ import java.util.concurrent.atomic.AtomicInteger
  * what it costs on a real network, and doing them side by side does not.
  *
  * A mailbox of [inboxSize] messages, three to a thread. Message `m<n>` carries [images]
- * inline pictures of [imageBytes] each, the way a newsletter does.
+ * inline pictures, each the same real PNG ([picture]), the way a newsletter does.
  */
 internal class FakeJmapServer(
     private val latencyMs: Long = 0,
     private val inboxSize: Int = 50_000,
     private val images: Int = 3,
-    private val imageBytes: Int = 40_000,
     private val bodyChars: Int = 60_000,
 ) : AutoCloseable {
     private val server = run {
@@ -63,6 +62,19 @@ internal class FakeJmapServer(
     val downloads = AtomicInteger()
 
     val state = "s1"
+
+    /**
+     * A real PNG, so decoding it costs what decoding a newsletter's picture costs. A photo
+     * shaped picture, 600 by 300, with enough noise that it does not compress to nothing.
+     */
+    val picture: ByteArray = run {
+        val image = java.awt.image.BufferedImage(600, 300, java.awt.image.BufferedImage.TYPE_INT_RGB)
+        val random = java.util.Random(44)
+        for (y in 0 until 300) for (x in 0 until 600) {
+            image.setRGB(x, y, ((x * 255 / 600) shl 16) or ((y * 255 / 300) shl 8) or random.nextInt(64))
+        }
+        java.io.ByteArrayOutputStream().also { javax.imageio.ImageIO.write(image, "png", it) }.toByteArray()
+    }
 
     init {
         server.executor = Executors.newFixedThreadPool(16)
@@ -97,7 +109,7 @@ internal class FakeJmapServer(
         downloads.incrementAndGet()
         val blob = exchange.requestURI.path.substringAfterLast('/')
         return when {
-            blob.startsWith("img") -> ByteArray(imageBytes) { (it % 251).toByte() }
+            blob.startsWith("img") -> picture
             else -> "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n".toByteArray()
         }
     }
@@ -235,7 +247,7 @@ internal class FakeJmapServer(
                 repeat(images) { i ->
                     add(buildJsonObject {
                         put("blobId", "img$n-$i"); put("type", "image/png"); put("name", "picture$i.png")
-                        put("size", imageBytes); put("cid", "pic$i@example.org"); put("disposition", "inline")
+                        put("size", picture.size); put("cid", "pic$i@example.org"); put("disposition", "inline")
                     })
                 }
             }
