@@ -111,7 +111,7 @@ internal fun MakeTask(context: MailCalendar, summary: Summary, body: Body?) {
     val unavailable = remember(context.backend, context.accountName) { noTasksBecause(context.backend, context.accountName) }
     // Hidden on an account that cannot keep a task: a sentence under every message would be noise.
     if (unavailable != null) return
-    val text = remember(summary.id, body) { plainTextOf(body) }
+    val text = remember(summary.id, body) { rookTextOf(body) }
     val link = remember(summary.id, body) { taskLinkOf(summary, body) }
     val scope = rememberCoroutineScope()
     val zone = remember { ZoneId.systemDefault() }

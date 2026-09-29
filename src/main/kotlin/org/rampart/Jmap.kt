@@ -1363,6 +1363,61 @@ internal class Jmap private constructor(
         return null
     }
 
+    /**
+     * Files [raw] in Drafts exactly as built, then submits it, so the server sends and keeps
+     * the bytes the signature covers rather than a message it rebuilt from an Email object.
+     * Two requests, because a submission has to name an Email id and the import makes it.
+     */
+    override fun sendRaw(raw: ByteArray, draft: Draft, identity: Identity, draftsMailboxId: String, sentMailboxId: String?): String? {
+        refusedOption(draft.copy(sign = false, encrypt = false), submissionExtensions)?.let { throw JmapError(it) }
+        val uploaded = upload(raw, "message.eml", "message/rfc822")
+        val imported = call(
+            invoke("Email/import", "i") {
+                putJsonObject("emails") {
+                    putJsonObject("m") {
+                        put("blobId", uploaded.blobId)
+                        putJsonObject("mailboxIds") { put(draftsMailboxId, true) }
+                        putJsonObject("keywords") { put("\$draft", true); put("\$seen", true) }
+                    }
+                }
+            },
+        )[0][1].jsonObject
+        val emailId = imported["created"]?.jsonObject?.get("m")?.jsonObject?.get("id")?.str()
+            ?: throw JmapError(refusal(imported, "notCreated", "The server would not store the message"))
+        val envelope = submissionEnvelope(
+            from = identity.email,
+            recipients = draft.recipients,
+            requireTls = draft.requireTls,
+            confirmDelivery = draft.confirmDelivery,
+            extensions = submissionExtensions,
+        )
+        val submitted = call(
+            invoke("EmailSubmission/set", "s") {
+                putJsonObject("create") {
+                    putJsonObject("sub") {
+                        put("emailId", emailId)
+                        put("identityId", identity.id)
+                        envelope?.let { put("envelope", it) }
+                    }
+                }
+                putJsonObject("onSuccessUpdateEmail") {
+                    putJsonObject("#sub") {
+                        put("mailboxIds/$draftsMailboxId", JsonNull)
+                        if (sentMailboxId != null) put("mailboxIds/$sentMailboxId", JsonPrimitive(true))
+                        put("keywords/\$draft", JsonNull)
+                    }
+                }
+            },
+        )[0][1].jsonObject
+        if (submitted["created"]?.jsonObject?.get("sub") == null) {
+            // Not sent, so the protected copy in Drafts is taken back out rather than left
+            // looking like a draft somebody could reopen and edit, which it cannot be.
+            runCatching { call(invoke("Email/set", "x") { putJsonArray("destroy") { add(emailId) } }) }
+            throw JmapError(refusal(submitted, "notCreated", "The server would not send the message"))
+        }
+        return null
+    }
+
     override fun sendDelayed(
         draft: Draft,
         identity: Identity,

@@ -3397,7 +3397,12 @@ private fun Reader(
                         trackingNotice = "The message was sent without tracking because the companion server could not be reached."
                     }
                 }
-                val filed = account.jmap.send(outgoing, identity, draftsId, sentId)
+                // Signed or encrypted mail is built and protected here; it never falls back to plain.
+                val filed = if (outgoing.sign || outgoing.encrypt) {
+                    sendSealed(account.jmap, Keys.ring, outgoing, identity, draftsId, sentId)
+                } else {
+                    account.jmap.send(outgoing, identity, draftsId, sentId)
+                }
                 // Written down only once it has actually gone. A tracked id for a
                 // message that failed to send would sit in the list forever waiting
                 // for an open that cannot come.
@@ -3801,7 +3806,7 @@ private fun Reader(
 
     /** What Ask Rook and the Today view may read on [key]. Read only: see [inboxReader]. */
     fun readerFor(key: String): InboxReader =
-        inboxReader(session(key).jmap, mailboxes[key].orEmpty(), key) { plainTextOf(restoredBody(key, it)) }
+        inboxReader(session(key).jmap, mailboxes[key].orEmpty(), key) { rookTextOf(restoredBody(key, it)) }
 
     /**
      * Everything the assistant panel is able to reach.
@@ -3820,7 +3825,7 @@ private fun Reader(
             }.getOrDefault(emptyList())
 
         override fun read(id: String): String? =
-            runCatching { plainTextOf(restoredBody(key, session(key).jmap.body(id))) }.getOrNull()?.ifBlank { null }
+            runCatching { rookTextOf(restoredBody(key, session(key).jmap.body(id))) }.getOrNull()?.ifBlank { null }
 
         override fun file(ids: List<String>, role: String): Int {
             if (ids.isEmpty()) return 0
@@ -3919,7 +3924,7 @@ private fun Reader(
         // The message on screen is what "this email" means, so Rook is told about it
         // without having to search for it first, and may act on it like a search result.
         val open = selected?.takeIf { accountOf(it) == key }
-        val openText = open?.let { cardFor(it).body }?.let(::plainTextOf).orEmpty()
+        val openText = open?.let { cardFor(it).body }?.let(::rookTextOf).orEmpty()
         open?.let { chatShown += it.id }
         // Only the open message can be linked from a task Rook proposes. See TaskFromMail.kt.
         val tasks = taskToolsFor(
@@ -4029,19 +4034,21 @@ private fun Reader(
      * before the button has even sent anything. The same rule as opening a message, where
      * the body and the parts are asked for together.
      */
-    suspend fun summariseTurns(key: String, message: Summary): List<Turn> = coroutineScope {
+    suspend fun summariseTurns(key: String, message: Summary, decrypted: Boolean = false): List<Turn> = coroutineScope {
         thread.ifEmpty { listOf(message) }.map { m ->
             async(Dispatchers.IO) {
-                val text = cards[CardKey(key, m.id)]?.body?.let(::plainTextOf)
+                val server = cards[CardKey(key, m.id)]?.body?.let(::plainTextOf)
                     ?: runCatching { plainTextOf(restoredBody(key, session(key).jmap.body(m.id))) }.getOrDefault("")
+                // Encrypted mail is withheld unless this is the explicit "Decrypt to summarise". See RookGate.kt.
+                val text = RookGate.textFor(server, SealedView.sealed(key, m.id), SealedView.plaintext(key, m.id), decrypted)
                 Turn(m.from, m.receivedAt, text)
             }
         }.awaitAll()
     }
 
     /** The exact bytes [runSummarise] would post, which is what the viewer shows first. */
-    suspend fun summarisePacketFor(key: String, message: Summary, config: AssistantConfig): String =
-        Llm.packet(config.model, Summarise.system(), Summarise.user(message.subject, summariseTurns(key, message)))
+    suspend fun summarisePacketFor(key: String, message: Summary, config: AssistantConfig, decrypted: Boolean = false): String =
+        Llm.packet(config.model, Summarise.system(), Summarise.user(message.subject, summariseTurns(key, message, decrypted)))
 
     /** Posts a packet already agreed to, or already shown on demand, and records what it cost. */
     fun runSummarise(packet: String, config: AssistantConfig, forThread: String) {
@@ -4080,7 +4087,7 @@ private fun Reader(
      * the first agreement; after that it goes straight through, and looking is something
      * offered separately. See [PacketViewer].
      */
-    fun summarise(message: Summary, key: String, config: AssistantConfig, viewFirst: Boolean = false) {
+    fun summarise(message: Summary, key: String, config: AssistantConfig, viewFirst: Boolean = false, decrypted: Boolean = false) {
         if (summarising) return
         Assistant.whyNot(Assistant.SUMMARISE, config, key, currentFolderName(key))?.let {
             summariseError = it
@@ -4091,13 +4098,14 @@ private fun Reader(
         val forThread = message.threadId
         summarising = true
         scope.launch {
-            val packet = withContext(Dispatchers.IO) { summarisePacketFor(key, message, config) }
+            val packet = withContext(Dispatchers.IO) { summarisePacketFor(key, message, config, decrypted) }
             summarising = false
             // The reader has moved on to a different conversation while this was being
             // built. An answer or a permission dialog for a thread nobody is looking at
             // is not shown.
             if (selected?.threadId != forThread) return@launch
-            if (viewFirst || !Assistant.agreed(Assistant.SUMMARISE)) {
+            // Decrypted text is always shown before it goes, whatever was agreed before.
+            if (viewFirst || decrypted || !Assistant.agreed(Assistant.SUMMARISE)) {
                 summariseFor = forThread
                 summarisePacket = packet
             } else {
@@ -4543,6 +4551,36 @@ private fun Reader(
         }
     }
 
+    /** The encryption and signature line above one message, and its decryption. See CryptoReader.kt. */
+    @Composable
+    fun sealedPanelFor(message: Summary) {
+        val key = accountOf(message)
+        val card = cardFor(message)
+        val open = sessions.firstOrNull { it.key == key }
+        SealedPanel(
+            account = key,
+            summary = message,
+            body = card.body,
+            attachments = card.attachments,
+            emailBlobId = card.emailBlobId,
+            backend = open?.jmap,
+            store = { open?.store },
+            known = knownDomains(),
+            dark = darkMail,
+            onDecryptToSummarise = key?.let { k ->
+                val cfg = Assistant.config()
+                if (cfg.mode == AssistantMode.OFF) {
+                    null
+                } else {
+                    {
+                        AppBar.show(SideTool.ROOK)
+                        summarise(message, k, cfg, viewFirst = true, decrypted = true)
+                    }
+                }
+            },
+        )
+    }
+
     /**
      * One message's card: its own header, avatar, body and action row, exactly what the
      * reading pane has always drawn for whichever message was open, called once per
@@ -4589,9 +4627,11 @@ private fun Reader(
                 copy(reading = reading, pageRemote = remote, images = reading.images.ifEmpty { images })
             }
         }
+        // A message the reader decrypted is drawn from its decrypted copy. See CryptoReader.kt.
+        val unsealed = SealedView.of(key, cardSummary.id)
         Message(
             summary = cardSummary,
-            body = card.body,
+            body = unsealed?.body ?: card.body,
             accountKey = key.orEmpty(),
             sentBy = if (ours.any { it.equals(cardSummary.fromEmail, ignoreCase = true) }) sessions.firstOrNull { it.key == key }?.jmap else null,
             tracking = key?.let { account ->
@@ -4739,7 +4779,7 @@ private fun Reader(
             bodyError = card.bodyError,
             images = card.images,
             imageBytes = card.imageBytes,
-            reading = card.reading,
+            reading = unsealed?.reading ?: card.reading,
             paneHeight = windowSize().height.value.toInt(),
             actions = actionsFor(cardSummary),
             // A suggestion opens as an ordinary reply with the words above the quote, unsent.
@@ -5125,6 +5165,7 @@ private fun Reader(
                 }
             },
             book = withContacts(books[key].orEmpty(), contacts.map { it.first }),
+            sealCards = contacts.map { it.second },
             full = composeFull,
             onFull = { composeFull = it },
             trackingReady = trackingServer.isNotBlank(),
@@ -6318,7 +6359,9 @@ private fun Reader(
                                             }
                                         }
                                     }
-                                    Box(if (stacked) Modifier.bringIntoViewRequester(requester) else Modifier) {
+                                    // A column rather than a box, so the encryption line sits above the card.
+                                    Column(if (stacked) Modifier.bringIntoViewRequester(requester) else Modifier) {
+                                        sealedPanelFor(m)
                                         renderCard(
                                             m,
                                             showSubject = !stacked,

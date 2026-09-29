@@ -64,6 +64,11 @@ internal fun refusedOption(draft: Draft, extensions: Set<String>): String? =
     if (draft.requireTls && REQUIRETLS !in extensions) {
         "This server cannot promise secure delivery, so the message was not sent. " +
             "Turn off Require secure delivery to send it anyway."
+    } else if (draft.sign || draft.encrypt) {
+        // Only sendSealed may send these (SealedSend.kt). Reaching the ordinary path with one
+        // would send it unsigned and readable, which is the one thing that must never happen.
+        "This message is set to be signed or encrypted, and this way of sending cannot do either, " +
+            "so it was not sent. Send it now, or turn signing and encryption off."
     } else {
         null
     }

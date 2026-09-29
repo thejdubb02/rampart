@@ -134,10 +134,47 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             }
             val connection = DriverManager.getConnection(url)
             return Store(connection).apply {
+                encrypted = key != null
                 prepare()
                 legacy?.let { (legacyPath, legacyKey) -> migrateTracking(legacyPath, legacyKey) }
             }
         }
+    }
+
+    /**
+     * Whether this file is SQLCipher with a key, which is the one condition under which
+     * decrypted mail may be indexed here. See [EncryptedSearch] and [indexDecrypted].
+     */
+    @Volatile
+    internal var encrypted: Boolean = false
+        private set
+
+    /**
+     * Adds a decrypted message's words to local search, and remembers that it did, so turning
+     * the setting off can take them out again. Refuses on an unencrypted file.
+     */
+    @Synchronized fun indexDecrypted(id: String, text: String): Boolean {
+        if (!encrypted) return false
+        exec("CREATE TABLE IF NOT EXISTS decrypted_index (id TEXT PRIMARY KEY)")
+        connection.prepareStatement("UPDATE search SET body = ? WHERE id = ?").use { s ->
+            s.setString(1, text)
+            s.setString(2, id)
+            s.executeUpdate()
+        }
+        connection.prepareStatement("INSERT OR IGNORE INTO decrypted_index (id) VALUES (?)").use { s ->
+            s.setString(1, id)
+            s.executeUpdate()
+        }
+        return true
+    }
+
+    /** Takes every decrypted message's words back out of search. */
+    @Synchronized fun forgetDecrypted() {
+        exec(
+            "CREATE TABLE IF NOT EXISTS decrypted_index (id TEXT PRIMARY KEY)",
+            "UPDATE search SET body = '' WHERE id IN (SELECT id FROM decrypted_index)",
+            "DELETE FROM decrypted_index",
+        )
     }
 
     /**

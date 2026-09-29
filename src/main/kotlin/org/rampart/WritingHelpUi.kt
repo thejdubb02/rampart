@@ -257,7 +257,7 @@ internal fun WritingHelpPanel(
         state.running = "Help me write"
         scope.launch {
             val read = withContext(Dispatchers.IO) {
-                runCatching { readToneSample(mail, account?.let { Assistant.deniedFolders(it) }.orEmpty(), ::plainTextOf) }
+                runCatching { readToneSample(mail, account?.let { Assistant.deniedFolders(it) }.orEmpty(), ::rookTextOf) }
                     .getOrElse { ToneRead.Skipped("Your sent mail could not be read, so no sample of your writing was sent.") }
             }
             state.running = null
@@ -636,7 +636,7 @@ internal class SuggestReplies(private val scope: CoroutineScope) {
                 withContext(Dispatchers.IO) {
                     // A sample that cannot be read is left out rather than stopping the replies.
                     val style = if (backend != null && ToneSetting.on()) {
-                        (runCatching { readToneSample(backend, Assistant.deniedFolders(account), ::plainTextOf) }.getOrNull() as? ToneRead.Sample)?.text.orEmpty()
+                        (runCatching { readToneSample(backend, Assistant.deniedFolders(account), ::rookTextOf) }.getOrNull() as? ToneRead.Sample)?.text.orEmpty()
                     } else {
                         ""
                     }
