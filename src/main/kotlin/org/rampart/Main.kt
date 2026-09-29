@@ -1237,6 +1237,8 @@ private fun Reader(
     var filtersError by remember { mutableStateOf<String?>(null) }
     // Which account's filters are on the screen, or null for the set kept for all of them.
     var filterAccount by remember { mutableStateOf<String?>(null) }
+    // Which account the per-account settings pages are showing.
+    var chosenSettingsAccount by remember { mutableStateOf<String?>(null) }
     var globalFilters by remember { mutableStateOf(Filters.read()) }
     // Who you write to, per account, read once and kept up to date as mail goes past.
     var books by remember { mutableStateOf<Map<String, List<Person>>>(emptyMap()) }
@@ -1527,6 +1529,10 @@ private fun Reader(
     /** Settings are always about one real account, never about the merged row. */
     fun settingsAccount(): String? =
         here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key
+
+    /** The account the per-account settings pages show: the one picked there, while it is still signed in. */
+    fun pickedSettingsAccount(): String? =
+        chosenSettingsAccount?.takeIf { k -> sessions.any { it.key == k } } ?: settingsAccount()
 
     /**
      * Folders a search of the whole account should leave out.
@@ -2450,8 +2456,8 @@ private fun Reader(
         }
     }
 
-    LaunchedEffect(settingsOpen, here) {
-        val key = settingsAccount()
+    LaunchedEffect(settingsOpen, chosenSettingsAccount, here) {
+        val key = pickedSettingsAccount()
         if (!settingsOpen || key == null) return@LaunchedEffect
         vacationError = null
         vacation = withContext(Dispatchers.IO) { runCatching { session(key).jmap.vacation() }.getOrNull() }
@@ -5356,11 +5362,14 @@ private fun Reader(
             } else if (contactsOpen) {
                 contactsPane()
             } else if (settingsOpen) {
+                val currentSettingsAccount = pickedSettingsAccount()
                 SettingsPane(
                     accounts = sessions.map {
                         AccountMailboxes(it.key, it.account.name, it.account.email, mailboxes[it.key].orEmpty())
                     },
-                    identities = identities[settingsAccount()].orEmpty(),
+                    account = currentSettingsAccount,
+                    onAccount = { chosenSettingsAccount = it },
+                    identities = identities[currentSettingsAccount].orEmpty(),
                     quotas = quotas,
                     onTintRowsByTag = { tintRows = it },
                     onDensity = { density = it },
@@ -5370,7 +5379,7 @@ private fun Reader(
                     vacation = vacation,
                     vacationError = vacationError,
                     onVacation = { wanted ->
-                        val key = settingsAccount()
+                        val key = currentSettingsAccount
                         vacationError = vacationProblem(wanted)
                         if (key != null && vacationError == null) {
                             scope.launch {
@@ -5386,7 +5395,7 @@ private fun Reader(
                     },
                     signatureError = signatureError,
                     onSignature = { identity, html ->
-                        val key = settingsAccount()
+                        val key = currentSettingsAccount
                         if (key != null) {
                             signatureError = null
                             scope.launch {
@@ -5482,7 +5491,7 @@ private fun Reader(
                     onFilters = { next -> filterAccount?.let { saveFilters(it, next) } },
                     onFilterBusy = { filterBusy = it },
                     onClose = { settingsOpen = false },
-                    security = settingsAccount()?.let { key -> sessions.firstOrNull { it.key == key } },
+                    security = currentSettingsAccount?.let { key -> sessions.firstOrNull { it.key == key } },
                 )
                 return@Row
             }

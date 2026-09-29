@@ -29,6 +29,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.rememberCoroutineScope
@@ -118,6 +119,9 @@ internal fun SettingsPane(
     /** Which account's filters are showing, or null for the set kept for every account. */
     filterAccount: String?,
     onFilterAccount: (String?) -> Unit,
+    /** Which account the per-account settings pages are showing. */
+    account: String? = null,
+    onAccount: (String) -> Unit = {},
     globalFilters: GlobalFilters,
     onGlobalFilters: (GlobalFilters) -> Unit,
     onFilters: (Script) -> Unit,
@@ -152,8 +156,8 @@ internal fun SettingsPane(
                 Column(Modifier.widthIn(max = 720.dp).fillMaxWidth()) {
                     when (page) {
                         "accounts" -> AccountsPage(accounts, onAddAccount, quotas)
-                        "security" -> SecurityPage(security)
-                        "phone" -> PhonePage(security)
+                        "security" -> SecurityPage(security, accounts, account, onAccount)
+                        "phone" -> PhonePage(security, accounts, account, onAccount)
                         "notifications" -> NotificationsPage(
                             notifyOnArrival, onNotifyOnArrival, notifyOnOpen, onNotifyOnOpen,
                         )
@@ -184,9 +188,9 @@ internal fun SettingsPane(
                         )
                         "themes" -> ThemesPage(onTheme, iconPack, onIconPack, onTintRowsByTag, onLoader, onTrackingServer, onDensity)
                         "identities" -> IdentitiesPage(
-                            identities, signatureError, onSignature, onPickSignatureImage,
+                            accounts, account, onAccount, identities, signatureError, onSignature, onPickSignatureImage,
                         )
-                        "away" -> AwayPage(vacation, vacationError, onVacation)
+                        "away" -> AwayPage(accounts, account, onAccount, vacation, vacationError, onVacation)
                         "tracking" -> TrackingPage(onTrackingServer)
                         "assistant" -> AssistantPage(accounts)
                         "admin" -> AdminLoginPage()
@@ -1112,8 +1116,31 @@ private fun AccountsPage(
     }
 }
 
+/** Which account is on the screen, when more than one is signed in. */
+@Composable
+internal fun SettingsAccountPicker(
+    accounts: List<AccountMailboxes>,
+    chosen: String?,
+    onChoose: (String) -> Unit,
+) {
+    if (accounts.size <= 1) return
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        accounts.forEach { account ->
+            FilterChip(
+                selected = chosen == account.key,
+                onClick = { onChoose(account.key) },
+                label = { Text(account.email) },
+            )
+        }
+    }
+    Spacer(Modifier.height(14.dp))
+}
+
 @Composable
 private fun IdentitiesPage(
+    accounts: List<AccountMailboxes>,
+    chosen: String?,
+    onChoose: (String) -> Unit,
     identities: List<Identity>,
     signatureError: String?,
     onSignature: (Identity, String) -> Unit,
@@ -1124,6 +1151,7 @@ private fun IdentitiesPage(
         "Kept on the server against each sending address, so one written here is the " +
             "one the webmail uses too.",
     )
+    SettingsAccountPicker(accounts, chosen, onChoose)
     signatureError?.let {
         Text(
             it,
@@ -1151,12 +1179,20 @@ private fun IdentitiesPage(
 }
 
 @Composable
-private fun AwayPage(vacation: Vacation?, vacationError: String?, onVacation: (Vacation) -> Unit) {
+private fun AwayPage(
+    accounts: List<AccountMailboxes>,
+    chosen: String?,
+    onChoose: (String) -> Unit,
+    vacation: Vacation?,
+    vacationError: String?,
+    onVacation: (Vacation) -> Unit,
+) {
     Section(
         "When you are away",
         "The server sends this on your behalf, so it keeps working when Rampart " +
             "is closed. One reply per person, not one per message.",
     )
+    SettingsAccountPicker(accounts, chosen, onChoose)
     if (vacation == null) {
         Text(
             "This server does not do away replies, or it has not answered yet.",

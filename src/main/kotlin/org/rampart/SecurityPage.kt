@@ -49,13 +49,19 @@ import kotlinx.coroutines.withContext
  * [session] is the account Settings is showing, or null before any account is signed in.
  */
 @Composable
-internal fun SecurityPage(session: Session?) {
+internal fun SecurityPage(
+    session: Session?,
+    accounts: List<AccountMailboxes> = emptyList(),
+    chosen: String? = null,
+    onChoose: (String) -> Unit = {},
+) {
     val jmap = session?.jmap as? Jmap
     Section(
         "Security",
         "Your own password, two-step login and app passwords, changed on the server as you, " +
             "with your own sign-in. Rampart never asks for administrator rights to do it.",
     )
+    SettingsAccountPicker(accounts, chosen, onChoose)
     val unavailable = securityUnavailable(session?.account?.protocol, jmap?.managementAccountId)
     if (session == null || jmap == null || unavailable != null) {
         Text(
@@ -86,13 +92,6 @@ internal fun SecurityPage(session: Session?) {
         }
     }
     LaunchedEffect(key) { reload() }
-
-    Text(
-        "For ${session.account.email}",
-        style = MaterialTheme.typography.bodyMedium,
-        fontWeight = FontWeight.SemiBold,
-    )
-    Spacer(Modifier.height(16.dp))
 
     val current = state
     when {

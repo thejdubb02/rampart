@@ -733,6 +733,8 @@ private fun SettingsScreen(page: String) {
         // two kinds of row on the screen at once.
         filterAccount = "work",
         onFilterAccount = {},
+        account = "work",
+        onAccount = {},
         globalFilters = SAMPLE_GLOBALS,
         onGlobalFilters = {},
         onFilters = {},

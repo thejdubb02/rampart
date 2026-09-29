@@ -42,12 +42,18 @@ import java.nio.file.Files
  * is nothing here, the rule for a capability a server lacks everywhere else in Settings.
  */
 @Composable
-internal fun PhonePage(session: Session?) {
+internal fun PhonePage(
+    session: Session?,
+    accounts: List<AccountMailboxes> = emptyList(),
+    chosen: String? = null,
+    onChoose: (String) -> Unit = {},
+) {
     Section(
         "Your phone",
         "Calendars and contacts live on your mail server, and your phone syncs with it " +
             "directly, so a change you make anywhere shows up everywhere.",
     )
+    SettingsAccountPicker(accounts, chosen, onChoose)
     val jmap = session?.jmap as? Jmap
     val hasCalendarsOrContacts = jmap?.let { it.hasCalendars() || it.hasContacts() } ?: false
     val unavailable = phoneSetupUnavailable(session?.account?.protocol, jmap?.managementAccountId, hasCalendarsOrContacts)
