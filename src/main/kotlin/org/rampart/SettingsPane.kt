@@ -1582,7 +1582,9 @@ private fun DiagnosticsPage() {
     val fetches = events.filter { it.metric == Metric.MESSAGE_OPEN_FETCH.key }.take(8)
     val renders = events.filter { it.metric == Metric.MESSAGE_OPEN_RENDER.key }.take(8)
     val commands = events.filter { it.metric == Metric.LIST_COMMANDS.key }
-    val troubles = events.filter { it.category != null }.take(8)
+    // Outcomes that are fine (an update found, already current, staged) are not trouble.
+    val fine = setOf("newer-found", "current", "staged", "not-ready")
+    val troubles = events.filter { it.category != null && it.category !in fine }.take(8)
 
     if (totals.isEmpty() && commands.isEmpty() && troubles.isEmpty()) {
         Text(

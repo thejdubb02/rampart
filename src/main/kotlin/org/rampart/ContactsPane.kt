@@ -1,5 +1,8 @@
 package org.rampart
 
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -112,7 +115,9 @@ internal fun ContactsPane(
 
         if (onSave != null && several) {
             Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // One line per chip, scrolling sideways when there are many: a long address book
+            // name wrapped to two lines inside a 32dp chip and its hover wash spilled out.
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
                     selected = book == null,
                     onClick = { book = null },
@@ -122,7 +127,7 @@ internal fun ContactsPane(
                     FilterChip(
                         selected = book == each.id,
                         onClick = { book = if (book == each.id) null else each.id },
-                        label = { Text(each.name) },
+                        label = { Text(each.name, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 260.dp)) },
                     )
                 }
             }
@@ -344,7 +349,7 @@ private fun ContactEditor(
                                         chosen + each.id
                                     }
                                 },
-                                label = { Text(each.name) },
+                                label = { Text(each.name, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 260.dp)) },
                             )
                         }
                     }
