@@ -2450,6 +2450,8 @@ private fun Reader(
     CalendarJumpFollows(calendarOpen) {
         calendarOpen = true; settingsOpen = false; contactsOpen = false; dashboardOpen = false
     }
+    // An event Rook proposed, as a card waiting for Save. See CalendarFromMailUi.kt.
+    ProposedEventDialog()
 
     // The page or the panel beside the mail: either one showing is a reason to read again.
     val contactsShowing = contactsOpen || AppBar.showing(SideTool.CONTACTS)
@@ -3805,6 +3807,8 @@ private fun Reader(
         val known = identities[key].orEmpty()
         val signedIn = sessions.map { it.account.email }
         val drafted = mutableListOf<ChangeCard>()
+        // Cheap to build: nothing is read from the calendar until Rook asks for a day.
+        val calendar = calendarToolsFor(here?.jmap, here?.let { shortAccountName(it.account.name, it.account.email) }.orEmpty())
         // The message on screen is what "this email" means, so Rook is told about it
         // without having to search for it first, and may act on it like a search result.
         val open = selected?.takeIf { accountOf(it) == key }
@@ -3819,6 +3823,7 @@ private fun Reader(
                             config = config,
                             key = Secrets.loadNamed(Assistant.KEY),
                             system = Chat.system(folders, who) + "\n\n" + settingsPrompt() +
+                                "\n\n" + calendarPrompt(java.time.LocalDate.now(), java.time.ZoneId.systemDefault()) +
                                 open?.let { "\n\n" + Chat.openMessage(it, openText) }.orEmpty(),
                             history = history,
                             shown = chatShown,
@@ -3827,6 +3832,7 @@ private fun Reader(
                                 Assistant.record(Assistant.CHAT, tokensIn, tokensOut, config)
                             },
                             settings = settings,
+                            calendar = calendar,
                         )
                     } finally {
                         drafted += settings.drafted
@@ -3835,6 +3841,7 @@ private fun Reader(
             }
             said = said + added
             settingCards = settingCards.add(drafted)
+            ProposedEvents.offer(calendar, here?.jmap, key)
             chatThinking = false
         }
     }
@@ -4525,6 +4532,13 @@ private fun Reader(
             } else {
                 null
             },
+            addToCalendar = if (isPrimary && key != null) {
+                sessions.firstOrNull { it.key == key }?.let {
+                    MailCalendar(it.jmap, key, shortAccountName(it.account.name, it.account.email), currentFolderName(key))
+                }
+            } else {
+                null
+            },
             me = writingIdentity(card.body),
             showRemote = showRemoteFor(cardSummary),
             unsubscribed = card.unsubscribed,
@@ -4959,6 +4973,9 @@ private fun Reader(
             replyContext = replyContext,
             account = key,
             folder = key?.let { currentFolderName(it) },
+            schedule = sessions.firstOrNull { it.key == key }?.let {
+                ScheduleSource(it.jmap, shortAccountName(it.account.name, it.account.email))
+            },
             onDiscard = {
                 // What was autosaved goes with it. Discard has to mean discarded, or the
                 // Drafts folder fills with messages somebody decided against. Any save
@@ -8550,6 +8567,8 @@ internal fun Message(
     onAnswer: (Rsvp) -> Unit = {},
     /** How the invitation card reaches this account's calendar, when it has one. */
     invitationContext: InvitationContext? = null,
+    /** Where "Add to calendar" writes. Null hides it. See CalendarFromMailUi.kt. */
+    addToCalendar: MailCalendar? = null,
     /**
      * The address this copy was addressed to, which is the one on the guest list.
      *
@@ -9244,6 +9263,8 @@ internal fun Message(
                             context = invitationContext,
                         )
                     }
+                    // A proper invitation already has its own card, so the chip is for everything else.
+                    if (invitation == null) addToCalendar?.let { AddToCalendar(it, summary, body) }
 
                     /*
                      * The sign-in code, in a size somebody can read across a desk.

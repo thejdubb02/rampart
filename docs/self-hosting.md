@@ -81,6 +81,8 @@ server what it can do and hides what it cannot.
 - **The calendar**, which needs JMAP for Calendars (`urn:ietf:params:jmap:calendars`).
   Stalwart has it. IMAP has no calendar at all: a mail account's calendar lives on CalDAV,
   a separate protocol Rampart does not speak, so an IMAP account gets a sentence saying so.
+  The same goes for what reads and writes it from the mail: Add to calendar, Help me
+  schedule and Rook's calendar tools.
 - **Instant new-mail push**, which needs JMAP over WebSocket. Without it Rampart polls, so
   the mail still arrives, a little later.
 - **Server-side settings, identities, aliases and the admin console**, which are Stalwart's
