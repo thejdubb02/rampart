@@ -639,6 +639,8 @@ private fun App(
         sessions = withContext(Dispatchers.IO) {
             Accounts.read().map { account ->
                 async {
+                    // Signed in through Google or Microsoft: tokens, not a password. OAuthUi.kt.
+                    if (account.oauth.isNotBlank()) return@async restoreOAuth(account)?.let { Session(account, it) }
                     val password = Secrets.load(account) ?: return@async null
                     runCatching { Session(account, openSaved(account, password)) }.getOrNull()
                 }
@@ -677,12 +679,18 @@ private fun App(
             adding = false
         }
     } else {
-        Reader(
-            sessions, onTheme, onQuit, notify,
-            onAddAccount = { adding = true },
-            icons = icons, onIcons = onIcons, onUnread = onUnread,
-            windowSize = windowSize,
-        )
+        Column(Modifier.fillMaxSize()) {
+            // An account whose Google or Microsoft sign-in was refused, with the button to redo it.
+            SignInAgainBanner(sessions.map { it.key }.toSet()) { account, backend -> sessions = sessions + Session(account, backend) }
+            Box(Modifier.weight(1f)) {
+                Reader(
+                    sessions, onTheme, onQuit, notify,
+                    onAddAccount = { adding = true },
+                    icons = icons, onIcons = onIcons, onUnread = onUnread,
+                    windowSize = windowSize,
+                )
+            }
+        }
     }
 }
 
@@ -833,6 +841,7 @@ internal fun Connect(
             singleLine = true,
             modifier = Modifier.width(380.dp).then(submit),
         )
+        OAuthSignInChoice(user, saved, enabled = !busy, onConnected = onConnected, modifier = Modifier.width(380.dp))
         OutlinedTextField(
             password, { password = it },
             label = { Text("App password") },

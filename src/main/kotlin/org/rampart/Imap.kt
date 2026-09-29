@@ -46,14 +46,29 @@ import kotlin.io.path.writeBytes
  * broken: see [Lacks].
  */
 internal class Imap private constructor(
-    private val store: IMAPStore,
+    private val connection: IMAPStore,
     val host: String,
     private val user: String,
     private val password: String,
     private val port: Int,
     private val sendHost: String,
     private val sendPort: Int,
+    /** An OAuth account's access token, fresh on every call. Null for a password. */
+    private val bearer: (() -> String)? = null,
 ) : MailBackend, AutoCloseable {
+
+    /**
+     * The connection, with an OAuth account's token brought up to date first.
+     *
+     * Angus opens a new connection for a folder whenever its pool has none spare, and signs
+     * it in with whatever password it was last given. An access token lasts an hour, so
+     * without this every connection opened after the first hour would be refused.
+     */
+    private val store: IMAPStore
+        get() = connection.also { held -> bearer?.let { held.setPassword(it()) } }
+
+    /** The password, or on an OAuth account the current access token. */
+    private fun credential(): String = bearer?.invoke() ?: password
 
     /**
      * The folder currently selected, kept open between calls. See [useFolder].
@@ -82,8 +97,11 @@ internal class Imap private constructor(
             port: Int = 993,
             sendHost: String = host,
             sendPort: Int = 587,
+            bearer: (() -> String)? = null,
         ): Imap {
             val properties = Properties().apply {
+                // With a [bearer], the password is an access token, sent through XOAUTH2.
+                if (bearer != null) putAll(oauthMailProperties("imap"))
                 put("mail.store.protocol", "imap")
                 put("mail.imap.ssl.enable", "true")
                 put("mail.imap.host", host)
@@ -111,7 +129,7 @@ internal class Imap private constructor(
             val session = Session.getInstance(properties)
             val store = session.getStore("imap") as IMAPStore
             store.connect(host, port, user, password)
-            return Imap(store, host, user, password, port, sendHost, sendPort)
+            return Imap(store, host, user, password, port, sendHost, sendPort, bearer)
         }
     }
 
@@ -308,7 +326,7 @@ internal class Imap private constructor(
             runCatching { open?.close(false) }
             open = null
         }
-        runCatching { store.close() }
+        runCatching { connection.close() }
     }
 
     /**
@@ -523,7 +541,7 @@ internal class Imap private constructor(
         // Opened per send rather than held. A submission connection sitting idle for hours
         // is one the server will drop without telling us, and the failure then lands on
         // whoever pressed Send rather than on the connection that went stale.
-        val sent = Smtp.connect(sendHost, user, password, sendPort).use {
+        val sent = Smtp.connect(sendHost, user, credential(), sendPort, oauth = bearer != null).use {
             it.send(draft, identity, emptyList())
         }
         val folder = sentMailboxId ?: return null
@@ -654,7 +672,7 @@ internal class Imap private constructor(
     override fun watch(onChange: () -> Unit, onGone: () -> Unit): AutoCloseable? {
         if (!hasPush) return null
         val inbox = runCatching { mailboxes().firstOrNull { it.role == "inbox" }?.id }.getOrNull() ?: return null
-        val watcher = Idler(host, port, user, password, inbox, onChange, onGone)
+        val watcher = Idler(host, port, user, credential(), inbox, onChange, onGone, oauth = bearer != null)
         return watcher.takeIf { it.start() }
     }
 
@@ -1385,6 +1403,7 @@ private class Idler(
     private val mailbox: String,
     private val onChange: () -> Unit,
     private val onGone: () -> Unit,
+    private val oauth: Boolean = false,
 ) : AutoCloseable {
 
     @Volatile private var running = true
@@ -1401,6 +1420,7 @@ private class Idler(
                     put("mail.imap.ssl.enable", "true")
                     put("mail.imap.ssl.checkserveridentity", "true")
                     put("mail.imap.connectiontimeout", "15000")
+                    if (oauth) putAll(oauthMailProperties("imap"))
                 },
             )
             val opened = session.getStore("imap") as IMAPStore

@@ -1,0 +1,11 @@
+{
+  "about": "Desktop OAuth client IDs for signing in to Gmail and Microsoft. None of this is secret: see docs/connecting.md. Empty means sign-in to that provider is not configured in this build.",
+  "google": {
+    "clientId": "",
+    "clientSecret": ""
+  },
+  "microsoft": {
+    "clientId": "",
+    "tenant": "common"
+  }
+}

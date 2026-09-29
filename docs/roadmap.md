@@ -618,6 +618,12 @@ real message would have caught it. With the listener it wakes in 315ms.
   companies, not a piece of code. Everything else on this card works against any server
   that takes a password, which is every self-hosted mailbox and most providers. Revisit
   when somebody actually wants to point Rampart at Gmail.
+  **Started 2026-09-29 on branch `claude/oauth` (RAM-39), not merged and not released.**
+  Browser sign-in with PKCE and a loopback redirect, XOAUTH2 for IMAP and SMTP, tokens in
+  the credential store, silent refresh, and a Sign in again button. It ships with empty
+  client IDs, so it needs the Google and Microsoft registrations before anybody can use it,
+  and it has not yet been run against a real Google or Microsoft account. docs/connecting.md
+  has what is left to check.
 
 Nothing else. Move, delete, flags, folder create, rename and delete, sending, filing the
 sent copy, threading, search and push have each been run against the live server.
