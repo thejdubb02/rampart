@@ -31,8 +31,10 @@ internal class Smtp private constructor(
          * Standard port 587 uses explicit STARTTLS, while port 465 uses implicit TLS.
          * In both cases, the server certificate is verified to prevent interception.
          */
-        fun connect(host: String, user: String, password: String, port: Int = 587): Smtp {
+        fun connect(host: String, user: String, password: String, port: Int = 587, oauth: Boolean = false): Smtp {
             val properties = propertiesFor(host, port)
+            // With [oauth] the password is an access token, sent through XOAUTH2 (OAuthSasl.kt).
+            if (oauth) properties.putAll(oauthMailProperties("smtp"))
             val session = Session.getInstance(properties)
             val transport = session.getTransport("smtp")
             transport.connect(host, port, user, password)
