@@ -1081,6 +1081,13 @@ private fun Reader(
     windowSize: () -> DpSize = { DefaultWindowSize },
 ) {
     val scope = rememberCoroutineScope()
+    fun phoneAlert(title: String, message: String) {
+        val topic = Settings.ntfyServer()
+        if (topic.isBlank()) return
+        scope.launch(Dispatchers.IO) {
+            runCatching { Ntfy.send(topic, Secrets.loadNamed(Secrets.NTFY_TOKEN), title, message) }
+        }
+    }
     var identities by remember { mutableStateOf<Map<String, List<Identity>>>(emptyMap()) }
     var vacation by remember { mutableStateOf<Vacation?>(null) }
     var vacationError by remember { mutableStateOf<String?>(null) }
@@ -2287,6 +2294,17 @@ private fun Reader(
                 if (hushed.isNotEmpty()) hush(open.key, hushed.map { it.id })
                 val announce = found.fresh.filterNot { it in hushed }
                 if (notifyOnArrival) arrivalText(announce)?.let { (title, body) -> notify(title, body) }
+                if (Settings.ntfyImportantMail()) {
+                    announce.filter { "\$important" in it.keywords }.forEach {
+                        phoneAlert("Important new mail", "${it.from}: ${it.subject.ifBlank { "(no subject)" }}")
+                    }
+                }
+                if (Settings.ntfyBounce()) {
+                    announce.filter {
+                        val sender = it.fromEmail.lowercase()
+                        "mailer-daemon" in sender || "postmaster" in sender || "bounce" in sender
+                    }.forEach { phoneAlert("Message bounced", it.subject.ifBlank { "A delivery failed." }) }
+                }
             }
             // Until every account has been looked at once there is nothing to compare
             // against, so those first rounds come quickly rather than half a minute apart.
@@ -3036,6 +3054,9 @@ private fun Reader(
                             }
                         }
                         if (notifyOnOpen) notices.forEach { (title, body) -> notify(title, body) }
+                        if (Settings.ntfyTrackedOpen() && !TrackingClient.companionPushes) {
+                            notices.forEach { (title, body) -> phoneAlert(title, body) }
+                        }
                         // Moved only after the rows are written, so a crash between the two
                         // re-reads rather than skips. The store ignores a duplicate.
                         Settings.setTrackingCursor(found.maxOf { it.at.toEpochMilli() })
@@ -3100,6 +3121,18 @@ private fun Reader(
                 // message that failed to send would sit in the list forever waiting
                 // for an open that cannot come.
                 tracked?.let { account.store?.track(it) }
+                if (Settings.ntfyOpenLabels()) {
+                    tracked?.let { row ->
+                        val token = Secrets.trackingToken()
+                        if (!token.isNullOrBlank()) {
+                            val label = listOf(row.recipient, row.subject).filter(String::isNotBlank)
+                                .joinToString(", ").take(120)
+                            if (label.isNotBlank()) runCatching {
+                                TrackingClient.registerLabel(trackingBase, token, row.id, label)
+                            }
+                        }
+                    }
+                }
                 // The sent message is its own copy in Sent, so the working copy in
                 // Drafts is now a duplicate of mail already gone.
                 val cleanup = draftId?.let { id ->
@@ -3258,6 +3291,9 @@ private fun Reader(
             if (result.isSuccess) {
                 result.getOrNull()?.let { notice -> if (error.isBlank()) report(notice) }
                 ScheduledSends.cancel(item.id)
+                if (Settings.ntfyScheduledSend()) {
+                    phoneAlert("Scheduled message sent", item.draft.subject.ifBlank { "(no subject)" })
+                }
                 return Result.success(Unit)
             }
             return Result.failure(result.exceptionOrNull() ?: Exception("That message could not be sent."))

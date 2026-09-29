@@ -740,6 +740,7 @@ private fun NotificationsPage(
     notifyOnOpen: Boolean,
     onNotifyOnOpen: (Boolean) -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
     Section("Notifications", "Rampart checks for new mail every minute while it is open.")
     Row(
         Modifier.fillMaxWidth().clickable { onNotifyOnArrival(!notifyOnArrival) }.padding(vertical = 4.dp),
@@ -773,6 +774,59 @@ private fun NotificationsPage(
         Switch(checked = notifyOnOpen, onCheckedChange = onNotifyOnOpen, enabled = isTraySupported)
     }
 
+    Spacer(Modifier.height(18.dp))
+    Section(
+        "Phone alerts (ntfy)",
+        "Posts selected events to a full ntfy topic URL while Rampart is running. The access token stays in the operating system credential store.",
+    )
+    var ntfyServer by remember { mutableStateOf(Settings.ntfyServer()) }
+    var ntfyToken by remember { mutableStateOf(Secrets.loadNamed(Secrets.NTFY_TOKEN).orEmpty()) }
+    var ntfyResult by remember { mutableStateOf<String?>(null) }
+    var ntfyBusy by remember { mutableStateOf(false) }
+    OutlinedTextField(
+        value = ntfyServer,
+        onValueChange = { ntfyServer = it; ntfyResult = null },
+        label = { Text("Server topic URL") },
+        placeholder = { Text("https://ntfy.example.org/rampart") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Spacer(Modifier.height(8.dp))
+    OutlinedTextField(
+        value = ntfyToken,
+        onValueChange = { ntfyToken = it; ntfyResult = null },
+        label = { Text("Access token, optional") },
+        singleLine = true,
+        visualTransformation = PasswordVisualTransformation(),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Spacer(Modifier.height(8.dp))
+    Button(enabled = !ntfyBusy, onClick = {
+        ntfyBusy = true
+        scope.launch {
+            val problem = withContext(Dispatchers.IO) { Ntfy.check(ntfyServer, ntfyToken) }
+            if (problem == null) {
+                Settings.setNtfyServer(ntfyServer)
+                ntfyResult = Secrets.storeNamed(Secrets.NTFY_TOKEN, ntfyToken) ?: "Test sent and settings saved."
+            } else {
+                ntfyResult = problem
+            }
+            ntfyBusy = false
+        }
+    }) { Text(if (ntfyBusy) "Sending" else "Send a test") }
+    ntfyResult?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+
+    var important by remember { mutableStateOf(Settings.ntfyImportantMail()) }
+    var scheduled by remember { mutableStateOf(Settings.ntfyScheduledSend()) }
+    var bounce by remember { mutableStateOf(Settings.ntfyBounce()) }
+    var tracked by remember { mutableStateOf(Settings.ntfyTrackedOpen()) }
+    var labels by remember { mutableStateOf(Settings.ntfyOpenLabels()) }
+    NtfyToggle("Important new mail", important) { important = it; Settings.setNtfyImportantMail(it) }
+    NtfyToggle("A scheduled send goes out", scheduled) { scheduled = it; Settings.setNtfyScheduledSend(it) }
+    NtfyToggle("A bounce arrives", bounce) { bounce = it; Settings.setNtfyBounce(it) }
+    NtfyToggle("A tracked message is opened", tracked) { tracked = it; Settings.setNtfyTrackedOpen(it) }
+    NtfyToggle("Say who opened it in phone alerts", labels) { labels = it; Settings.setNtfyOpenLabels(it) }
+
     // Kept next to notifications rather than under a Window heading of its own: both are
     // about what Rampart does when nobody is looking at it, and one switch does not earn
     // a page.
@@ -800,6 +854,17 @@ private fun NotificationsPage(
             onCheckedChange = { toTray = it; Settings.setCloseToTray(it) },
             enabled = isTraySupported,
         )
+    }
+}
+
+@Composable
+private fun NtfyToggle(label: String, checked: Boolean, changed: (Boolean) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable { changed(!checked) }.padding(vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = changed)
     }
 }
 
