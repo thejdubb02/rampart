@@ -115,4 +115,74 @@ class UpdateCommandTest {
             if (previous == null) System.clearProperty("app.dir") else System.setProperty("app.dir", previous)
         }
     }
+
+    /** Each generated task name must be unique so multiple attempts never collide. */
+    @Test
+    fun taskNamesAreUnique() {
+        val names = (1..50).map { Updates.generateTaskName() }.toSet()
+        assertEquals(50, names.size)
+        names.forEach { assertTrue(it.startsWith("RampartUpdate_")) }
+    }
+
+    /** The package name must be dynamically inserted into all package lookups and paths. */
+    @Test
+    fun scriptInsertsPackageName() {
+        val scriptText = Updates.updateScriptText(
+            appinstaller = "https://example.com/test.appinstaller",
+            packageName = "CustomMailPackage",
+            taskName = "CustomTaskName",
+        )
+        assertTrue("Get-AppxPackage -Name 'CustomMailPackage'" in scriptText)
+        assertTrue("\$_.ProcessName -eq 'CustomMailPackage'" in scriptText)
+        assertTrue("[System.IO.Path]::Combine(\$env:LOCALAPPDATA, 'CustomMailPackage')" in scriptText)
+        assertTrue("!CustomMailPackage')" in scriptText)
+    }
+
+    /** Paths and arguments must be wrapped in single quotes without any double quotes. */
+    @Test
+    fun scriptQuotesPathsAndAvoidsDoubleQuotes() {
+        val scriptText = Updates.updateScriptText(
+            appinstaller = "https://example.com/test.appinstaller",
+            packageName = "Rampart",
+            taskName = "Task_123",
+        )
+        assertTrue("Add-AppxPackage -AppInstallerFile 'https://example.com/test.appinstaller'" in scriptText)
+        assertTrue("schtasks /Delete /TN 'Task_123' /F" in scriptText)
+        assertFalse('"' in scriptText, "the script should never contain double quotes")
+    }
+
+    /** The scheduled task command must be pointed at PowerShell with bypass and hidden window. */
+    @Test
+    fun taskCreationCommandUsesHiddenBypassPowerShell() {
+        val cmd = Updates.createTaskCommand("MyTask", "C:\\temp\\update.ps1")
+        assertEquals("schtasks", cmd[0])
+        assertEquals("/Create", cmd[1])
+        assertEquals("MyTask", cmd[cmd.indexOf("/TN") + 1])
+        val action = cmd[cmd.indexOf("/TR") + 1]
+        assertTrue(action.startsWith("powershell -nop -ep bypass -w hidden -enc "))
+        val encoded = action.substringAfter("-enc ")
+        assertEquals("& 'C:\\temp\\update.ps1'", String(java.util.Base64.getDecoder().decode(encoded), Charsets.UTF_16LE))
+        assertTrue(action.length <= 261, "schtasks refuses an action longer than 261 characters")
+        assertTrue("/IT" in cmd)
+    }
+
+    /** Update log errors newer than the last start must be read and cleaned up. */
+    @Test
+    fun checkPreviousUpdateErrorReadsNewerMessageAndDeletesLog() {
+        val tempDir = java.nio.file.Files.createTempDirectory("rampart-log-test")
+        val logFile = tempDir.resolve("update.log")
+        try {
+            java.nio.file.Files.writeString(logFile, "Something failed during update.")
+            val lastStart = System.currentTimeMillis() - 10000L
+            val readError = Updates.checkPreviousUpdateError(lastStart, logFile)
+            assertEquals("Something failed during update.", readError)
+            assertFalse(java.nio.file.Files.exists(logFile))
+
+            val secondRead = Updates.checkPreviousUpdateError(lastStart, logFile)
+            assertEquals(null, secondRead)
+        } finally {
+            runCatching { java.nio.file.Files.deleteIfExists(logFile) }
+            runCatching { java.nio.file.Files.deleteIfExists(tempDir) }
+        }
+    }
 }

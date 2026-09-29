@@ -199,49 +199,20 @@ internal data class ListRequest(
 )
 
 /**
- * The update, as a line in the window's own bottom bar rather than a card over the mail.
+ * The update, as a line in the window bottom bar rather than a card over the mail.
  *
- * It used to float over the bottom right of the reading pane, which is exactly where a
- * message sits, and it offered Later: a decision nobody needed to make, since a bar that
- * waits indefinitely already does what Later was for. Nothing here fades in and out on its
- * own, and nothing shows when there is nothing to say: this sits under a client somebody
- * leaves open for days, so quiet has to be the default rather than an afterthought.
- *
- * The one animation is a slow fade on the icon, and only while [state] is [Waiting]: that
- * is the state that can sit unread for as long as somebody leaves it, so it is the only one
- * that earns something to draw the eye. [busy][UpdateBarState.busy] states get the app's own
- * spinner instead, which says "working" rather than "look at me", and a [Failed] bar is
- * read from the words alone.
+ * Shown only when an update attempt has failed, so there are not two prompts on screen
+ * at once while the icon beside the version label in the right bar is showing.
  */
 @Composable
 internal fun UpdateBar(state: UpdateBarState, onClick: () -> Unit) {
-    if (state is UpdateBarState.Hidden) return
-    val clickable = state is UpdateBarState.Waiting || state is UpdateBarState.Failed
-    val iconAlpha = if (state is UpdateBarState.Waiting) {
-        val cycle = rememberInfiniteTransition(label = "update-ready")
-        val alpha by cycle.animateFloat(
-            initialValue = 0.5f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(tween(1400, easing = LinearEasing), RepeatMode.Reverse),
-            label = "update-ready-alpha",
-        )
-        alpha
-    } else {
-        1f
-    }
+    if (state !is UpdateBarState.Failed) return
     Row(
         Modifier.fillMaxWidth()
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            // `enabled` rather than a hand-built if/else choosing between a clickable
-            // modifier and a bare one: the platform already has a disabled state for a
-            // clickable, and reaching for it here is one call instead of a branch.
             .clickable(
-                enabled = clickable,
-                onClickLabel = when (state) {
-                    is UpdateBarState.Failed -> "Try installing Rampart ${state.version} again"
-                    is UpdateBarState.Waiting -> "Install Rampart ${state.version} now"
-                    else -> null
-                },
+                enabled = true,
+                onClickLabel = "Try installing Rampart ${state.version} again",
                 role = Role.Button,
                 onClick = onClick,
             )
@@ -251,12 +222,11 @@ internal fun UpdateBar(state: UpdateBarState, onClick: () -> Unit) {
         Icon(
             RampartIcons.Download,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary.copy(alpha = iconAlpha),
+            tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(14.dp),
         )
         Spacer(Modifier.width(7.dp))
         Text(state.label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-        if (state.busy) Spinner(size = 13.dp, thickness = 2.dp)
     }
 }
 
@@ -1176,7 +1146,13 @@ private fun Reader(
     var contactsError by remember { mutableStateOf<String?>(null) }
     var signatureError by remember { mutableStateOf<String?>(null) }
     /** What the bottom bar says about updates. See [UpdateBarState]. */
-    var barState by remember { mutableStateOf<UpdateBarState>(UpdateBarState.Hidden) }
+    var barState by remember {
+        mutableStateOf<UpdateBarState>(
+            Updates.checkPreviousUpdateError(Settings.lastStart())?.let { error ->
+                UpdateBarState.Failed(version = Updates.current.orEmpty(), message = error)
+            } ?: UpdateBarState.Hidden,
+        )
+    }
     /**
      * What [ChangelogDialog] is showing, or null while it is closed. Worked out once, when
      * this composable is first entered, from whatever is already known synchronously
@@ -1806,6 +1782,9 @@ private fun Reader(
         update = (result as? UpdateCheckResult.Newer)?.version
         updateCheckFailure = (result as? UpdateCheckResult.Failed)?.reason
         Diagnostics.event(Metric.UPDATE_CHECK, updateCheckCategory(result))
+        if (result is UpdateCheckResult.Newer && barState !is UpdateBarState.Waiting && !barState.busy) {
+            barState = UpdateBarState.Waiting(result.version)
+        }
     }
 
     /*
@@ -1819,6 +1798,7 @@ private fun Reader(
      * names one current package and Windows fetches that.
      */
     LaunchedEffect(Unit) {
+        Settings.setLastStart(System.currentTimeMillis())
         while (true) {
             if (!barState.busy) checkForUpdate()
             delay(30 * 60_000L)
@@ -5434,6 +5414,15 @@ private fun Reader(
                     dashboardOpen = false
                     calendarOpen = false
                 }
+            },
+            updateState = barState,
+            onUpdate = {
+                val from = when (val current = barState) {
+                    is UpdateBarState.Waiting -> current.version
+                    is UpdateBarState.Failed -> current.version
+                    else -> update
+                }
+                if (from != null) scope.launch { installLatest(from) }
             },
             panel = { tool ->
                 when (tool) {

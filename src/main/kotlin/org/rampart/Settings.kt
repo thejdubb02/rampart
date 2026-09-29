@@ -552,4 +552,8 @@ object Settings {
 
     fun setChangelogSuppressed(value: Boolean) = write { put("changelogSuppressed", JsonPrimitive(value)) }
 
+    /** The millisecond timestamp when the app was last started. */
+    fun lastStart(): Long = read()["lastStart"]?.jsonPrimitive?.longOrNull ?: 0L
+
+    fun setLastStart(time: Long) = write { put("lastStart", JsonPrimitive(time)) }
 }

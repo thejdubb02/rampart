@@ -150,6 +150,8 @@ internal fun WithSideTools(
     onDashboard: () -> Unit = {},
     inSettings: Boolean = false,
     onSettings: () -> Unit = {},
+    updateState: UpdateBarState = UpdateBarState.Hidden,
+    onUpdate: () -> Unit = {},
     panel: @Composable (SideTool) -> Unit,
     content: @Composable RowScope.() -> Unit,
 ) {
@@ -168,7 +170,7 @@ internal fun WithSideTools(
             }
         }
         VerticalDivider()
-        Bar(working, inDashboard, onDashboard, inSettings, onSettings)
+        Bar(working, inDashboard, onDashboard, inSettings, onSettings, updateState, onUpdate)
     }
 }
 
@@ -202,7 +204,7 @@ private fun PanelEdge(tool: SideTool, available: Float?) {
     }
 }
 
-/** The bar itself: one button per tool, top to bottom in [SideTool]'s order, with Dashboard and Settings pinned to the bottom. */
+/** The bar itself: one button per tool, top to bottom in [SideTool]'s order, with Dashboard, Settings and version pinned to the bottom. */
 @Composable
 private fun Bar(
     working: Boolean,
@@ -210,6 +212,8 @@ private fun Bar(
     onDashboard: () -> Unit = {},
     inSettings: Boolean = false,
     onSettings: () -> Unit = {},
+    updateState: UpdateBarState = UpdateBarState.Hidden,
+    onUpdate: () -> Unit = {},
 ) {
     Column(
         Modifier.width(BarWidth).fillMaxHeight()
@@ -239,6 +243,87 @@ private fun Bar(
             active = inSettings,
             onClick = onSettings,
         )
+        VersionLabel(updateState, onUpdate)
+    }
+}
+
+/**
+ * The version label at the bottom of the bar.
+ *
+ * When an update is ready, a download arrow is shown beside the label. Clicking either
+ * triggers the install. During install, a spinner appears in place of the arrow.
+ */
+@Composable
+private fun VersionLabel(updateState: UpdateBarState, onUpdate: () -> Unit) {
+    val running = Updates.current
+    if (running == null && updateState is UpdateBarState.Hidden) return
+    val text = running ?: "dev"
+    val tooltip = when (updateState) {
+        is UpdateBarState.Waiting -> "Version ${updateState.version} is ready. Click to restart and update."
+        is UpdateBarState.Staging, is UpdateBarState.Installing -> "Updating"
+        is UpdateBarState.Failed -> updateState.message
+        UpdateBarState.Hidden -> null
+    }
+    val clickable = updateState is UpdateBarState.Waiting || updateState is UpdateBarState.Failed
+    val content = @Composable {
+        Row(
+            modifier = Modifier
+                .clip(MaterialTheme.shapes.extraSmall)
+                .then(
+                    if (clickable) {
+                        Modifier.clickable(
+                            role = androidx.compose.ui.semantics.Role.Button,
+                            onClickLabel = tooltip,
+                            onClick = onUpdate,
+                        )
+                    } else {
+                        Modifier
+                    }
+                )
+                .padding(horizontal = 2.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                text,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+                maxLines = 1,
+            )
+            when (updateState) {
+                is UpdateBarState.Waiting -> {
+                    Spacer(Modifier.width(2.dp))
+                    Icon(
+                        RampartIcons.Download,
+                        contentDescription = "Version ${updateState.version} is ready. Click to restart and update.",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(11.dp),
+                    )
+                }
+                is UpdateBarState.Staging, is UpdateBarState.Installing -> {
+                    Spacer(Modifier.width(2.dp))
+                    Spinner(size = 11.dp, thickness = 2.dp)
+                }
+                is UpdateBarState.Failed -> {
+                    Spacer(Modifier.width(2.dp))
+                    Icon(
+                        RampartIcons.Download,
+                        contentDescription = updateState.message,
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(11.dp),
+                    )
+                }
+                UpdateBarState.Hidden -> Unit
+            }
+        }
+    }
+
+    if (tooltip != null) {
+        SidebarTooltip(tooltip) {
+            content()
+        }
+    } else {
+        content()
     }
 }
 

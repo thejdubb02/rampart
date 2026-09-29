@@ -365,31 +365,120 @@ object Updates {
         }
     }
 
+    internal var isWindows: () -> Boolean = {
+        System.getProperty("os.name", "").lowercase().contains("win")
+    }
+
+    internal var exitHandler: () -> Unit = {
+        kotlin.system.exitProcess(0)
+    }
+
+    internal fun generateTaskName(): String =
+        "RampartUpdate_" + java.util.UUID.randomUUID().toString().replace("-", "")
+
+    internal fun updateScriptText(
+        appinstaller: String = APPINSTALLER,
+        packageName: String = PACKAGE,
+        taskName: String,
+    ): String = buildString {
+        appendLine("\$family = (Get-AppxPackage -Name '$packageName').PackageFamilyName")
+        appendLine("\$deadline = (Get-Date).AddSeconds(30)")
+        appendLine("while ((Get-Date) -lt \$deadline) {")
+        appendLine("    \$procs = Get-Process | Where-Object { \$_.PackageFamilyName -eq \$family -or \$_.ProcessName -eq '$packageName' }")
+        appendLine("    if (-not \$procs) { break }")
+        appendLine("    Start-Sleep -Milliseconds 500")
+        appendLine("}")
+        appendLine("\$logDir = [System.IO.Path]::Combine(\$env:LOCALAPPDATA, '$packageName')")
+        appendLine("if (-not (Test-Path -Path \$logDir)) {")
+        appendLine("    New-Item -ItemType Directory -Path \$logDir -Force | Out-Null")
+        appendLine("}")
+        appendLine("\$logFile = [System.IO.Path]::Combine(\$logDir, 'update.log')")
+        appendLine("try {")
+        appendLine("    Add-AppxPackage -AppInstallerFile '$appinstaller' -ForceTargetApplicationShutdown -ErrorAction Stop")
+        appendLine("} catch {")
+        appendLine("    [System.IO.File]::WriteAllText(\$logFile, \$_.Exception.Message)")
+        appendLine("}")
+        appendLine("Start-Process ('shell:appsFolder\\' + \$family + '!$packageName')")
+        appendLine("schtasks /Delete /TN '$taskName' /F")
+        appendLine("Remove-Item -LiteralPath \$PSCommandPath -ErrorAction SilentlyContinue")
+    }
+
+    /*
+     * The action runs the script through -EncodedCommand. The task scheduler hands /TR to
+     * powershell without a shell, so single quotes around a path would be read as part of the
+     * name, and double quotes would have to survive Java's Windows argument quoting and then
+     * schtasks' own parsing. Base64 has neither quotes nor spaces, so nothing can go wrong in
+     * between. /IT runs it in the signed-in user's session, which is where the relaunched
+     * window has to appear; tested on a real install on 2026-09-29.
+     */
+    internal fun createTaskCommand(taskName: String, scriptPath: String): List<String> = listOf(
+        "schtasks", "/Create", "/SC", "ONCE", "/ST", "00:00", "/TN", taskName,
+        "/TR", "powershell -nop -ep bypass -w hidden -enc " +
+            encodedCommand("& '" + scriptPath.replace("'", "''") + "'"),
+        "/IT", "/F",
+    )
+
+    /** PowerShell's -EncodedCommand form: base64 of the UTF-16LE text. */
+    internal fun encodedCommand(command: String): String =
+        java.util.Base64.getEncoder().encodeToString(command.toByteArray(Charsets.UTF_16LE))
+
+    internal fun runTaskCommand(taskName: String): List<String> = listOf(
+        "schtasks", "/Run", "/TN", taskName,
+    )
+
+    internal fun updateLogPath(): Path {
+        val localAppData = System.getenv("LOCALAPPDATA")?.takeIf { it.isNotBlank() }
+        val base = if (localAppData != null) {
+            Path.of(localAppData, PACKAGE)
+        } else {
+            val userHome = System.getProperty("user.home", ".")
+            Path.of(userHome, "AppData", "Local", PACKAGE)
+        }
+        return base.resolve("update.log")
+    }
+
+    /**
+     * Checks if update.log has an error recorded after the previous start.
+     * Reads the message and removes the log so it is shown only once.
+     */
+    internal fun checkPreviousUpdateError(lastStart: Long, logFile: Path = updateLogPath()): String? = runCatching {
+        if (!Files.isRegularFile(logFile)) return null
+        val modTime = Files.getLastModifiedTime(logFile).toMillis()
+        if (modTime <= lastStart) return null
+        val message = Files.readString(logFile).trim()
+        runCatching { Files.deleteIfExists(logFile) }
+        message.takeIf { it.isNotBlank() }
+    }.getOrNull()
+
     /**
      * Installs the published version and restarts into it. Returns false when this is not a
      * packaged copy, when the manifest is not being served yet, or when the swap did not
      * happen; [lastProblem] says which, in a sentence rather than a code.
      *
-     * It does not go through the package's own launcher. That launcher only checks for an
-     * update when Conveyor is set to `aggressive`, which we deliberately are not, because
-     * aggressive makes every cold start wait on the network before the window appears. Run
-     * in background mode it prints "Not in aggressive mode, launching the app" and does
-     * exactly that, so the restart button was restarting without updating. Read out of the
-     * shipped binary, not guessed.
-     *
-     * **A working install is never observed from in here.** `-ForceTargetApplicationShutdown`
-     * closes whichever process is holding the package open, which is this one, so success
-     * ends with the JVM being killed partway through the wait below rather than with this
-     * function returning true. What is waited for and read out only matters for the failure
-     * case: the swap did not happen, this process is still alive to say so, and a plain
-     * sentence in the bar beats what Justin hit on 2026-09-21, where a deferred update
-     * applied at close and the app would not start again, with nothing saying why.
+     * On Windows, this launches the install via a scheduled task outside the MSIX
+     * app container, so that shutting down Rampart does not kill the installer.
+     * Rampart exits itself cleanly after triggering the task. On non-Windows platforms,
+     * this falls back to running the update command directly.
      */
     fun restartToUpdate(): Boolean {
+        updater() ?: return false
+        when (reachable()) {
+            true -> Unit
+            false -> {
+                lastProblem = NOT_READY
+                return false
+            }
+            null -> {
+                lastProblem = "Rampart could not reach the download."
+                return false
+            }
+        }
+
+        if (isWindows()) {
+            return restartToUpdateWindows()
+        }
+
         val ran = runPowerShell(updateCommand(), timeoutMinutes = 3) ?: return false
-        // Reaching here at all is the failure case, whatever ran.exitCode says: a genuine
-        // success ends with -ForceTargetApplicationShutdown killing this process mid-wait,
-        // never with this function observing an exit code. See the KDoc above.
         lastProblem = if (ran.timedOut) {
             "The install did not finish. Rampart is still on the version you had."
         } else {
@@ -397,6 +486,38 @@ object Updates {
                 ?: "The install did not go in. Rampart is still on the version you had."
         }
         return false
+    }
+
+    private fun restartToUpdateWindows(): Boolean = try {
+        val taskName = generateTaskName()
+        val scriptText = updateScriptText(APPINSTALLER, PACKAGE, taskName)
+        val scriptFile = Files.createTempFile("rampart-update-", ".ps1")
+        Files.writeString(scriptFile, scriptText)
+
+        val createCmd = createTaskCommand(taskName, scriptFile.toAbsolutePath().toString())
+        val createProc = ProcessBuilder(createCmd).redirectErrorStream(true).start()
+        val created = createProc.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)
+        if (!created || createProc.exitValue() != 0) {
+            val err = if (created) createProc.inputStream.bufferedReader().readText().trim() else ""
+            lastProblem = err.ifBlank { "Could not register update task." }
+            runCatching { Files.deleteIfExists(scriptFile) }
+            false
+        } else {
+            val runCmd = runTaskCommand(taskName)
+            val runProc = ProcessBuilder(runCmd).redirectErrorStream(true).start()
+            val ran = runProc.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)
+            if (!ran || runProc.exitValue() != 0) {
+                val err = if (ran) runProc.inputStream.bufferedReader().readText().trim() else ""
+                lastProblem = err.ifBlank { "Could not start update task." }
+                false
+            } else {
+                exitHandler()
+                true
+            }
+        }
+    } catch (e: Exception) {
+        lastProblem = whyFailed(e)
+        false
     }
 
     /**
