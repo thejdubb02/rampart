@@ -224,7 +224,7 @@ internal class ComputerPlace(private val choices: ComputerChoices) : SettingPlac
             ),
             oneOf(
                 "attachmentClick", "Clicking a file", "What a click on an attachment does.",
-                "Reading and archiving", "attachment download preview open", opts("download" to "Save it", "preview" to "Preview images, save everything else"),
+                "Reading and archiving", "attachment download preview open", opts("download" to "Save it", "preview" to "Preview images and PDFs, save everything else"),
                 Settings::attachmentClickBehavior, Settings::setAttachmentClickBehavior,
             ),
             oneOf(

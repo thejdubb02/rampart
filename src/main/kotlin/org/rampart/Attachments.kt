@@ -115,6 +115,15 @@ internal fun isAttachedMessage(type: String): Boolean =
     type.substringBefore(';').trim().equals("message/rfc822", ignoreCase = true)
 
 /**
+ * Whether this attachment is a PDF document from its MIME type or its filename.
+ */
+internal fun isPdf(type: String, name: String = ""): Boolean {
+    if (fileGlyph(type) == FileGlyph.PDF) return true
+    val clean = name.trim().lowercase()
+    return clean.endsWith(".pdf")
+}
+
+/**
  * Outlook packed the real files into one wrapper named winmail.dat.
  *
  * The type is the signal that is supposed to be there. The name is the fallback:

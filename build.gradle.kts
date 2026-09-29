@@ -53,6 +53,8 @@ dependencies {
     // is a binary format with its own attribute IDs and nobody benefits from a second,
     // worse parser of it.
     implementation("org.apache.poi:poi-scratchpad:5.4.1")
+    // Renders PDF attachments in place without executing scripts or opening remote links.
+    implementation("org.apache.pdfbox:pdfbox:3.0.4")
     // SQLite with FTS5 for the local store, and with encryption, which the stock xerial
     // driver does not have. This is that driver plus SQLCipher, so encrypting the file is
     // a pragma on the connection rather than a project of its own.

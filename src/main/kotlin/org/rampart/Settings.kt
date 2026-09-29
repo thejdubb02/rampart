@@ -348,7 +348,7 @@ object Settings {
      * What a click on a file does.
      *
      * "download" saves it, which is what a click has always done. "preview" opens an image
-     * in the window instead, and only an image: every other kind of file still saves,
+     * or a PDF in the window instead: every other kind of file still saves,
      * because there is nothing to show for it. Anything else is read as "download".
      */
     fun attachmentClickBehavior(): String {

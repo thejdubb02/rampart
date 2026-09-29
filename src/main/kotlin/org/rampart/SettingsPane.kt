@@ -795,7 +795,7 @@ private fun ReadingPage(
     )
     listOf(
         "download" to "Save it",
-        "preview" to "Preview images, save everything else",
+        "preview" to "Preview images and PDFs, save everything else",
     ).forEach { (value, label) ->
         Row(
             Modifier.fillMaxWidth().clickable {

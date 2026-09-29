@@ -4595,6 +4595,10 @@ private fun Reader(
                     runCatching { Image.makeFromEncoded(bytes).toComposeImageBitmap() }.getOrNull()
                 }
             },
+            onLoadBytes = { attachment ->
+                if (key == null) null
+                else io { session(key).jmap.blob(attachment) }
+            },
             showSubject = showSubject,
             onHeaderClick = onHeaderClick,
             externalScroll = externalScroll,
@@ -8170,6 +8174,8 @@ internal fun Message(
     onLink: (String) -> Unit,
     /** Bytes for an image that was not already fetched with the body, for a preview. */
     onLoadImage: (suspend (Attachment) -> ImageBitmap?)? = null,
+    /** Raw bytes for an attachment when opening a preview. */
+    onLoadBytes: (suspend (Attachment) -> ByteArray?)? = null,
 ) {
     val linkColor = MaterialTheme.colorScheme.primary
     val quoteColor = MaterialTheme.colorScheme.outline
@@ -8283,6 +8289,7 @@ internal fun Message(
     val attachmentsBeside = !readOnly && Settings.attachmentPosition() == "beside"
     val messageScope = rememberCoroutineScope()
     var preview by remember { mutableStateOf<Pair<Attachment, ImageBitmap>?>(null) }
+    var pdfPreview by remember { mutableStateOf<Pair<Attachment, ByteArray>?>(null) }
     fun bitmapOf(bytes: ByteArray): ImageBitmap? =
         runCatching { Image.makeFromEncoded(bytes).toComposeImageBitmap() }.getOrNull()
     fun openFile(attachment: Attachment) {
@@ -8296,10 +8303,28 @@ internal fun Message(
             packed(attachment)
             return
         }
-        val wantsPreview = Settings.attachmentClickBehavior() == "preview" &&
-            fileGlyph(attachment.type) == FileGlyph.IMAGE
+        val isPdfFile = isPdf(attachment.type, attachment.name)
+        val isImageFile = fileGlyph(attachment.type) == FileGlyph.IMAGE
+        val wantsPreview = Settings.attachmentClickBehavior() == "preview" && (isImageFile || isPdfFile)
         if (!wantsPreview) {
             onDownload(attachment)
+            return
+        }
+        if (isPdfFile) {
+            val ready = imageBytes[attachment.blobId]
+            if (ready != null) {
+                pdfPreview = attachment to ready
+                return
+            }
+            val load = onLoadBytes
+            if (load == null) {
+                onDownload(attachment)
+                return
+            }
+            messageScope.launch {
+                val bytes = load(attachment)
+                if (bytes != null) pdfPreview = attachment to bytes else onDownload(attachment)
+            }
             return
         }
         val ready = images[attachment.blobId] ?: imageBytes[attachment.blobId]?.let(::bitmapOf)
@@ -8944,6 +8969,14 @@ internal fun Message(
                 }
             }
         }
+        pdfPreview?.let { (attachment, bytes) ->
+            PdfPreviewModal(
+                attachment = attachment,
+                bytes = bytes,
+                onDownload = onDownload,
+                onClose = { pdfPreview = null },
+            )
+        }
         preview?.let { (attachment, bitmap) ->
             CoverBody(true)
             Box(
@@ -8987,7 +9020,7 @@ internal fun Message(
  * One file on a message: what it is, what it is called, and Save, Open, or Preview.
  *
  * The same rows wherever the list is drawn. Open is a forwarded message, or a
- * winmail.dat. Preview is an image when that is what a click is set to do.
+ * winmail.dat. Preview is an image or a PDF when that is what a click is set to do.
  * Everything else saves. Dragging the row past a short movement hands the file
  * to the desktop or to another program. The button is unchanged for a click.
  */
@@ -9047,7 +9080,7 @@ private fun FileRows(
             val openNested = onOpenMessage?.takeIf { isAttachedMessage(attachment.type) }
             val openPacked = onOpenTnef?.takeIf { isTnef(attachment.type, attachment.name) }
             val previewLabel = Settings.attachmentClickBehavior() == "preview" &&
-                fileGlyph(attachment.type) == FileGlyph.IMAGE
+                (fileGlyph(attachment.type) == FileGlyph.IMAGE || isPdf(attachment.type, attachment.name))
             SaveToFilesButton(attachment, saveToFiles)
             TextButton(onClick = { onOpen(attachment) }) {
                 Text(
