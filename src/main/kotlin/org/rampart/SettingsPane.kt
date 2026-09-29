@@ -553,6 +553,13 @@ private fun ThemesPage(
         }
     }
 
+    Spacer(Modifier.height(22.dp))
+    Section(
+        "List layout",
+        "How each message is drawn in the list. Density applies to Normal.",
+    )
+    ListLayoutChooser()
+
     Spacer(Modifier.height(18.dp))
     Section(
         "Icons",

@@ -116,6 +116,13 @@ internal class ComputerPlace(private val choices: ComputerChoices) : SettingPlac
                 Settings::setDensity,
             ),
             oneOf(
+                "listLayout", "List layout", "How each message is drawn in the list: the normal rows, a table, or cards.",
+                "Themes", "layout message list table columns cards view appearance",
+                ListLayout.entries.map { SettingOption(it.key, it.label) },
+                { ListLayout.of(Settings.listLayout()).key },
+                Settings::setListLayout,
+            ),
+            oneOf(
                 "loader", "Loader", "What is drawn while Rampart waits for something.",
                 "Themes", "spinner loading animation appearance", choices.loaders,
                 {

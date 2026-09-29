@@ -3940,6 +3940,7 @@ private fun Reader(
                     "rampart.icons" -> onIcons(iconPack(Settings.iconPack()))
                     "rampart.loader" -> loader = Loader.of(Settings.loader())
                     "rampart.density" -> density = Density.of(Settings.density())
+                    "rampart.listLayout" -> ListLayoutState.reload()
                     "rampart.tintRowsByTag" -> tintRows = Settings.tintRowsByTag()
                     "rampart.undoBarSeconds" -> undoBarSeconds = Settings.undoBarSeconds()
                     "rampart.notifyOnArrival" -> notifyOnArrival = Settings.notifyOnArrival()
@@ -7785,8 +7786,10 @@ internal fun MessageList(
     density: Density = LocalListDensity.current,
     onSelect: (Summary, ctrl: Boolean, shift: Boolean) -> Unit,
 ) {
+    // Table and Cards are drawn in ListLayoutsUi.kt. Normal is the path below, unchanged.
+    val layout = ListLayoutState.layout
     Column(
-        Modifier.width(368.dp).fillMaxHeight().background(MaterialTheme.colorScheme.surface),
+        Modifier.width(listPaneWidth(layout)).fillMaxHeight().background(MaterialTheme.colorScheme.surface),
     ) {
         Row(
             Modifier.fillMaxWidth().height(38.dp).padding(horizontal = 14.dp),
@@ -7923,7 +7926,10 @@ internal fun MessageList(
                     modifier = Modifier.align(Alignment.Center),
                 )
             }
-            if (emails.isNotEmpty()) {
+            if (emails.isNotEmpty() && layout != ListLayout.NORMAL) {
+                LayoutList(layout, emails, order, selected, picked, rowActions, loadingMore, scroll, onSelect)
+            }
+            if (emails.isNotEmpty() && layout == ListLayout.NORMAL) {
                 LazyColumn(Modifier.fillMaxSize(), state = scroll) {
                     // LazyColumn only builds the rows on screen, so a folder with thirty
                     // thousand messages in it costs the same as one with twenty. What that
@@ -8492,7 +8498,7 @@ private val HOVER_SLOT = 78.dp
  * under the pointer cannot delete something on the way past.
  */
 @Composable
-private fun RowMenu(
+internal fun RowMenu(
     message: Summary,
     actions: RowActions,
     open: Boolean,
