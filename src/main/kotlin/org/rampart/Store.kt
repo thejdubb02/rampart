@@ -208,6 +208,12 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             "CREATE INDEX IF NOT EXISTS message_seen_received ON message (seen, receivedAt DESC)",
             "CREATE INDEX IF NOT EXISTS message_flagged_received ON message (flagged, receivedAt DESC)",
             "CREATE INDEX IF NOT EXISTS message_sender_email ON message (lower(senderEmail), receivedAt DESC)",
+            // Who each message went to, one row an address, so a person's history can be read
+            // from here by address rather than by scanning every message. Its own table so an
+            // existing file gains it without a migration; rows arrive as folders are read again.
+            "CREATE TABLE IF NOT EXISTS message_recipient (message_id TEXT NOT NULL, address TEXT NOT NULL, " +
+                "PRIMARY KEY (message_id, address))",
+            "CREATE INDEX IF NOT EXISTS message_recipient_address ON message_recipient (address, message_id)",
             "CREATE TABLE IF NOT EXISTS mailbox_message (message_id TEXT NOT NULL, mailbox_id TEXT NOT NULL, " +
                 "PRIMARY KEY (message_id, mailbox_id))",
             "CREATE INDEX IF NOT EXISTS mailbox_message_mailbox ON mailbox_message (mailbox_id, message_id)",
@@ -716,6 +722,26 @@ internal class Store(private val connection: Connection) : AutoCloseable {
                     summaries.forEach { message ->
                         s.setString(1, message.id)
                         s.setString(2, mailbox)
+                        s.addBatch()
+                    }
+                }
+                s.executeBatch()
+            }
+            // Only for rows that say who they went to. A row read back from this copy, or
+            // from a backend that did not say, carries none, and writing it again must not
+            // wipe what an earlier read learned.
+            val addressed = messages.filter { it.recipients.isNotEmpty() }
+            addressed.map { it.id }.chunked(10_000).forEach { part ->
+                connection.prepareStatement("DELETE FROM message_recipient WHERE message_id IN (${holders(part.size)})").use { s ->
+                    part.forEachIndexed { index, id -> s.setString(index + 1, id) }
+                    s.executeUpdate()
+                }
+            }
+            connection.prepareStatement("INSERT OR IGNORE INTO message_recipient (message_id, address) VALUES (?, ?)").use { s ->
+                addressed.forEach { message ->
+                    message.recipients.forEach { address ->
+                        s.setString(1, message.id)
+                        s.setString(2, address.trim().lowercase())
                         s.addBatch()
                     }
                 }
@@ -1488,6 +1514,55 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         }
     }
 
+    /**
+     * The ids of every message from or to any of [addresses], as a subquery and its values.
+     *
+     * A union of two index lookups, the sender's and the recipients', rather than one OR over
+     * the message table: an OR across two columns is a scan of all fifty thousand rows, and
+     * the union touches only the rows that match.
+     */
+    private fun personIds(addresses: List<String>): Pair<String, List<String>> {
+        val marks = holders(addresses.size)
+        return "SELECT id FROM message WHERE lower(senderEmail) IN ($marks) " +
+            "UNION SELECT message_id FROM message_recipient WHERE address IN ($marks)" to addresses + addresses
+    }
+
+    /** A page of a person's messages from this copy, newest first. See PersonHistory.kt. */
+    @Synchronized fun personPage(addresses: Collection<String>, limit: Int, from: Int): List<Summary> {
+        val wanted = addresses.map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct()
+        if (wanted.isEmpty()) return emptyList()
+        val (ids, values) = personIds(wanted)
+        return connection.prepareStatement(
+            "SELECT * FROM message WHERE id IN ($ids) ORDER BY receivedAt DESC LIMIT ? OFFSET ?",
+        ).use { s ->
+            values.forEachIndexed { i, v -> s.setString(i + 1, v) }
+            s.setInt(values.size + 1, limit)
+            s.setInt(values.size + 2, from)
+            s.executeQuery().use { rows -> buildList { while (rows.next()) add(summaryOf(rows)) } }
+        }
+    }
+
+    /** Counts and dates for a person, from this copy. Counted in SQL, never by loading rows. */
+    @Synchronized fun personStats(addresses: Collection<String>): PersonStats {
+        val wanted = addresses.map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct()
+        if (wanted.isEmpty()) return PersonStats()
+        val marks = holders(wanted.size)
+        fun count(sql: String): Int = connection.prepareStatement(sql).use { s ->
+            wanted.forEachIndexed { i, v -> s.setString(i + 1, v) }
+            s.executeQuery().use { if (it.next()) it.getInt(1) else 0 }
+        }
+        val received = count("SELECT COUNT(*) FROM message WHERE lower(senderEmail) IN ($marks)")
+        val sent = count("SELECT COUNT(DISTINCT message_id) FROM message_recipient WHERE address IN ($marks)")
+        val (ids, values) = personIds(wanted)
+        val (first, last) = connection.prepareStatement(
+            "SELECT MIN(receivedAt), MAX(receivedAt) FROM message WHERE id IN ($ids)",
+        ).use { s ->
+            values.forEachIndexed { i, v -> s.setString(i + 1, v) }
+            s.executeQuery().use { if (it.next()) it.getString(1) to it.getString(2) else null to null }
+        }
+        return PersonStats(received = received, sent = sent, first = first, last = last)
+    }
+
     /** Takes messages out, for mail that was filed or deleted elsewhere. */
     @Synchronized fun forget(ids: List<String>) {
         if (ids.isEmpty()) return
@@ -1495,6 +1570,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         listOf(
             "DELETE FROM mailbox_message WHERE message_id IN ($marks)",
             "DELETE FROM message_keyword WHERE message_id IN ($marks)",
+            "DELETE FROM message_recipient WHERE message_id IN ($marks)",
             "DELETE FROM message WHERE id IN ($marks)",
             "DELETE FROM body WHERE id IN ($marks)",
             "DELETE FROM search WHERE id IN ($marks)",
