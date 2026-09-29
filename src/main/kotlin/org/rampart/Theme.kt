@@ -118,14 +118,7 @@ internal fun Avatar(
 private const val ROOK_WORKING_FRAMES = 48
 private const val ROOK_WORKING_FPS = 12
 
-/**
- * Which working strip to draw from, at the size Rook is actually being drawn.
- *
- * A pull request pulling in a 192px strip to draw a 16px sidebar icon would cost a decode
- * for no visible gain, and going the other way, stretching the 96px strip to fill a large
- * avatar, is what would actually show. [sizePx] is real device pixels, not dp, because a
- * dp is only a pixel at 1x scale and the choice has to be right on a HiDPI screen too.
- */
+/** The smallest strip that stays sharp at [sizePx], in device pixels so HiDPI screens get the big one. */
 internal fun rookWorkingStripFile(sizePx: Float): String =
     if (sizePx > 96f) "rook-working-192.png" else "rook-working-96.png"
 
@@ -144,14 +137,13 @@ internal fun rookWorkingFrame(progress: Float): Int =
  *
  * A `remember` inside [RookAvatar] would decode a fresh copy for every place Rook is drawn
  * at once, and the sidebar button, the chat header and a line in the transcript can all be
- * on screen together. `lazy` decodes each strip the first time anything asks for it and
+ * on screen together. The map decodes each strip the first time anything asks for it and
  * every avatar after that reuses the same bitmap.
  */
-private val rookWorking96: ImageBitmap? by lazy {
-    runCatching { useResource("art/rook-working-96.png") { loadImageBitmap(it) } }.getOrNull()
-}
-private val rookWorking192: ImageBitmap? by lazy {
-    runCatching { useResource("art/rook-working-192.png") { loadImageBitmap(it) } }.getOrNull()
+private val rookWorkingStrips = java.util.concurrent.ConcurrentHashMap<String, ImageBitmap?>()
+
+private fun rookWorkingStrip(file: String): ImageBitmap? = rookWorkingStrips.getOrPut(file) {
+    runCatching { useResource("art/$file") { loadImageBitmap(it) } }.getOrNull()
 }
 
 /**
@@ -196,7 +188,7 @@ internal fun RookAvatar(size: Dp, file: String = "rook-avatar-96.png", ring: Boo
 private fun RookWorking(size: Dp) {
     val sizePx = with(LocalDensity.current) { size.toPx() }
     val stripFile = rookWorkingStripFile(sizePx)
-    val strip = if (stripFile == "rook-working-192.png") rookWorking192 else rookWorking96
+    val strip = rookWorkingStrip(stripFile)
     val frameSize = if (stripFile == "rook-working-192.png") 192 else 96
     if (strip == null) return
 

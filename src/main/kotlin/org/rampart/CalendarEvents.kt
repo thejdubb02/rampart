@@ -224,14 +224,8 @@ internal fun dayCode(day: DayOfWeek): String = DAY_CODES.entries.first { it.valu
 private val UNSUPPORTED_PARTS = listOf("bySetPosition", "byYearDay", "byWeekNo", "byHour", "byMinute", "bySecond")
 
 /**
- * The event's recurrence rules, in whichever of two shapes the object holds them.
- *
- * RFC 8984 names the property `recurrenceRules`, an array, and that is what this file used
- * to read and write. Stalwart 0.16 does not: checked against a live server, it refuses a
- * created event that carries `recurrenceRules` with `invalidProperties`, and what it sends
- * back on CalendarEvent/get is `recurrenceRule`, singular, one object rather than an array.
- * Both are read here, so a server that later moves to the array form still works; only the
- * singular form is ever written, because that is the one shape this build's own server takes.
+ * Stalwart 0.16 speaks `recurrenceRule`, one object, not RFC 8984's `recurrenceRules` array,
+ * and refuses the array on create. Both are read; only the singular is written.
  */
 private fun recurrenceRulesOf(o: JsonObject): List<RecurrenceRule> =
     (o["recurrenceRules"] as? JsonArray)?.mapNotNull { (it as? JsonObject)?.let(::recurrenceRuleOf) }

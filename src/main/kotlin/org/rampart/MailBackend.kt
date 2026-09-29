@@ -190,7 +190,7 @@ internal interface MailBackend {
         draftsMailboxId: String,
         sentMailboxId: String?,
         holdUntil: Instant,
-    ): DelayedSend = throw Unsupported(Lacks.DELAYED_SEND)
+    ): DelayedSend = error("This server cannot hold a message to send later.")
 
     /**
      * Cancels a message the server is still holding, by moving its EmailSubmission's
@@ -201,7 +201,7 @@ internal interface MailBackend {
      * cancel. Anything else is the server's own words for why not, usually that the hold
      * has already ended.
      */
-    fun cancelDelayed(submissionId: String): String? = throw Unsupported(Lacks.DELAYED_SEND)
+    fun cancelDelayed(submissionId: String): String? = error("This server cannot hold a message to send later.")
 
     /**
      * The submission extensions the server offers, upper-cased, such as REQUIRETLS and DSN.

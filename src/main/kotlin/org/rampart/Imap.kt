@@ -953,12 +953,6 @@ internal enum class Lacks(val why: String) {
      * and inventing one would either miss the mail or look like it had worked.
      */
     LOCAL_COPY("This filter has to be answered from the saved copy of the folder. This server cannot answer it."),
-    /**
-     * Never actually thrown in practice: [MailBackend.maxDelayedSend] is always zero on
-     * IMAP, so the scheduling code never calls the methods this guards. Named anyway so a
-     * future caller that skips that check fails with a sentence instead of a crash.
-     */
-    DELAYED_SEND("This server has no way to hold a message and send it later. Rampart holds it instead."),
 }
 
 /**
