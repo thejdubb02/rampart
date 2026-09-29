@@ -543,9 +543,18 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             }
             // Replaced rather than updated: FTS5 has no upsert, and a message re-indexed
             // twice would come back twice from one search.
-            connection.prepareStatement("DELETE FROM search WHERE id = ?").use { s ->
-                messages.forEach { s.setString(1, it.id); s.addBatch() }
-                s.executeBatch()
+            //
+            // One statement per few hundred ids rather than one per id. The id column is
+            // not indexed inside FTS5, so each delete reads the whole index: one per row
+            // made a page of a hundred cost a second and a half at fifty thousand messages,
+            // with the store locked throughout. Measured in ListBenchmarkTest.
+            messages.map { it.id }.distinct().chunked(500).forEach { chunk ->
+                connection.prepareStatement(
+                    "DELETE FROM search WHERE id IN (" + chunk.joinToString(",") { "?" } + ")",
+                ).use { s ->
+                    chunk.forEachIndexed { i, id -> s.setString(i + 1, id) }
+                    s.executeUpdate()
+                }
             }
             connection.prepareStatement("INSERT INTO search (id, sender, subject, body) VALUES (?,?,?,?)").use { s ->
                 messages.forEach { m ->
