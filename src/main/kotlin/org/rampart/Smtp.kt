@@ -60,6 +60,16 @@ internal class Smtp private constructor(
         return out.toByteArray()
     }
 
+    /**
+     * Sends a finished message exactly as it is. A parsed message that nobody changes is
+     * written back out byte for byte, which a signed message needs; saveChanges is never
+     * called on it, because that would rebuild the MIME the signature covers.
+     */
+    fun sendRaw(raw: ByteArray, recipients: List<String>) {
+        val message = MimeMessage(session, raw.inputStream())
+        transport.sendMessage(message, recipients.map { InternetAddress(it) }.toTypedArray())
+    }
+
     override fun close() {
         runCatching { transport.close() }
     }

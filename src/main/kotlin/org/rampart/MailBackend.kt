@@ -180,6 +180,15 @@ internal interface MailBackend {
     fun send(draft: Draft, identity: Identity, draftsMailboxId: String, sentMailboxId: String?): String?
 
     /**
+     * Sends a message that is already finished, byte for byte, and files those same bytes in
+     * Sent. For signed and encrypted mail (SealedSend.kt), where the server must not rebuild
+     * the MIME because the signature covers it exactly. [draft] is only read for its delivery
+     * options; its content is already in [raw]. Returns what [send] returns.
+     */
+    fun sendRaw(raw: ByteArray, draft: Draft, identity: Identity, draftsMailboxId: String, sentMailboxId: String?): String? =
+        throw JmapError("This account cannot send a signed or encrypted message.")
+
+    /**
      * How many seconds into the future this account's server will hold a message before
      * sending it, or zero when it will not hold one at all.
      *

@@ -75,7 +75,7 @@ internal data class MailCalendar(
  */
 @Composable
 internal fun AddToCalendar(context: MailCalendar, summary: Summary, body: Body?) {
-    val text = remember(summary.id, body) { plainTextOf(body) }
+    val text = remember(summary.id, body) { rookTextOf(body) }
     val mentions = remember(summary.id, text) { mentionsDateAndTime(summary.subject, text) }
     if (!mentions) return
     val unavailable = remember(context.backend, context.accountName) { noCalendarBecause(context.backend, context.accountName) }

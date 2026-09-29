@@ -172,6 +172,10 @@ data class Draft(
     val requireTls: Boolean = false,
     /** Whether to ask every receiving server to confirm delivery (RFC 3461 NOTIFY=SUCCESS). */
     val confirmDelivery: Boolean = false,
+    /** Sign with the sender's own key. Only SealedSend.kt sends one of these. */
+    val sign: Boolean = false,
+    /** Encrypt to every recipient and to the sender. Never sent readable instead; see SealedSend.kt. */
+    val encrypt: Boolean = false,
 ) {
     val recipients: List<String> get() = (parseAddressList(to) + parseAddressList(cc)).map { it.email }
 }
@@ -442,6 +446,8 @@ internal fun Composer(
     onBusy: (Boolean) -> Unit = {},
     /** Where "Help me schedule" reads free time from. Null hides it. See CalendarFromMailUi.kt. */
     schedule: ScheduleSource? = null,
+    /** The address book's cards, where a recipient's encryption key is looked for first. */
+    sealCards: List<kotlinx.serialization.json.JsonObject> = emptyList(),
 ) {
     var draft by remember(initial) { mutableStateOf(initial) }
     /*
@@ -825,7 +831,10 @@ internal fun Composer(
                         },
                     )
                 }
+                SealToggles(draft, enabled = !sending) { draft = it }
             }
+            // What signing and encrypting will do, and any key that is missing. See CryptoCompose.kt.
+            SealNotes(draft, sealCards)
             /*
              * Only after the toggle has been pressed, so a composer for somebody who does not
              * want open tracking is not carrying a permanent line about a server they will

@@ -187,6 +187,7 @@ internal fun SettingsPane(
                                 SettingsSyncSection()
                             }
                             "security" -> SecurityPage(security, accounts, account, onAccount)
+                            "encryption" -> EncryptionPage(security, identities, accounts, account, onAccount)
                             "phone" -> PhonePage(security, accounts, account, onAccount)
                             "notifications" -> NotificationsPage(
                                 notifyOnArrival, onNotifyOnArrival, notifyOnOpen, onNotifyOnOpen,
@@ -246,6 +247,7 @@ internal fun SettingsPane(
 internal val SettingsPages: List<Triple<String, String, String>> = listOf(
     Triple("accounts", "Accounts", "General"),
     Triple("security", "Security", "General"),
+    Triple("encryption", "Encryption", "General"),
     Triple("phone", "Your phone", "General"),
     Triple("notifications", "Notifications", "General"),
     Triple("themes", "Themes", "Appearance"),

@@ -548,6 +548,15 @@ internal class Imap private constructor(
         return if (filed.isSuccess) null else "Sent, but the copy could not be filed in Sent Items."
     }
 
+    /** The finished bytes over SMTP, then the same bytes into Sent. See [MailBackend.sendRaw]. */
+    override fun sendRaw(raw: ByteArray, draft: Draft, identity: Identity, draftsMailboxId: String, sentMailboxId: String?): String? {
+        refusedOption(draft.copy(sign = false, encrypt = false), submissionExtensions)?.let { throw JmapError(it) }
+        Smtp.connect(sendHost, user, password, sendPort).use { it.sendRaw(raw, draft.recipients) }
+        val folder = sentMailboxId ?: return null
+        val filed = runCatching { append(folder, MimeMessage(Session.getInstance(Properties()), raw.inputStream())) }
+        return if (filed.isSuccess) null else "Sent, but the copy could not be filed in Sent Items."
+    }
+
     /** APPEND, with the server's new UID when it offers UIDPLUS and a re-read when it does not. */
     private fun append(mailboxId: String, message: MimeMessage): String {
         val folder = store.getFolder(mailboxId) as IMAPFolder
