@@ -21,7 +21,7 @@ private val RUN_OF_SPACE = Regex("\\s+")
  * [header], then as many of [turns] (oldest first) as fit in [budget] characters, newest
  * last. [sectionLabel], when given, sits on its own line between [header] and the turns, and
  * is only there at all once there is at least one turn to put under it. Shared by every
- * feature that sends a thread as context, [Summarise] and [ComposeDraft] both trim the exact
+ * feature that sends a thread as context, [Summarise] and [WritingHelp] both trim the exact
  * same way for the exact same reason: a runaway newsletter should cost characters, not a
  * second budget somebody has to remember to keep in step with this one.
  */
