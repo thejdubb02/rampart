@@ -4063,7 +4063,7 @@ private fun Reader(
                         FolderJob.ToTop -> jmap.updateMailbox(ask.mailbox!!.id, reparent = true)
                         FolderJob.Delete -> jmap.destroyMailbox(ask.mailbox!!.id)
                         // Handled before a dialog is ever shown, so it never reaches here.
-                        FolderJob.Export -> Unit
+                        FolderJob.Export, FolderJob.Import -> Unit
                     }
                 }
                 null
@@ -5482,17 +5482,21 @@ private fun Reader(
                 )
             }
             folderAsk?.let { ask ->
-                if (ask.job == FolderJob.Export && ask.mailbox != null) {
+                if ((ask.job == FolderJob.Export || ask.job == FolderJob.Import) && ask.mailbox != null) {
                     val key = ask.account
                     val backend = runCatching { session(key).jmap }.getOrNull()
                     if (backend != null) {
-                        ExportFolderDialog(
-                            accountName = ask.account,
-                            mailbox = ask.mailbox,
-                            allMailboxes = mailboxes[key].orEmpty(),
-                            backend = backend,
-                            onClose = { folderAsk = null },
-                        )
+                        if (ask.job == FolderJob.Export) {
+                            ExportFolderDialog(
+                                accountName = ask.account,
+                                mailbox = ask.mailbox,
+                                allMailboxes = mailboxes[key].orEmpty(),
+                                backend = backend,
+                                onClose = { folderAsk = null },
+                            )
+                        } else {
+                            ImportFolderDialog(ask.mailbox, backend) { folderAsk = null }
+                        }
                     } else {
                         folderAsk = null
                     }
@@ -6357,7 +6361,7 @@ private fun TnefOverlay(
 internal data class FolderAsk(val account: String, val mailbox: Mailbox?, val job: FolderJob)
 
 /** What a right-click on a folder asked for. Answered by whoever owns the sidebar. */
-internal enum class FolderJob { CreateInside, Rename, ToTop, Delete, Export }
+internal enum class FolderJob { CreateInside, Rename, ToTop, Delete, Export, Import }
 
 /** A saved search job waiting on an answer. */
 internal data class SavedSearchAsk(val search: SavedSearch, val job: SavedSearchJob)
@@ -6977,6 +6981,7 @@ private fun FolderDialog(
         FolderJob.ToTop -> "Move ${ask.mailbox?.name.orEmpty()} to the top level"
         FolderJob.Delete -> "Delete ${ask.mailbox?.name.orEmpty()}"
         FolderJob.Export -> "Export ${ask.mailbox?.name.orEmpty()}"
+        FolderJob.Import -> "Import into ${ask.mailbox?.name.orEmpty()}"
     }
 
     AlertDialog(
@@ -7232,6 +7237,10 @@ private fun FolderRow(
                 DropdownMenuItem(
                     text = { Text("Export this folder") },
                     onClick = { menu = false; manage(FolderJob.Export) },
+                )
+                DropdownMenuItem(
+                    text = { Text("Import into this folder") },
+                    onClick = { menu = false; manage(FolderJob.Import) },
                 )
             }
         }

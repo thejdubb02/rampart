@@ -23,6 +23,12 @@ internal data class OpenedMail(
 /** The two fields that identify a message's bytes. See [MailBackend.contentStamp]. */
 internal data class ContentStamp(val blobId: String, val size: Long)
 
+/** The metadata applied while filing an existing RFC 5322 message. */
+internal data class ImportedMessage(
+    val keywords: Set<String> = emptySet(),
+    val receivedAt: Instant,
+)
+
 /** A calendar part at most this big is fetched with the message. Larger ones are left. */
 internal const val CHEAP_CALENDAR = 256L * 1024
 
@@ -154,6 +160,13 @@ internal interface MailBackend {
     fun setSignature(identityId: String, text: String, html: String)
 
     fun upload(file: Path): Attachment
+
+    /** The largest raw message this server accepts, or zero when it did not publish a limit. */
+    val maxSizeUpload: Long get() = 0L
+
+    /** Files an existing RFC 5322 message without sending it. */
+    fun importMessage(file: Path, mailboxId: String, metadata: ImportedMessage): String =
+        throw Unsupported(Lacks.BLOB_UPLOAD)
 
     fun saveDraft(draft: Draft, identity: Identity, draftsMailboxId: String, replacing: String?): String
 

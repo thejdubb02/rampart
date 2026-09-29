@@ -227,7 +227,7 @@ private val SettingsPages: List<Triple<String, String, String>> = listOf(
     Triple("filters", "Filters", "Mail"),
     Triple("identities", "Identities and signatures", "Mail"),
     Triple("away", "Away reply", "Mail"),
-    Triple("export", "Export mail", "Mail"),
+    Triple("export", "Import and export", "Mail"),
     Triple("tracking", "Open tracking", "Mail"),
     Triple("assistant", "Rook", "Mail"),
     Triple("admin", "Server admin", "Server"),

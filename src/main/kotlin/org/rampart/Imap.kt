@@ -28,6 +28,7 @@ import org.eclipse.angus.mail.imap.IMAPStore
 import kotlinx.serialization.json.JsonObject
 import java.nio.file.Path
 import java.time.Instant
+import java.util.Date
 import java.util.Properties
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -475,6 +476,22 @@ internal class Imap private constructor(
         throw Unsupported(Lacks.IDENTITIES)
 
     override fun upload(file: Path): Attachment = throw Unsupported(Lacks.BLOB_UPLOAD)
+
+    override fun importMessage(file: Path, mailboxId: String, metadata: ImportedMessage): String {
+        val session = Session.getInstance(Properties())
+        val message = file.toFile().inputStream().use { input ->
+            object : MimeMessage(session, input) {
+                override fun getReceivedDate(): Date = Date.from(metadata.receivedAt)
+            }
+        }
+        message.setFlag(Flags.Flag.SEEN, "\$seen" in metadata.keywords)
+        message.setFlag(Flags.Flag.FLAGGED, "\$flagged" in metadata.keywords)
+        message.setFlag(Flags.Flag.ANSWERED, "\$answered" in metadata.keywords)
+        message.setFlag(Flags.Flag.DRAFT, "\$draft" in metadata.keywords)
+        val custom = metadata.keywords.filterNot { it.startsWith("$") }
+        custom.forEach { message.setFlags(Flags(it), true) }
+        return append(mailboxId, message)
+    }
 
     override fun saveDraft(
         draft: Draft,

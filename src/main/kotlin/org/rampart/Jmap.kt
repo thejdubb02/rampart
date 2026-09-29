@@ -325,6 +325,7 @@ internal class Jmap private constructor(
     /** What the server's submission capability says it will take on an envelope. */
     override val submissionExtensions: Set<String> = emptySet(),
 ) : MailBackend {
+    override val maxSizeUpload: Long get() = maxUpload
     companion object {
         fun connect(server: String, user: String, password: String): Jmap = try {
             session(server, user, password)
@@ -1222,6 +1223,24 @@ internal class Jmap private constructor(
             type = blob["type"]?.str()?.ifBlank { null } ?: type,
             size = blob["size"]?.jsonPrimitive?.longOrNull ?: size,
         )
+    }
+
+    override fun importMessage(file: Path, mailboxId: String, metadata: ImportedMessage): String {
+        val uploaded = upload(file)
+        val response = call(
+            invoke("Email/import", "import") {
+                putJsonObject("emails") {
+                    putJsonObject("message") {
+                        put("blobId", uploaded.blobId)
+                        putJsonObject("mailboxIds") { put(mailboxId, true) }
+                        putJsonObject("keywords") { metadata.keywords.forEach { put(it, true) } }
+                        put("receivedAt", metadata.receivedAt.toString())
+                    }
+                }
+            },
+        )[0][1].jsonObject
+        return response["created"]?.jsonObject?.get("message")?.jsonObject?.get("id")?.str()
+            ?: throw JmapError(refusal(response, "notCreated", "That message could not be imported"))
     }
 
     /**

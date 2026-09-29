@@ -76,8 +76,8 @@ internal fun ExportMailPage(
     val activeAccount = accounts.firstOrNull { it.key == chosenAccountKey } ?: accounts.firstOrNull()
 
     Section(
-        "Export mail",
-        "Export your mail to a Maildir tree of real RFC 5322 .eml files.",
+        "Import and export",
+        "Bring mail into Rampart or export it as a Maildir tree of real RFC 5322 .eml files.",
     )
 
     if (accounts.size > 1) {
@@ -102,6 +102,9 @@ internal fun ExportMailPage(
         }
         Spacer(Modifier.height(12.dp))
     }
+
+    ImportMailSection(activeAccount, activeAccount?.let { backendFor(it.key) })
+    Section("Export mail", "Export this account to a Maildir tree.")
 
     Text("Destination directory", style = MaterialTheme.typography.labelLarge)
     Spacer(Modifier.height(4.dp))
