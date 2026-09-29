@@ -135,3 +135,58 @@ internal fun pushGlobals(jmap: MailBackend, globals: List<Rule>): Boolean {
  */
 internal fun theOneRunning(all: List<Jmap.SieveInfo>): Jmap.SieveInfo? =
     all.firstOrNull { it.active } ?: all.firstOrNull { it.name == "rampart" } ?: all.firstOrNull()
+
+/**
+ * Shown when a script was not written by a builder, on the Filters page and in Rook.
+ *
+ * One sentence, because the two places have to refuse for the same reason: rebuilding a
+ * script we do not fully understand is how a save quietly drops a rule.
+ */
+internal const val UNEDITABLE_FILTERS =
+    "This filter script contains rules Rampart cannot safely rebuild, so Rampart shows it as it is instead of rewriting it."
+
+/** The active script, or an empty one when the account has none yet. */
+internal fun runningScript(backend: MailBackend): Pair<Jmap.SieveInfo?, Script> {
+    val chosen = theOneRunning(backend.sieveScripts()) ?: return null to Script(emptyList())
+    return chosen to scriptOf(backend.sieveText(chosen))
+}
+
+/**
+ * The rules the Filters page lists for one account: the set kept for every account, then
+ * this account's own.
+ *
+ * A script that was not written by a builder has no list. [UNEDITABLE_FILTERS] is the
+ * answer instead, the same one the page shows in place of the editor.
+ */
+internal fun rulesOnAccount(backend: MailBackend, accountKey: String): List<Rule> {
+    val (chosen, current) = runningScript(backend)
+    if (chosen != null && !current.editable) throw JmapError(UNEDITABLE_FILTERS)
+    return Filters.read().forAccount(accountKey) + ownRules(current)
+}
+
+/**
+ * The script the Filters page would save if [rule] were added on this account.
+ *
+ * Global rules stay on top, the account's own rules stay, and [rule] goes at the end.
+ * Null when the script was not written by a builder: the page will not rebuild one of
+ * those, and neither does this.
+ */
+internal fun scriptWithNewRule(current: Script, accountKey: String, rule: Rule): Script? {
+    if (!current.editable) return null
+    return scriptFor(current.copy(rules = ownRules(current) + rule), Filters.read().forAccount(accountKey))
+}
+
+/**
+ * Adds [rule] the way the Filters page does when a person presses Save there.
+ *
+ * The whole script is read again at this moment and written back, so a rule saved on
+ * the page in between is kept. Nothing here is evaluated: the server runs it at delivery.
+ */
+internal fun addFilter(backend: MailBackend, accountKey: String, rule: Rule) {
+    if (!backend.hasSieve()) {
+        throw JmapError("This server does not offer Sieve, so rules cannot be kept on it.")
+    }
+    val (chosen, current) = runningScript(backend)
+    val next = scriptWithNewRule(current, accountKey, rule) ?: throw JmapError(UNEDITABLE_FILTERS)
+    backend.saveSieve(chosen?.name ?: "rampart", sieveOf(next), chosen)
+}

@@ -57,6 +57,28 @@ internal fun ruleRepairPacket(config: AssistantConfig, words: String, folders: L
         maxTokens = 700,
     )
 
+/**
+ * One sentence into one rule, the way the Filters page does it.
+ *
+ * The model fills in the rule model and [ruleOfAnswer] accepts only what a person could
+ * have entered on that page. One repair turn when the first answer is refused, and none
+ * when the only problem is a folder that does not exist: the person can create that, and
+ * a second guess would hide the name from them. [ask] sends one packet and returns the
+ * model's text. This does not save anything.
+ */
+internal fun ruleFromWords(
+    config: AssistantConfig,
+    words: String,
+    folders: List<String>,
+    ask: (packet: String) -> String,
+): Result<Rule> {
+    val firstText = ask(rulePacket(config, words, folders))
+    val first = ruleOfAnswer(firstText, folders)
+    if (first.isSuccess || first.exceptionOrNull() is MissingFolder) return first
+    val reason = first.exceptionOrNull()?.message ?: "The rule was invalid."
+    return ruleOfAnswer(ask(ruleRepairPacket(config, words, folders, firstText, reason)), folders)
+}
+
 private val strictJson = Json { isLenient = false; ignoreUnknownKeys = false }
 private val headerName = Regex("^[A-Za-z0-9][A-Za-z0-9-]*$")
 private val sieveSize = Regex("^[<>]\\s*[1-9][0-9]*[KMG]?$", RegexOption.IGNORE_CASE)

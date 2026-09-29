@@ -71,6 +71,10 @@ internal fun ChatPane(
     cards: List<ChangeCard> = emptyList(),
     onConfirmCard: (Int) -> Unit = {},
     onDismissCard: (Int) -> Unit = {},
+    /** Filters Rook has asked for, each waiting on a person's Save. See `FilterTools.kt`. */
+    filterCards: List<FilterCard> = emptyList(),
+    onSaveFilter: (Int) -> Unit = {},
+    onCancelFilter: (Int) -> Unit = {},
     /** Whether a message is currently open in the reading pane. */
     hasOpenMessage: Boolean = false,
     /** Whether thread summarisation is currently running. */
@@ -103,8 +107,8 @@ internal fun ChatPane(
 
     // The newest line, whenever one arrives. A transcript that has to be scrolled to be
     // read is one where the answer appears somewhere nobody is looking.
-    LaunchedEffect(said.size, thinking, cards.size) {
-        if (said.isNotEmpty()) scroll.animateScrollToItem(said.size - 1 + cards.size)
+    LaunchedEffect(said.size, thinking, cards.size, filterCards.size) {
+        if (said.isNotEmpty()) scroll.animateScrollToItem(said.size - 1 + cards.size + filterCards.size)
     }
 
     Column(
@@ -157,10 +161,13 @@ internal fun ChatPane(
                 // is on the next line, in words.
                 if (line.role != "call") SaidLine(line)
             }
-            // After the transcript rather than inside it, so a card waiting for Confirm is
-            // always at the bottom where the person is looking, however the turn ended.
+            // After the transcript rather than inside it, so a card waiting for a person is
+            // always at the bottom where they are looking, however the turn ended.
             items(cards, key = { "card-${it.number}" }) { card ->
                 SettingChangeCard(card, onConfirmCard, onDismissCard)
+            }
+            items(filterCards, key = { "filter-${it.number}" }) { card ->
+                FilterChangeCard(card, onSaveFilter, onCancelFilter)
             }
             if (thinking) {
                 item {

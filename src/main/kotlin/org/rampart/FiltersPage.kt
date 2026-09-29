@@ -184,10 +184,7 @@ private fun OneAccount(
 
     if (!script.editable) {
         // Being plain about why, rather than showing an empty list that looks like a bug.
-        Note(
-            "This filter script contains rules Rampart cannot safely rebuild, so Rampart " +
-                "shows it as it is instead of rewriting it.",
-        )
+        Note(UNEDITABLE_FILTERS)
         Spacer(Modifier.height(10.dp))
         RawScript(script.tail)
         return
@@ -403,7 +400,7 @@ private fun DescribeRule(
     // dialog about a feature, it is this text, before it goes anywhere.
     var asking by remember { mutableStateOf<String?>(null) }
 
-    fun send(packet: String) {
+    fun send() {
         thinking = true
         trouble = null
         missingFolder = null
@@ -411,43 +408,28 @@ private fun DescribeRule(
             val outcome = runCatching {
                 withContext(Dispatchers.IO) {
                     val key = Secrets.loadNamed(Assistant.KEY)
-                    val reply = Llm.ask(config, key, packet)
-                    Assistant.record(Assistant.FILTER, reply.tokensIn, reply.tokensOut, config)
-                    reply
+                    // The same function Rook's propose_filter calls, so the two cannot drift.
+                    ruleFromWords(config, words, folders) { packet ->
+                        val reply = Llm.ask(config, key, packet)
+                        Assistant.record(Assistant.FILTER, reply.tokensIn, reply.tokensOut, config)
+                        reply.text
+                    }
                 }
             }
             thinking = false
             outcome.fold(
-                onSuccess = { reply ->
-                    val first = ruleOfAnswer(reply.text, folders)
-                    if (first.isSuccess) {
-                        draft = first.getOrThrow()
-                    } else if (first.exceptionOrNull() is MissingFolder) {
-                        missingFolder = (first.exceptionOrNull() as MissingFolder).folder
-                        trouble = first.exceptionOrNull()?.message
-                    } else {
-                        val repaired = runCatching {
-                            withContext(Dispatchers.IO) {
-                                val key = Secrets.loadNamed(Assistant.KEY)
-                                val repair = ruleRepairPacket(
-                                    config,
-                                    words,
-                                    folders,
-                                    reply.text,
-                                    first.exceptionOrNull()?.message ?: "The rule was invalid.",
-                                )
-                                Llm.ask(config, key, repair).also {
-                                    Assistant.record(Assistant.FILTER, it.tokensIn, it.tokensOut, config)
-                                }
-                            }
-                        }.mapCatching { ruleOfAnswer(it.text, folders).getOrThrow() }
-                        repaired.fold(
-                            onSuccess = { draft = it },
-                            onFailure = {
+                onSuccess = { result ->
+                    result.fold(
+                        onSuccess = { draft = it },
+                        onFailure = { error ->
+                            if (error is MissingFolder) {
+                                missingFolder = error.folder
+                                trouble = error.message
+                            } else {
                                 trouble = "I could not understand that as a filter. Try saying which mail to match and what to do with it."
-                            },
-                        )
-                    }
+                            }
+                        },
+                    )
                 },
                 onFailure = { trouble = it.message ?: "The model could not be reached." },
             )
@@ -463,7 +445,7 @@ private fun DescribeRule(
         val packet = rulePacket(config, words, folders)
         // Agreed once, on this install, by reading what actually goes. After that it is a
         // decision somebody made and can see in Settings, not one to interrupt them for.
-        if (Assistant.agreed(Assistant.FILTER)) send(packet) else asking = packet
+        if (Assistant.agreed(Assistant.FILTER)) send() else asking = packet
     }
 
     OutlinedTextField(
@@ -548,7 +530,7 @@ private fun DescribeRule(
                     onClick = {
                         Assistant.agree(Assistant.FILTER)
                         asking = null
-                        send(packet)
+                        send()
                     },
                 ) { Text("Send it") }
             },

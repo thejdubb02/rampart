@@ -840,6 +840,11 @@ private fun Reader(
     var rookAccount by remember { mutableStateOf<String?>(null) }
     // Setting changes Rook has asked for. Only a Confirm press in the panel writes one.
     var settingCards by remember { mutableStateOf(ChangeDesk()) }
+    // Filters Rook has asked for. Only a Save press in the panel writes one, and it writes
+    // to the account stored on the card, which is the account Rook was working in.
+    var filterCards by remember { mutableStateOf(FilterDesk()) }
+    /** A filter description waiting to be allowed out, the same ask the Filters page makes. */
+    var filterConsent by remember { mutableStateOf<FilterConsent?>(null) }
     /*
      * The paragraph a thread was last summarised into, and everything about getting one.
      *
@@ -3622,6 +3627,17 @@ private fun Reader(
             here?.let { shortAccountName(it.account.name, it.account.email) }.orEmpty(),
             open?.let { taskLinkOf(it, cardFor(it).body) },
         )
+        // Cheap to build: nothing is read, and no rule is made, until Rook asks for a filter.
+        val filterDesk = filterCards
+        val filterTools = filterToolsFor(
+            here?.jmap,
+            key,
+            here?.let { shortAccountName(it.account.name, it.account.email) }.orEmpty(),
+            folders,
+            config,
+            filterDesk.nextNumber,
+            filterDesk.waiting.size,
+        )
         val attached = RookAttachment.file
         scope.launch {
             val added = withContext(Dispatchers.IO) {
@@ -3645,6 +3661,7 @@ private fun Reader(
                             settings = settings,
                             calendar = calendar,
                             tasks = tasks,
+                            filters = filterTools,
                         )
                     } finally {
                         drafted += settings.drafted
@@ -3653,6 +3670,12 @@ private fun Reader(
             }
             said = said + added
             settingCards = settingCards.add(drafted)
+            filterCards = filterCards.add(key, filterTools.proposed)
+            // The account is stamped here, not inside the tool: the tool does not know which
+            // account the window will save to, and a later switch must not move the rule.
+            filterTools.consent?.let { pending ->
+                if (filterConsent == null) filterConsent = pending.copy(account = key)
+            }
             ProposedEvents.offer(calendar, here?.jmap, key)
             ProposedTasks.offer(tasks, here?.jmap)
             chatThinking = false
@@ -4025,6 +4048,95 @@ private fun Reader(
             // Re-read rather than trust: the server rewrites nothing, but an activation
             // that half worked should show as what is actually there.
             if (filtersError == null) loadFilters(key)
+        }
+    }
+
+    /**
+     * Save, pressed on one of Rook's filter cards: the only path by which a filter it
+     * asked for is written. The write is the Filters page's own save, for the account
+     * stored on the card. The outcome goes into the transcript so Rook knows next turn.
+     */
+    fun saveFilterCard(number: Int) {
+        val card = filterCards.card(number)?.takeIf { it.status == CardStatus.WAITING } ?: return
+        val here = sessions.firstOrNull { it.key == card.account }
+        if (here == null) {
+            filterCards = filterCards.start(number).finish(number, "That account is no longer signed in, so the filter was not saved.")
+            said = said + Said("result", "The filter \"${card.rule.name}\" was not saved: that account is no longer signed in.")
+            return
+        }
+        filterCards = filterCards.start(number)
+        scope.launch {
+            val failure = withContext(Dispatchers.IO) {
+                try {
+                    addFilter(here.jmap, card.account, card.rule)
+                    null
+                } catch (e: Exception) {
+                    whyFailed(e)
+                }
+            }
+            filterCards = filterCards.finish(number, failure)
+            said = said + Said(
+                "result",
+                if (failure == null) "Saved the filter \"${card.rule.name}\"."
+                else "The filter \"${card.rule.name}\" was not saved: $failure",
+            )
+            if (failure == null && settingsOpen && filterAccount == card.account) {
+                runCatching { loadFilters(card.account) }
+            }
+        }
+    }
+
+    /** Cancel on a filter card. The rule is dropped and nothing is written. */
+    fun cancelFilterCard(number: Int) {
+        val card = filterCards.card(number)?.takeIf { it.status == CardStatus.WAITING } ?: return
+        filterCards = filterCards.dismiss(number)
+        said = said + Said("result", "The filter \"${card.rule.name}\" was not saved.")
+    }
+
+    /**
+     * The person allowed a filter description out. Build the rule now, the way the Filters
+     * page does the moment they press Send it, and put the card up. Still nothing is saved.
+     */
+    fun allowFilterWords() {
+        val pending = filterConsent ?: return
+        Assistant.agree(Assistant.FILTER)
+        filterConsent = null
+        val here = sessions.firstOrNull { it.key == pending.account }
+        if (here == null) {
+            said = said + Said("result", "That account is no longer signed in, so no filter was made.")
+            return
+        }
+        val config = Assistant.config()
+        val name = shortAccountName(here.account.name, here.account.email)
+        val foldersNow = mailboxes[pending.account].orEmpty().map { it.name }
+        val desk = filterCards
+        val tools = filterToolsFor(
+            here.jmap,
+            pending.account,
+            name,
+            foldersNow,
+            config,
+            desk.nextNumber,
+            desk.waiting.size,
+        )
+        chatThinking = true
+        scope.launch {
+            try {
+                val answer = withContext(Dispatchers.IO) {
+                    try {
+                        tools.offer(pending.words)
+                    } catch (e: Exception) {
+                        whyFailed(e)
+                    }
+                }
+                said = said + Said("result", answer)
+                filterCards = filterCards.add(pending.account, tools.proposed)
+                tools.consent?.let { again ->
+                    if (filterConsent == null) filterConsent = again.copy(account = pending.account)
+                }
+            } finally {
+                chatThinking = false
+            }
         }
     }
 
@@ -5108,7 +5220,7 @@ private fun Reader(
     CoverBody(
         composing != null || showPalette || showShortcuts ||
             confirm != null || summarisePacket != null || actionJob.waiting != null || attached != null || folderAsk != null ||
-            filterFor != null || changelogDialog != null || tnef != null,
+            filterFor != null || filterConsent != null || changelogDialog != null || tnef != null,
     )
     Box(Modifier.fillMaxSize()) {
     Column(
@@ -5285,6 +5397,8 @@ private fun Reader(
                             // nothing until it looks something up again.
                             chatShown.clear()
                             settingCards = settingCards.clear()
+                            filterCards = filterCards.clear()
+                            filterConsent = null
                         },
                         onClose = { AppBar.close(SideTool.ROOK) },
                         onSettings = { settingsOpen = true },
@@ -5295,6 +5409,9 @@ private fun Reader(
                         cards = settingCards.cards,
                         onConfirmCard = { confirmCard(it) },
                         onDismissCard = { settingCards = settingCards.dismiss(it) },
+                        filterCards = filterCards.cards,
+                        onSaveFilter = { saveFilterCard(it) },
+                        onCancelFilter = { cancelFilterCard(it) },
                         hasOpenMessage = selected != null,
                         summarising = summarising,
                         actionItemsRunning = actionJob.running,
@@ -6286,6 +6403,18 @@ private fun Reader(
                 }) { Text("Open in browser") }
             },
             dismissButton = { TextButton(onClick = { confirm = null }) { Text("Cancel") } },
+        )
+    }
+
+    // The packet the Filters page would have shown, before a description is sent off.
+    filterConsent?.let { pending ->
+        FilterConsentDialog(
+            packet = pending.packet,
+            onSend = { allowFilterWords() },
+            onCancel = {
+                filterConsent = null
+                said = said + Said("result", "The person did not allow describing filters in words, so no filter was made.")
+            },
         )
     }
 

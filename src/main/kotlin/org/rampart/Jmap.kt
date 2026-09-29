@@ -1298,13 +1298,34 @@ internal class Jmap private constructor(
     }
 
     /**
-     * Writes a script and makes it the active one.
+     * Checks a script with the server without storing it.
      *
-     * The text goes up as a blob first, because that is how JMAP moves anything with a body,
-     * and the script then points at it. Activating in the same call rather than a second one
-     * means a refused script never becomes the active script.
+     * RFC 9661 `SieveScript/validate`, which is the CHECKSCRIPT command: the same compiler
+     * a save goes through, and none of the storing. A card has to know the server will
+     * take the script before a person is asked to save it. Null when it is valid, and a
+     * sentence when it is not.
      */
-    override fun saveSieve(name: String, text: String, existing: SieveInfo?) {
+    internal fun validateSieve(text: String): String? {
+        val blobId = uploadSieve(text)
+        val response = call(
+            invoke("SieveScript/validate", "v") { put("blobId", blobId) },
+            also = SIEVE,
+        )[0][1].jsonObject
+        val error = response["error"]
+        if (error == null || error is JsonNull) return null
+        if (error is JsonPrimitive) {
+            val sentence = error.contentOrNull?.trim().orEmpty()
+            return if (sentence.isEmpty()) null else "The server rejected this filter: $sentence"
+        }
+        val problem = error as? JsonObject
+        val description = problem?.get("description")?.str()?.trim().orEmpty()
+        if (description.isNotEmpty()) return "The server rejected this filter: $description"
+        val type = problem?.get("type")?.str()?.trim().orEmpty()
+        return if (type.isNotEmpty()) "The server rejected this filter ($type)." else "The server rejected this filter."
+    }
+
+    /** The blob id of a script upload. Save and validate both send the text this way. */
+    private fun uploadSieve(text: String): String {
         if (uploadUrl.isBlank()) throw JmapError("This server did not say where to upload files.")
         val upload = http.send(
             HttpRequest.newBuilder(URI.create(uploadUrl.replace("{accountId}", pct(accountId))))
@@ -1317,7 +1338,18 @@ internal class Jmap private constructor(
         if (upload.statusCode() !in 200..299) {
             throw JmapError("The server would not take the filter script (HTTP ${upload.statusCode()}).")
         }
-        val blobId = json.parseToJsonElement(upload.body()).jsonObject["blobId"].require("blobId")
+        return json.parseToJsonElement(upload.body()).jsonObject["blobId"].require("blobId")
+    }
+
+    /**
+     * Writes a script and makes it the active one.
+     *
+     * The text goes up as a blob first, because that is how JMAP moves anything with a body,
+     * and the script then points at it. Activating in the same call rather than a second one
+     * means a refused script never becomes the active script.
+     */
+    override fun saveSieve(name: String, text: String, existing: SieveInfo?) {
+        val blobId = uploadSieve(text)
 
         val response = call(
             invoke("SieveScript/set", "w") {
