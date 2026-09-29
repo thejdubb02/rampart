@@ -18,7 +18,18 @@ internal data class OpenedMail(
     val attachments: List<Attachment> = emptyList(),
     val emailBlobId: String? = null,
     val calendar: String? = null,
+    /**
+     * The account's mail state as of this answer, where the same request could carry it.
+     *
+     * JMAP puts it on every Email/get response, so a JMAP open gets it for nothing and the
+     * copy kept on disk is stamped without asking again. Null elsewhere, and the caller
+     * then asks [MailBackend.mailState] itself.
+     */
+    val state: String? = null,
 )
+
+/** What an account needs before anything is drawn. See [MailBackend.startup]. */
+internal data class Startup(val mailboxes: List<Mailbox>, val identities: List<Identity>?)
 
 /** The two fields that identify a message's bytes. See [MailBackend.contentStamp]. */
 internal data class ContentStamp(val blobId: String, val size: Long)
@@ -107,6 +118,31 @@ internal interface MailBackend {
      * the body again. Null where the server cannot say.
      */
     fun contentStamp(id: String): ContentStamp? = null
+
+    /*
+     * Pairs of questions that are always asked together.
+     *
+     * Each default asks them one after the other, which is all IMAP can do. JMAP answers
+     * each pair in one request, and overrides them to say so. Named for what the caller
+     * wants rather than for how it is fetched, so a call site cannot tell the difference.
+     */
+
+    /**
+     * The folders and the sending identities, which every account needs before anything is
+     * drawn. Identities are null when they could not be read, which only costs sending.
+     */
+    fun startup(): Startup = Startup(mailboxes(), runCatching { identities() }.getOrNull())
+
+    /** A page of one folder and every folder's counts, for the poll after mail arrives. */
+    fun pageAndFolders(mailboxId: String, limit: Int): Pair<List<Summary>, List<Mailbox>> =
+        emails(mailboxId, limit = limit) to mailboxes()
+
+    /** The account's state and one message's stamp, for deciding whether a kept copy is still good. */
+    fun stateAndStamp(id: String): Pair<String?, ContentStamp?> = mailState() to contentStamp(id)
+
+    /** The address books and every card in them. */
+    fun booksAndContacts(): Pair<List<ContactBook>, List<Pair<Contact, JsonObject>>> =
+        runCatching { addressBooks() }.getOrDefault(emptyList()) to contacts()
 
     fun blob(attachment: Attachment, limit: Long = 8L * 1024 * 1024): ByteArray?
 

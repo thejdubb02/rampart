@@ -333,6 +333,24 @@ internal class Jmap private constructor(
 ) : MailBackend {
     override val maxSizeUpload: Long get() = maxUpload
     companion object {
+        /**
+         * A client for an API address already known, skipping discovery and the https rule.
+         *
+         * Only for the tests and benchmarks that run against a fake server on this machine
+         * (see `FakeJmapServer` in the tests). Nothing in the app calls it: a real account
+         * always goes through [connect], which refuses plain http.
+         */
+        internal fun forLocalServer(apiUrl: String, downloadUrl: String, accountId: String = "a"): Jmap = Jmap(
+            credential = "Basic " + Base64.getEncoder().encodeToString("test:test".toByteArray()),
+            apiUrl = apiUrl,
+            accountId = accountId,
+            downloadUrl = downloadUrl,
+            uploadUrl = "",
+            capabilities = setOf(CORE, MAIL, SUBMISSION, CONTACTS),
+            pushUrl = "",
+            maxUpload = 0,
+        )
+
         fun connect(server: String, user: String, password: String): Jmap = try {
             session(server, user, password)
         } catch (e: JmapError) {
@@ -426,8 +444,12 @@ internal class Jmap private constructor(
         )
     }
 
-    override fun mailboxes(): List<Mailbox> {
-        val list = call(invoke("Mailbox/get", "m") { put("ids", JsonNull) })[0].list()
+    override fun mailboxes(): List<Mailbox> = mailboxesIn(call(mailboxCall())[0])
+
+    private fun mailboxCall() = invoke("Mailbox/get", "m") { put("ids", JsonNull) }
+
+    private fun mailboxesIn(response: JsonArray): List<Mailbox> {
+        val list = response.list()
         return list.map {
             val o = it.jsonObject
             Mailbox(
@@ -482,7 +504,23 @@ internal class Jmap private constructor(
         // An empty book or a tag list with nothing but protocol keywords must not fall
         // through into an unfiltered query.
         val filter = emailQueryFilter(mailboxId, filters, knownSenders, userKeywords) ?: return emptyList()
-        val responses = call(
+        return pageIn(call(*pageCalls(filter, limit, from)))
+    }
+
+    /**
+     * The folder counts and a page, in one request, for the poll that has just seen the
+     * account change. Asked one after the other these were two round trips on every
+     * arrival, for two answers the server had ready at the same moment.
+     */
+    override fun pageAndFolders(mailboxId: String, limit: Int): Pair<List<Summary>, List<Mailbox>> {
+        val filter = emailQueryFilter(mailboxId, QuickFilters(), emptyList(), emptyList())
+            ?: return emptyList<Summary>() to mailboxes()
+        val responses = call(*pageCalls(filter, limit, 0), mailboxCall())
+        return pageIn(responses) to mailboxesIn(responses[3])
+    }
+
+    /** The three calls a page is, query, get and thread counts, chained by back reference. */
+    private fun pageCalls(filter: JsonObject, limit: Int, from: Int): Array<JsonArray> = arrayOf(
             invoke("Email/query", "q") {
                 // Filtered on the server, not here. Hiding rows out of the page we happen
                 // to hold would mean "among the last hundred", which is a different and
@@ -508,6 +546,8 @@ internal class Jmap private constructor(
                 }
             },
         )
+
+    private fun pageIn(responses: List<JsonArray>): List<Summary> {
         val sizes = responses[2].list().associate {
             it.jsonObject["id"].require("id") to ((it.jsonObject["emailIds"] as? JsonArray)?.size ?: 1)
         }
@@ -525,16 +565,19 @@ internal class Jmap private constructor(
      */
     override fun thread(threadId: String): List<Summary> {
         if (threadId.isBlank()) return emptyList()
-        val ids = call(invoke("Thread/get", "t") { putJsonArray("ids") { add(threadId) } })[0]
-            .list().firstOrNull()?.jsonObject?.get("emailIds")?.let { it as? JsonArray }?.mapNotNull { it.str() }
-            .orEmpty()
-        if (ids.size <= 1) return emptyList()
-        val found = call(
+        // One request: the thread's ids go straight into the Email/get by back reference.
+        // Asked separately they were two round trips in a row on every message opened.
+        val responses = call(
+            invoke("Thread/get", "t") { putJsonArray("ids") { add(threadId) } },
             invoke("Email/get", "g") {
-                putJsonArray("ids") { ids.forEach { add(it) } }
+                putJsonObject("#ids") { put("resultOf", "t"); put("name", "Thread/get"); put("path", "/list/*/emailIds") }
                 putJsonArray("properties") { emailGetProperties.forEach { add(it) } }
             },
-        )[0].list().associate { it.jsonObject["id"].require("id") to jsonToSummary(it.jsonObject) }
+        )
+        val ids = responses[0].list().firstOrNull()?.jsonObject?.get("emailIds")?.let { it as? JsonArray }
+            ?.mapNotNull { it.str() }.orEmpty()
+        if (ids.size <= 1) return emptyList()
+        val found = responses[1].list().associate { it.jsonObject["id"].require("id") to jsonToSummary(it.jsonObject) }
         // Email/get may answer in any order; the thread's own order is the one that matters.
         return ids.mapNotNull { found[it] }
     }
@@ -543,13 +586,26 @@ internal class Jmap private constructor(
 
     override fun attachments(emailId: String): List<Attachment> = open(emailId).attachments
 
-    override fun contentStamp(id: String): ContentStamp? {
-        val email = call(
+    override fun contentStamp(id: String): ContentStamp? = stateAndStamp(id).second
+
+    /**
+     * Both from one Email/get, because every Email/get answer carries the account's state.
+     * The kept-copy check asked for them separately, which was two round trips whenever the
+     * account had moved.
+     */
+    override fun stateAndStamp(id: String): Pair<String?, ContentStamp?> {
+        val response = call(
             invoke("Email/get", "stamp") {
                 putJsonArray("ids") { add(id) }
                 putJsonArray("properties") { add("blobId"); add("size") }
             },
-        )[0].list().firstOrNull()?.jsonObject ?: return null
+        )[0]
+        val state = response[1].jsonObject["state"]?.str()
+        return state to stampIn(response.list().firstOrNull()?.jsonObject)
+    }
+
+    private fun stampIn(email: JsonObject?): ContentStamp? {
+        email ?: return null
         val blobId = email["blobId"]?.str()?.ifBlank { null } ?: return null
         val size = email["size"]?.jsonPrimitive?.longOrNull ?: return null
         return ContentStamp(blobId, size)
@@ -564,13 +620,15 @@ internal class Jmap private constructor(
      * shown with the end missing.
      */
     override fun open(id: String): OpenedMail {
-        val first = emailRecord(id, 1024 * 1024)
+        val (first, state) = emailRecord(id, 1024 * 1024)
         val parsed = openedFrom(first)
-        if (!parsed.cutLeft) return parsed.mail
-        return openedFrom(emailRecord(id, 32 * 1024 * 1024)).mail
+        // The state rides on the same answer, so the kept copy is stamped without asking.
+        if (!parsed.cutLeft) return parsed.mail.copy(state = state)
+        val (again, laterState) = emailRecord(id, 32 * 1024 * 1024)
+        return openedFrom(again).mail.copy(state = laterState)
     }
 
-    private fun emailRecord(id: String, maxBytes: Int): JsonObject = call(
+    private fun emailRecord(id: String, maxBytes: Int): Pair<JsonObject, String?> = call(
         invoke("Email/get", "b") {
             putJsonArray("ids") { add(id) }
             putJsonArray("properties") {
@@ -600,8 +658,11 @@ internal class Jmap private constructor(
             put("fetchTextBodyValues", true)
             put("maxBodyValueBytes", maxBytes)
         },
-    )[0].list().firstOrNull()?.jsonObject
-        ?: throw JmapError("That message is not on the server any more.")
+    )[0].let { response ->
+        val email = response.list().firstOrNull()?.jsonObject
+            ?: throw JmapError("That message is not on the server any more.")
+        email to response[1].jsonObject["state"]?.str()
+    }
 
     private fun openedFrom(email: JsonObject): ParsedOpen {
         val values = email["bodyValues"]?.jsonObject ?: JsonObject(emptyMap())
@@ -838,8 +899,25 @@ internal class Jmap private constructor(
         return dest
     }
 
-    override fun identities(): List<Identity> =
-        call(invoke("Identity/get", "i") { put("ids", JsonNull) })[0].list().map {
+    override fun identities(): List<Identity> = identitiesIn(call(identityCall())[0])
+
+    private fun identityCall() = invoke("Identity/get", "i") { put("ids", JsonNull) }
+
+    /**
+     * The folders and the identities in one request. An account used to cost two round
+     * trips before its folder list could be drawn, and every account waited for the one
+     * before it.
+     */
+    override fun startup(): Startup {
+        val responses = runCatching { call(mailboxCall(), identityCall()) }.getOrNull()
+            // A server that refuses Identity/get refuses the whole request, and the
+            // folders matter more than sending, so they are asked for again alone.
+            ?: return Startup(mailboxes(), null)
+        return Startup(mailboxesIn(responses[0]), runCatching { identitiesIn(responses[1]) }.getOrNull())
+    }
+
+    private fun identitiesIn(response: JsonArray): List<Identity> =
+        response.list().map {
             val o = it.jsonObject
             Identity(
                 id = o["id"].require("id"),
@@ -1068,10 +1146,22 @@ internal class Jmap private constructor(
         }.getOrDefault(emptyList())
     }
 
-    override fun addressBooks(): List<ContactBook> = call(
-        invoke("AddressBook/get", "a") { put("ids", JsonNull) },
-        also = CONTACTS,
-    )[0].list().map {
+    override fun addressBooks(): List<ContactBook> = booksIn(call(bookCall(), also = CONTACTS)[0])
+
+    private fun bookCall() = invoke("AddressBook/get", "a") { put("ids", JsonNull) }
+
+    private fun cardCall() = invoke("ContactCard/get", "c") { put("ids", JsonNull) }
+
+    /**
+     * The books and the cards in one request. The contacts page asked for them one after
+     * the other, which was two round trips before the list could be drawn.
+     */
+    override fun booksAndContacts(): Pair<List<ContactBook>, List<Pair<Contact, JsonObject>>> {
+        val responses = call(bookCall(), cardCall(), also = CONTACTS)
+        return runCatching { booksIn(responses[0]) }.getOrDefault(emptyList()) to cardsIn(responses[1])
+    }
+
+    private fun booksIn(response: JsonArray): List<ContactBook> = response.list().map {
         val o = it.jsonObject
         ContactBook(
             id = o["id"].require("id"),
@@ -1092,10 +1182,10 @@ internal class Jmap private constructor(
      * The raw object is kept so a save can be built on top of it and not destroy the
      * properties this build does not draw.
      */
-    override fun contacts(): List<Pair<Contact, JsonObject>> = call(
-        invoke("ContactCard/get", "c") { put("ids", JsonNull) },
-        also = CONTACTS,
-    )[0].list().map { contactOf(it.jsonObject) to it.jsonObject }
+    override fun contacts(): List<Pair<Contact, JsonObject>> = cardsIn(call(cardCall(), also = CONTACTS)[0])
+
+    private fun cardsIn(response: JsonArray): List<Pair<Contact, JsonObject>> =
+        response.list().map { contactOf(it.jsonObject) to it.jsonObject }
 
     /** Creates or updates one card, and returns its id. */
     override fun saveContact(contact: Contact, original: JsonObject?): String {

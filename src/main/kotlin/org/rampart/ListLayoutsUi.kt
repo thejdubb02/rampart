@@ -151,7 +151,8 @@ internal fun LayoutList(
         rowToken(message) == selected?.let(::rowToken) || rowToken(message) in picked
     when (layout) {
         ListLayout.TABLE -> MessageTable(emails, ::isSelected, rowActions, loadingMore, scroll, onSelect)
-        else -> MessageCards(sorted(emails, order), ::isSelected, rowActions, loadingMore, scroll, onSelect)
+        // Remembered, as the table already is, so a redraw does not sort every row again.
+        else -> MessageCards(remember(emails, order) { sorted(emails, order) }, ::isSelected, rowActions, loadingMore, scroll, onSelect)
     }
 }
 

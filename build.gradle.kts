@@ -119,6 +119,8 @@ dependencies {
 tasks.test {
     useJUnitPlatform()
     System.getProperty("rampart.bench")?.let { systemProperty("rampart.bench", it) }
+    // The measurements print their numbers, and a run asked for them should show them.
+    if (System.getProperty("rampart.bench") == "true") testLogging.showStandardStreams = true
 }
 
 /*

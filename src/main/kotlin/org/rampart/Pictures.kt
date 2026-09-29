@@ -1,5 +1,6 @@
 package org.rampart
 
+import kotlinx.coroutines.async
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import org.jetbrains.skia.EncodedImageFormat
@@ -164,7 +165,41 @@ internal const val CID_FETCH_CAP = 5L * 1024 * 1024
 internal fun cidBytes(backend: MailBackend, body: Body, attachments: List<Attachment>): Map<String, ByteArray> {
     val parts = cidImages(body.html, attachments)
     if (parts.isEmpty() || parts.sumOf { it.size } > CID_FETCH_CAP) return emptyMap()
-    return fetchCidBytes(parts) { part, remaining -> backend.blob(part, remaining) }
+    return fetchCidBytesTogether(parts) { part, remaining -> backend.blob(part, remaining) }
+}
+
+/**
+ * The same pictures, fetched side by side when that is safe.
+ *
+ * A newsletter cites three to ten pictures, and fetched one after another each one was a
+ * round trip added to the time before the message appeared. When every part says how big
+ * it is, the declared sizes already fit under [CID_FETCH_CAP] (checked by the caller), so
+ * each download can be given the cap less what the others declared and all of them can go
+ * at once: the total still cannot pass the cap. A part that does not say how big it is
+ * falls back to [fetchCidBytes], which spends the allowance as it goes.
+ */
+internal fun fetchCidBytesTogether(
+    parts: List<Attachment>,
+    fetch: (Attachment, Long) -> ByteArray?,
+): Map<String, ByteArray> {
+    if (parts.size < 2 || parts.any { it.size <= 0 }) return fetchCidBytes(parts, fetch)
+    val declared = parts.sumOf { it.size }
+    val fetched = kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+        parts.map { part ->
+            async { part to runCatching { fetch(part, CID_FETCH_CAP - (declared - part.size)) }.getOrNull() }
+        }.map { it.await() }
+    }
+    // The same rule as one at a time, applied in the message's own order, so a part that
+    // turned out larger than it declared is dropped rather than pushing the total over.
+    var remaining = CID_FETCH_CAP
+    return buildMap {
+        for ((part, bytes) in fetched) {
+            bytes ?: continue
+            if (bytes.size.toLong() > remaining) continue
+            put(part.blobId, bytes)
+            remaining -= bytes.size
+        }
+    }
 }
 
 internal fun fetchCidBytes(
@@ -212,9 +247,15 @@ internal fun prepareReading(
         val (type, bytes) = drawable(part.type, raw)
         cid to dataUri(type, bytes)
     }.toMap()
-    val images = pictures.mapNotNull { (id, raw) ->
-        runCatching { Image.makeFromEncoded(raw).toComposeImageBitmap() }.getOrNull()?.let { id to it }
-    }.toMap()
+    /*
+     * No decoded pictures here any more. Every cited picture was decoded to a bitmap on the
+     * way to opening the message, but the engine draws from the bytes in the document and
+     * never looks at a bitmap. Only the plain renderer and the click-to-preview do, and both
+     * now decode the bytes themselves when they are actually shown. That was the largest
+     * piece of local work between the fetch and the page for a message with pictures, and
+     * each bitmap held four bytes a pixel for as long as the card stayed open.
+     */
+    val images = emptyMap<String, ImageBitmap>()
     return Reading(
         page = body.html?.let { emailDocument(it, carried, showRemote, dark) },
         cited = carried.keys,

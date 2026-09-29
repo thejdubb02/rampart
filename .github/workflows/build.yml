@@ -17,6 +17,10 @@ on:
         description: Package and publish a release, not just run the tests
         type: boolean
         default: true
+      bench:
+        description: Also run the performance measurements and print their numbers (docs/performance.md)
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -35,6 +39,16 @@ jobs:
           java-version: '21'
 
       - run: ./gradlew test jar
+
+      # The measurements behind docs/performance.md, on a machine that can build the whole
+      # app. Off by default: a timing on a shared runner is a number to read, not one to
+      # fail a build over, and the fifty thousand message ones take a minute or two.
+      - if: inputs.bench
+        run: >
+          ./gradlew test -Drampart.bench=true --rerun-tasks
+          --tests org.rampart.RoundTripTest --tests org.rampart.OpenTimingTest
+          --tests org.rampart.ListPagingTest --tests org.rampart.ListWindowTest --tests org.rampart.SoakTest
+          --tests org.rampart.StoreBenchmarkTest
 
       # This box has no screen either. The screenshots are how a change gets looked at.
       - uses: actions/upload-artifact@v4
