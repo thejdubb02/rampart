@@ -1,9 +1,11 @@
 package org.rampart
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.layout.Box
@@ -47,9 +49,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draganddrop.DragAndDropEvent
+import androidx.compose.ui.draganddrop.DragAndDropTarget
+import androidx.compose.ui.draganddrop.DragData
+import androidx.compose.ui.draganddrop.dragData
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import org.jsoup.nodes.Node
@@ -57,7 +65,9 @@ import org.jsoup.nodes.TextNode
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.KeyEvent
@@ -73,6 +83,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -80,11 +91,13 @@ import kotlinx.coroutines.Dispatchers
 import androidx.compose.foundation.shape.RoundedCornerShape
 import java.awt.FileDialog
 import java.awt.Frame
+import java.awt.Toolkit
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlinx.coroutines.CancellationException
 import java.awt.Desktop
 import java.net.URI
+import java.time.LocalDateTime
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -423,6 +436,7 @@ internal fun ComposerFrame(full: Boolean = false, content: @Composable () -> Uni
  * closing are the caller's, so the same pane serves a new message, a reply and a reopened
  * draft without knowing which it is.
  */
+@OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
 internal fun Composer(
     identities: List<Identity>,
@@ -528,6 +542,8 @@ internal fun Composer(
     var saveState by remember(initial) { mutableStateOf("") }
     var saveDetail by remember(initial) { mutableStateOf<String?>(null) }
     var attaching by remember(initial) { mutableStateOf(false) }
+    /** True while a file drag is over this composer, which is when the drop overlay is up. */
+    var dropHover by remember { mutableStateOf(false) }
     /** Thumbnails of pictures picked from disk, by blob id. Not recomputed while typing. */
     var previews by remember { mutableStateOf<Map<String, ImageBitmap>>(emptyMap()) }
     var attachError by remember(initial) { mutableStateOf<String?>(null) }
@@ -654,6 +670,131 @@ internal fun Composer(
         return true
     }
 
+    /**
+     * Uploads [paths] the same way the Attach button does.
+     *
+     * A drop and a file copied in Explorer both land here, so the size limit
+     * and the error are the ones that button already shows.
+     */
+    fun attachChosen(paths: List<Path>) {
+        val upload = onAttach ?: return
+        if (paths.isEmpty() || sending || attaching) return
+        scope.launch {
+            attaching = true
+            attachError = null
+            attachDetail = null
+            try {
+                val added = upload(paths)
+                previews = previews + withContext(Dispatchers.IO) {
+                    pickedPreviews(paths, added)
+                }
+                draft = draft.copy(attachments = draft.attachments + added)
+            } catch (e: Exception) {
+                attachError = "That file could not be attached."
+                attachDetail = faultDetail(e, "That file could not be attached.")
+            } finally {
+                attaching = false
+            }
+        }
+    }
+
+    /**
+     * Uploads one picture and puts it in the body.
+     *
+     * The body is a text field, and an inline picture lives in it as the same
+     * `![name](cid:...)` marker the Picture button inserts. Send turns that
+     * marker, plus the inline flag, into a cid part. A pasted screenshot uses
+     * this, so it is part of the message rather than a file beside it.
+     */
+    suspend fun uploadPicture(path: Path) {
+        val upload = onAttach ?: return
+        val put = upload(listOf(path)).firstOrNull() ?: return
+        previews = previews + withContext(Dispatchers.IO) {
+            pickedPreviews(listOf(path), listOf(put))
+        }
+        val inline = put.copy(cid = cidFor(put.blobId), inline = true)
+        draft = draft.copy(attachments = draft.attachments + inline)
+        apply(insertAt(body, "![${put.name}](cid:${inline.cid})"))
+    }
+
+    fun attachPicture(path: Path) {
+        if (onAttach == null || attaching) return
+        scope.launch {
+            attaching = true
+            attachError = null
+            attachDetail = null
+            try {
+                uploadPicture(path)
+            } catch (e: Exception) {
+                val title = "That picture could not be added."
+                attachError = title
+                attachDetail = faultDetail(e, title)
+            } finally {
+                attaching = false
+            }
+        }
+    }
+
+    /** A screenshot has no path yet. It is written to one, then uploaded like Picture. */
+    fun pasteScreenshot(png: ByteArray) {
+        if (onAttach == null || sending || attaching) return
+        scope.launch {
+            attaching = true
+            attachError = null
+            attachDetail = null
+            var path: Path? = null
+            try {
+                path = withContext(Dispatchers.IO) { writePastedImage(png, LocalDateTime.now()) }
+                uploadPicture(path)
+            } catch (e: Exception) {
+                val title = "That picture could not be added."
+                attachError = title
+                attachDetail = faultDetail(e, title)
+            } finally {
+                attaching = false
+                val written = path
+                // NonCancellable so closing the composer mid-upload still removes the
+                // temp file. A cancelled coroutine would otherwise skip the delete.
+                if (written != null) {
+                    withContext(NonCancellable + Dispatchers.IO) { deletePastedImage(written) }
+                }
+            }
+        }
+    }
+
+    /**
+     * Ctrl+V, and Command+V on macOS, where that is paste.
+     * Text returns false so the field pastes it exactly as it does today.
+     */
+    fun pasteShortcut(event: KeyEvent): Boolean =
+        event.key == Key.V &&
+            (event.isCtrlPressed || event.isMetaPressed) &&
+            !event.isAltPressed &&
+            !event.isShiftPressed
+
+    fun pasteFromClipboard(): Boolean {
+        if (onAttach == null) return false
+        val contents = runCatching { Toolkit.getDefaultToolkit().systemClipboard.getContents(null) }.getOrNull()
+            ?: return false
+        // Text is decided here, on the key press, so the field keeps pasting it. Everything
+        // else is worked out off the UI thread: encoding a large screenshot as PNG can take
+        // long enough to freeze the window.
+        val text = runCatching { filesOf(contents).isEmpty() && hasPlainText(contents) }.getOrDefault(false)
+        if (text) return false
+        scope.launch {
+            when (val offer = withContext(Dispatchers.IO) { pasteOffer(contents) }) {
+                is PasteOffer.Files -> attachChosen(offer.paths)
+                is PasteOffer.Image -> pasteScreenshot(offer.png)
+                PasteOffer.Directories -> if (!sending && !attaching) {
+                    attachError = FOLDERS_NOT_ATTACHABLE
+                    attachDetail = null
+                }
+                PasteOffer.Pass -> Unit
+            }
+        }
+        return true
+    }
+
     fun typed(event: KeyEvent): Boolean {
         if (event.type != KeyEventType.KeyDown) return false
         return when {
@@ -676,16 +817,60 @@ internal fun Composer(
                 history.redo(body)?.let(::restore)
                 true
             }
+            pasteShortcut(event) -> pasteFromClipboard()
             else -> false
         }
     }
 
+    // The target is remembered so the hover recomposition does not replace it
+    // mid-drag. The lambdas read the latest attach, or a drop would add the
+    // file to the draft from when the composer opened. A drop is refused while
+    // a send or an upload is already running, the same as the Attach button:
+    // accepting it and then doing nothing would throw the files away.
+    val canTakeFiles = rememberUpdatedState(onAttach != null && !sending && !attaching)
+    val onDropped = rememberUpdatedState<(List<Path>) -> Unit> { attachChosen(it) }
+    val onFoldersOnly = rememberUpdatedState<() -> Unit> {
+        attachError = FOLDERS_NOT_ATTACHABLE
+        attachDetail = null
+    }
+    val drop = remember {
+        object : DragAndDropTarget {
+            override fun onEntered(event: DragAndDropEvent) { dropHover = true }
+            override fun onExited(event: DragAndDropEvent) { dropHover = false }
+            override fun onEnded(event: DragAndDropEvent) { dropHover = false }
+            override fun onDrop(event: DragAndDropEvent): Boolean {
+                dropHover = false
+                if (!canTakeFiles.value) return false
+                val uris = runCatching {
+                    (event.dragData() as? DragData.FilesList)?.readFiles()
+                }.getOrNull().orEmpty()
+                if (uris.isEmpty()) return false
+                val dropped = droppedFiles(uris)
+                if (dropped.paths.isEmpty()) {
+                    if (dropped.foldersOnly) onFoldersOnly.value()
+                    return dropped.foldersOnly
+                }
+                onDropped.value(dropped.paths)
+                return true
+            }
+        }
+    }
+
     Surface(
-        Modifier.fillMaxSize().onPreviewKeyEvent(::typed),
+        Modifier.fillMaxSize()
+            .onPreviewKeyEvent(::typed)
+            .dragAndDropTarget(
+                shouldStartDragAndDrop = { event ->
+                    canTakeFiles.value &&
+                        runCatching { event.dragData() is DragData.FilesList }.getOrDefault(false)
+                },
+                target = drop,
+            ),
         // The lightest surface the theme has, matching the panel this sits inside. Left as
         // `surface` it painted over that panel with the colour of the mail behind it.
         color = MaterialTheme.colorScheme.surfaceBright,
     ) {
+        Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             /*
              * A reply from the wrong address is easy to send and hard to undo. The
@@ -820,28 +1005,7 @@ internal fun Composer(
             ) {
                 if (onAttach != null) {
                     TextButton(
-                        onClick = {
-                            val chosen = pickFiles()
-                            if (chosen.isNotEmpty()) {
-                                scope.launch {
-                                    attaching = true
-                                    attachError = null
-                                    attachDetail = null
-                                    try {
-                                        val added = onAttach(chosen)
-                                        previews = previews + withContext(Dispatchers.IO) {
-                                            pickedPreviews(chosen, added)
-                                        }
-                                        draft = draft.copy(attachments = draft.attachments + added)
-                                    } catch (e: Exception) {
-                                        attachError = "That file could not be attached."
-                                        attachDetail = faultDetail(e, "That file could not be attached.")
-                                    } finally {
-                                        attaching = false
-                                    }
-                                }
-                            }
-                        },
+                        onClick = { attachChosen(pickFiles()) },
                         enabled = !sending && !attaching,
                     ) { Text(if (attaching) "Attaching" else "Attach", maxLines = 1) }
                 }
@@ -1227,33 +1391,7 @@ internal fun Composer(
                     }
                     if (onAttach != null) {
                         TextButton(
-                            onClick = {
-                                val chosen = pickFiles().firstOrNull()
-                                if (chosen != null) {
-                                    scope.launch {
-                                        attaching = true
-                                        attachError = null
-                                        attachDetail = null
-                                        try {
-                                            val put = onAttach(listOf(chosen)).firstOrNull()
-                                            if (put != null) {
-                                                previews = previews + withContext(Dispatchers.IO) {
-                                                    pickedPreviews(listOf(chosen), listOf(put))
-                                                }
-                                                val inline = put.copy(cid = cidFor(put.blobId), inline = true)
-                                                draft = draft.copy(attachments = draft.attachments + inline)
-                                                apply(insertAt(body, "![${put.name}](cid:${inline.cid})"))
-                                            }
-                                        } catch (e: Exception) {
-                                            val title = "That picture could not be added."
-                                            attachError = title
-                                            attachDetail = faultDetail(e, title)
-                                        } finally {
-                                            attaching = false
-                                        }
-                                    }
-                                }
-                            },
+                            onClick = { pickFiles().firstOrNull()?.let(::attachPicture) },
                             enabled = !attaching,
                         ) { Text("Picture") }
                     }
@@ -1295,6 +1433,8 @@ internal fun Composer(
                     )
                 }
             }
+        }
+            if (dropHover) DropToAttach()
         }
     }
 
@@ -1346,6 +1486,29 @@ internal fun Composer(
     }
 
     LaunchedEffect(Unit) { firstField.requestFocus() }
+}
+
+/**
+ * Shown over the whole composer while files are being dragged across it.
+ * The words are the whole point: a border alone does not say what dropping will do.
+ */
+@Composable
+private fun DropToAttach() {
+    Box(
+        Modifier.fillMaxSize()
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+            .border(2.dp, MaterialTheme.colorScheme.primary),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            "Drop to attach",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onPrimary,
+            modifier = Modifier
+                .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp))
+                .padding(horizontal = 22.dp, vertical = 12.dp),
+        )
+    }
 }
 
 /**
