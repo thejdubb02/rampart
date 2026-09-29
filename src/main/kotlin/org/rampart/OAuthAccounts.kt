@@ -64,9 +64,6 @@ internal object OAuthAccounts {
             )
         }!!
 
-    /** True when this account has a live keeper, meaning a mailbox open on it this session. */
-    fun isOpen(account: SavedAccount): Boolean = keepers.containsKey(key(account))
-
     /**
      * Opens the mailbox with the keeper's token as the IMAP and SMTP password.
      *
