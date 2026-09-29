@@ -186,8 +186,10 @@ would be a lie told with a straight face.
 
 ### 2.11 Accounts beyond your own
 
-**Need, low for now.** Shared folders, group and delegated accounts. Relevant the day
-somebody other than Justin uses this.
+**Built on 2026-09-29, not yet checked against a live server (RAM-45).** Group mailboxes and
+folders shared with you appear under the owner's name and do only what their rights allow;
+your own folders can be shared at three levels; All unread, All starred and All mail work
+across accounts. `roadmap.md` 2.12 has what is in and what is left out.
 
 ### 2.12 Calendar, and files
 

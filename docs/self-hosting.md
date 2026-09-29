@@ -105,6 +105,14 @@ server what it can do and hides what it cannot.
   added to Stalwart as a milter) show in Show details. Without them, the phishing checks
   run on this machine as before and there is simply no virus line.
 
+- **Shared mailboxes and sharing a folder.** A group's mailbox, or a folder a colleague
+  shared with you, appears in the sidebar under the owner's name when your server lists it
+  in your JMAP session, and is read and filed as you. Sharing one of your own folders needs
+  the server to offer `urn:ietf:params:jmap:mail:share` and, on Stalwart, to let accounts
+  look each other up (its `allowDirectoryQueries` setting); on an IMAP account it needs the
+  server's ACL extension. Each missing piece is one sentence in the share dialog. Never done
+  with an admin token. `stalwart-inventory.md`, "Sharing in Stalwart 0.16", has the detail.
+
 A capability your server lacks degrades with a reason on screen. It is never an error and
 never a silent nothing.
 
