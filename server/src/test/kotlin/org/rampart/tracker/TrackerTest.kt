@@ -57,6 +57,11 @@ class TrackerTest {
         val first = Fetch("id", 1_000, "Mozilla/5.0 Chrome/120", "", OpenClassification.PERSON)
         val cases = listOf(
             Triple("Apple-Mail/3696.100.31", emptyList(), OpenClassification.APPLE_PRIVACY),
+            Triple(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)",
+                emptyList(),
+                OpenClassification.APPLE_PRIVACY,
+            ),
             Triple("Mozilla/5.0 GoogleImageProxy", emptyList(), OpenClassification.GMAIL_PROXY),
             Triple("Proofpoint URL Defense", emptyList(), OpenClassification.SECURITY_SCANNER),
             Triple("python-requests/2.31", emptyList(), OpenClassification.SECURITY_SCANNER),

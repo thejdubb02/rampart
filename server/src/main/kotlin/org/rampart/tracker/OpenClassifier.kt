@@ -28,6 +28,7 @@ fun classifyOpen(signals: OpenSignals): OpenClassification {
     return when {
         "googleimageproxy" in ua || "google image proxy" in ua -> OpenClassification.GMAIL_PROXY
         "applewebkit" in ua && ("apple mail" in ua || "mailprivacy" in ua) -> OpenClassification.APPLE_PRIVACY
+        "applewebkit/605.1.15" in ua && "version/" !in ua && "safari/" !in ua -> OpenClassification.APPLE_PRIVACY
         "apple-mail" in ua || "icloud mail" in ua -> OpenClassification.APPLE_PRIVACY
         securityNames.any { it in ua } || cloudScannerNames.any { it in ua } -> OpenClassification.SECURITY_SCANNER
         first != null && signals.at - first.at in 0..15_000 && !looksLikeBrowser(ua) ->
