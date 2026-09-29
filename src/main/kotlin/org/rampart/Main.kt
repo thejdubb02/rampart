@@ -2086,8 +2086,13 @@ private fun Reader(
         if (plain && page != null) {
             io {
                 val store = session(key).store ?: return@io
-                if (page.isEmpty()) {
+                // A page shorter than a full one is the whole folder, so anything the copy
+                // holds beyond it is gone from the server. Pruning by date alone kept every
+                // draft an autosave had replaced, since each replacement is newer than the
+                // one it destroyed, and those flashed up on every refresh of Drafts.
+                if (page.size < 100) {
                     store.clear(mailbox.id)
+                    if (page.isNotEmpty()) store.put(mailbox.id, page)
                 } else {
                     store.pruneToPage(mailbox.id, page)
                     store.put(mailbox.id, page)
