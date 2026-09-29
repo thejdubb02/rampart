@@ -218,6 +218,29 @@ internal class ComputerPlace(private val choices: ComputerChoices) : SettingPlac
                 "Reading and archiving", "send confirm ask", Settings::confirmBeforeSend, Settings::setConfirmBeforeSend,
             ),
             onOff(
+                "checkSpelling", "Check spelling as I type",
+                "A red line under a misspelt word in the composer. Checked on this computer, and nothing is sent. Off, grammar is unmarked too.",
+                "Reading and archiving", "spell spelling typo dictionary underline",
+                Settings::checkSpelling, Settings::setCheckSpelling,
+            ),
+            onOff(
+                "checkGrammar", "Check grammar",
+                "A blue line under a sentence that does not read right, while spelling is on. Spelling is the red line.",
+                "Reading and archiving", "grammar punctuation casing",
+                Settings::checkGrammar, Settings::setCheckGrammar,
+            ),
+            Local(
+                entry(
+                    "personalDictionary", "Personal dictionary",
+                    "Words that should not be marked as misspelt, one per line. A phrase saved from the composer keeps its single space.",
+                    SettingKind.Words(8000, multiline = true),
+                    "Reading and archiving", "spell dictionary words ignore",
+                ),
+                { JsonPrimitive(Settings.personalDictionary().joinToString("\n")) },
+                { v -> Settings.setPersonalDictionary(v.text().lines()) },
+                problem = { v -> dictionaryProblem(v.text()) },
+            ),
+            onOff(
                 "defaultReplyAll", "Default to Reply all", "Whether a bare Reply addresses everyone on the message.",
                 "Reading and archiving", "reply all everyone", Settings::defaultReplyAll, Settings::setDefaultReplyAll,
             ),

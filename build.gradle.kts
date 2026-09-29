@@ -70,6 +70,12 @@ dependencies {
     // is a code that scans on some phones and not others.
     implementation("com.google.zxing:core:3.5.3")
 
+    // Spell and grammar in the composer. language-en is American English and pulls
+    // languagetool-core with it. A normal jar on the runtime classpath, so Conveyor
+    // packages it with the rest. No n-gram data and no LanguageTool server: the check
+    // runs in this process and nothing is sent.
+    implementation("org.languagetool:language-en:6.8")
+
     // OpenPGP and S/MIME: signing, encrypting, decrypting and checking signatures, and the
     // keys and certificates for them. Bouncy Castle, not hand rolled: a mistake in a cipher
     // mode, a key format or a signature check is invisible until somebody's mail is readable

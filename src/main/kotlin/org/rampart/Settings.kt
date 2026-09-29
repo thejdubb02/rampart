@@ -451,6 +451,47 @@ object Settings {
         write { put("confirmBeforeSend", JsonPrimitive(value)) }
 
     /**
+     * Whether the composer marks misspellings while typing.
+     *
+     * On unless somebody turns it off. LanguageTool has no home on the mail server, so
+     * the check runs on this computer and nothing is sent. Grammar is part of the same
+     * check, so turning this off leaves the draft unmarked.
+     */
+    fun checkSpelling(): Boolean = read()["checkSpelling"]?.jsonPrimitive?.booleanOrNull ?: true
+
+    fun setCheckSpelling(value: Boolean) = write { put("checkSpelling", JsonPrimitive(value)) }
+
+    /**
+     * Whether grammar, punctuation and confused words are marked as well as spelling.
+     *
+     * On by default. Spelling is the switch that turns the whole check off.
+     */
+    fun checkGrammar(): Boolean = read()["checkGrammar"]?.jsonPrimitive?.booleanOrNull ?: true
+
+    fun setCheckGrammar(value: Boolean) = write { put("checkGrammar", JsonPrimitive(value)) }
+
+    /**
+     * Words and phrases that are not mistakes for this person.
+     *
+     * Stored in one order, ignoring capitals, so two computers do not keep rewriting the
+     * list just because the words were added in a different order. A phrase is one entry,
+     * the way it was added, not the separate words inside it.
+     */
+    fun personalDictionary(): List<String> = canonicalDictionary(
+        (read()["personalDictionary"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty(),
+    )
+
+    fun setPersonalDictionary(words: List<String>) = write {
+        put("personalDictionary", JsonArray(canonicalDictionary(words).map(::JsonPrimitive)))
+    }
+
+    fun addToDictionary(word: String) = setPersonalDictionary(personalDictionary() + word)
+
+    fun removeFromDictionary(word: String) = setPersonalDictionary(
+        personalDictionary().filterNot { it.equals(word, ignoreCase = true) },
+    )
+
+    /**
      * Whether a bare Reply addresses everyone.
      *
      * Off by default, which is what Reply has always done: the sender only, with Reply

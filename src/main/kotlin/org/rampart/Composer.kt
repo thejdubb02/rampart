@@ -54,6 +54,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.draganddrop.DragAndDropEvent
 import androidx.compose.ui.draganddrop.DragAndDropTarget
 import androidx.compose.ui.draganddrop.DragData
@@ -79,6 +81,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.TextFieldValue
@@ -556,11 +560,44 @@ internal fun Composer(
     val writingHelp = remember(initial) { WritingHelpState() }
     val firstField = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
+    val bodyScroll = rememberScrollState()
+    var bodyLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    var bodyIssues by remember { mutableStateOf<List<Issue>>(emptyList()) }
+    var bodyMenu by remember { mutableStateOf<SpellAnchor?>(null) }
+    // Ignored for this draft only. The dictionary is the list that should still be there tomorrow.
+    var spellIgnored by remember { mutableStateOf(setOf<String>()) }
+    var spellDictionary by remember { mutableStateOf(Settings.personalDictionary()) }
 
     // A plain state read, not a callback fired from inside the writing help calls, so a
     // caller that changes onBusy between recompositions cannot end up with the old one
     // still holding the flag on.
     LaunchedEffect(writingHelp.busy) { onBusy(writingHelp.busy) }
+
+    // The dictionaries are slow to load, and the first check should not be the moment
+    // they load on the window's thread. Opening the composer is early enough, and a
+    // composer that has spelling switched off never pays for it.
+    LaunchedEffect(Unit) {
+        if (Settings.checkSpelling()) SpellCheck.warm()
+    }
+
+    // Keyed on the text alone. Adding a word or ignoring one filters the marks already
+    // on screen, and restarting this pause for that would wipe them for another moment.
+    LaunchedEffect(body.text) {
+        bodyIssues = emptyList()
+        bodyMenu = null
+        if (body.text.isBlank()) return@LaunchedEffect
+        delay(SPELL_PAUSE_MS)
+        if (!Settings.checkSpelling()) return@LaunchedEffect
+        val saved = Settings.personalDictionary()
+        spellDictionary = saved
+        val found = SpellCheck.check(
+            body.text,
+            grammar = Settings.checkGrammar(),
+            dictionary = saved,
+            ignored = spellIgnored,
+        )
+        bodyIssues = found.hiding(body.text, Settings.personalDictionary() + spellIgnored)
+    }
 
     /*
      * Saving as you type, with the pause built out of the effect rather than a timer: a
@@ -661,6 +698,27 @@ internal fun Composer(
         body = next
         draft = draft.withBody(next.text, initial)
         historyTick++
+    }
+
+    fun acceptSpelling(issue: Issue, replacement: String) {
+        val next = applySuggestion(body.text, issue.range, replacement)
+        if (next == body.text) return
+        val caret = (issue.range.first + replacement.length).coerceAtMost(next.length)
+        apply(TextFieldValue(next, TextRange(caret)))
+        bodyMenu = null
+    }
+
+    fun addSpellWord(word: String) {
+        Settings.addToDictionary(word)
+        spellDictionary = Settings.personalDictionary()
+        bodyIssues = bodyIssues.hiding(body.text, spellDictionary)
+        bodyMenu = null
+    }
+
+    fun ignoreSpellWord(word: String) {
+        spellIgnored = spellIgnored + word
+        bodyIssues = bodyIssues.hiding(body.text, spellIgnored)
+        bodyMenu = null
     }
 
     fun format(before: String, after: String): Boolean {
@@ -1164,7 +1222,15 @@ internal fun Composer(
             }
 
             Field(label = "Subject") {
-                Entry(draft.subject, sending) { draft = draft.copy(subject = it) }
+                Entry(
+                    draft.subject,
+                    sending,
+                    spell = true,
+                    dictionary = spellDictionary,
+                    ignored = spellIgnored,
+                    onAddToDictionary = ::addSpellWord,
+                    onIgnoreWord = ::ignoreSpellWord,
+                ) { draft = draft.copy(subject = it) }
             }
             HorizontalDivider()
 
@@ -1415,21 +1481,55 @@ internal fun Composer(
                 if (sending) {
                     Spinner(Modifier.align(Alignment.Center))
                 } else {
-                    BasicTextField(
-                        value = body,
-                        onValueChange = ::edited,
-                        // Proofreading marks only while the panel that can accept them is open.
-                        visualTransformation = proofreadStyling(
-                            if (showPromptBar) writingHelp.proofs else emptyList(),
-                            draft.textSignature,
-                            MaterialTheme.colorScheme.error,
+                    // The click lands on the viewport. The text is inset by the padding and
+                    // shifted by the scroll, and the layout result is in that inner space.
+                    val density = LocalDensity.current
+                    val padX = with(density) { 20.dp.toPx() }
+                    val padY = with(density) { 14.dp.toPx() }
+                    Box(
+                        Modifier.fillMaxSize().spellIssueClicks(
+                            issues = bodyIssues,
+                            text = body.text,
+                            layout = bodyLayout,
+                            markup = true,
+                            toContent = { click -> Offset(click.x - padX, click.y - padY + bodyScroll.value) },
+                            onIssue = { issue, at -> bodyMenu = SpellAnchor(issue, at) },
                         ),
-                        textStyle = LocalTextStyle.current.copy(color = MaterialTheme.colorScheme.onSurface),
-                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                        modifier = Modifier.fillMaxSize()
-                            .verticalScroll(rememberScrollState())
-                            .padding(horizontal = 20.dp, vertical = 14.dp),
-                    )
+                    ) {
+                        BasicTextField(
+                            value = body,
+                            onValueChange = ::edited,
+                            // Proofreading marks only while the panel that can accept them is open.
+                            visualTransformation = proofreadStyling(
+                                if (showPromptBar) writingHelp.proofs else emptyList(),
+                                draft.textSignature,
+                                MaterialTheme.colorScheme.error,
+                            ),
+                            onTextLayout = { bodyLayout = it },
+                            textStyle = LocalTextStyle.current.copy(color = MaterialTheme.colorScheme.onSurface),
+                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                            modifier = Modifier.fillMaxSize()
+                                .verticalScroll(bodyScroll)
+                                .padding(horizontal = 20.dp, vertical = 14.dp)
+                                .spellUnderlines(bodyLayout, bodyIssues, body.text, markup = true),
+                        )
+                        bodyMenu?.let { anchor ->
+                            val entry = surfaceOf(body.text, anchor.issue.range)
+                            SpellSuggestionMenu(
+                                issue = anchor.issue,
+                                anchor = anchor.at,
+                                canAdd = entry != null,
+                                onSuggestion = { acceptSpelling(anchor.issue, it) },
+                                onAdd = { if (entry != null) addSpellWord(entry) },
+                                onIgnore = {
+                                    if (entry != null) ignoreSpellWord(entry)
+                                    else bodyIssues = bodyIssues.filterNot { it == anchor.issue }
+                                    bodyMenu = null
+                                },
+                                onDismiss = { bodyMenu = null },
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -1585,29 +1685,86 @@ private fun Entry(
     focusRequester: FocusRequester? = null,
     /** Who to offer while typing. Empty for a field that is not a recipient field. */
     book: List<Person> = emptyList(),
+    /** Subject only. To and Cc are addresses, and a spell check there is noise. */
+    spell: Boolean = false,
+    dictionary: List<String> = emptyList(),
+    ignored: Set<String> = emptySet(),
+    onAddToDictionary: (String) -> Unit = {},
+    onIgnoreWord: (String) -> Unit = {},
     onChange: (String) -> Unit,
 ) {
     // Dismissed stays true until the field changes again, so Esc closes the list and
     // carries on typing rather than having it reappear on the next keystroke.
     var dismissed by remember { mutableStateOf(false) }
     val offers = if (book.isEmpty() || dismissed) emptyList() else suggest(typedRecipient(value), book)
+    // The draft stores the string. The caret lives here, so clicking in the subject
+    // does not look like an edit and start the autosave pause over.
+    var field by remember { mutableStateOf(TextFieldValue(value)) }
+    if (field.text != value) field = TextFieldValue(value, TextRange(value.length))
+    var spellLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    var spellIssues by remember { mutableStateOf<List<Issue>>(emptyList()) }
+    var spellMenu by remember { mutableStateOf<SpellAnchor?>(null) }
+
+    if (spell) {
+        val dictionaryNow = rememberUpdatedState(dictionary)
+        val ignoredNow = rememberUpdatedState(ignored)
+        // Spelling only. A subject has no sentence to judge, and grammar there is a
+        // blue line under a handful of words.
+        LaunchedEffect(value) {
+            spellIssues = emptyList()
+            spellMenu = null
+            if (value.isBlank()) return@LaunchedEffect
+            delay(SPELL_PAUSE_MS)
+            if (!Settings.checkSpelling()) return@LaunchedEffect
+            val found = SpellCheck.check(
+                value,
+                grammar = false,
+                dictionary = dictionaryNow.value,
+                ignored = ignoredNow.value,
+            )
+            spellIssues = found.hiding(value, Settings.personalDictionary() + ignoredNow.value)
+        }
+        LaunchedEffect(dictionary, ignored) {
+            spellIssues = spellIssues.hiding(value, dictionary + ignored)
+        }
+    }
 
     fun choose(person: Person) {
         dismissed = true
         onChange(completeRecipient(value, person.email))
     }
 
-    Box {
+    val clicks = if (spell && !disabled) {
+        Modifier.spellIssueClicks(
+            issues = spellIssues,
+            text = value,
+            layout = spellLayout,
+            markup = false,
+            toContent = { it },
+            onIssue = { issue, at -> spellMenu = SpellAnchor(issue, at) },
+        )
+    } else {
+        Modifier
+    }
+    val underline = if (spell) {
+        Modifier.spellUnderlines(spellLayout, spellIssues, value, markup = false)
+    } else {
+        Modifier
+    }
+
+    Box(clicks) {
         BasicTextField(
-            value = value,
-            onValueChange = {
+            value = field,
+            onValueChange = { next ->
                 dismissed = false
-                onChange(it)
+                field = next
+                if (next.text != value) onChange(next.text)
             },
             enabled = !disabled,
             singleLine = true,
             textStyle = LocalTextStyle.current.copy(color = MaterialTheme.colorScheme.onSurface),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            onTextLayout = { if (spell) spellLayout = it },
             modifier = (focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
                 .fillMaxWidth()
                 .onPreviewKeyEvent { event ->
@@ -1626,7 +1783,8 @@ private fun Entry(
                         }
                         else -> false
                     }
-                },
+                }
+                .then(underline),
         )
         MenuLayer(
             expanded = offers.isNotEmpty(),
@@ -1651,6 +1809,40 @@ private fun Entry(
                     onClick = { choose(person) },
                 )
             }
+        }
+        spellMenu?.let { anchor ->
+            val entry = surfaceOf(value, anchor.issue.range)
+            SpellSuggestionMenu(
+                issue = anchor.issue,
+                anchor = anchor.at,
+                canAdd = entry != null,
+                onSuggestion = { replacement ->
+                    val next = applySuggestion(field.text, anchor.issue.range, replacement)
+                    if (next != field.text) {
+                        val caret = (anchor.issue.range.first + replacement.length).coerceAtMost(next.length)
+                        field = TextFieldValue(next, TextRange(caret))
+                        onChange(next)
+                    }
+                    spellMenu = null
+                },
+                onAdd = {
+                    if (entry != null) {
+                        onAddToDictionary(entry)
+                        spellIssues = spellIssues.hiding(value, listOf(entry))
+                    }
+                    spellMenu = null
+                },
+                onIgnore = {
+                    if (entry != null) {
+                        onIgnoreWord(entry)
+                        spellIssues = spellIssues.hiding(value, listOf(entry))
+                    } else {
+                        spellIssues = spellIssues.filterNot { it == anchor.issue }
+                    }
+                    spellMenu = null
+                },
+                onDismiss = { spellMenu = null },
+            )
         }
     }
 }
