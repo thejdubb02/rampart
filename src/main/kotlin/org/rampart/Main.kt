@@ -1247,6 +1247,8 @@ private fun Reader(
     var folderError by remember { mutableStateOf<String?>(null) }
     var savedSearches by remember { mutableStateOf(Settings.savedSearches()) }
     var savedSearchCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+    // The child folders of each split saved search, by parent id, from the last count.
+    var savedSearchGroups by remember { mutableStateOf<Map<String, List<SplitGroup>>>(emptyMap()) }
     var activeSavedSearch by remember { mutableStateOf<SavedSearch?>(null) }
     var savedSearchAsk by remember { mutableStateOf<SavedSearchAsk?>(null) }
     /** The message whose row asked for a filter, or null while that dialog is closed. */
@@ -1942,6 +1944,41 @@ private fun Reader(
         } else {
             emptySet()
         }
+        // A saved search with conditions has its own run, in SavedSearchRun.kt: the
+        // server is asked the tree where it can take one, and the local copy otherwise.
+        val conditions = activeSavedSearch?.takeIf { it.condition != null }
+        if (conditions != null) {
+            loading = emails.isEmpty()
+            val targets = if (key == ALL_ACCOUNTS) sessions else listOf(session(key))
+            val run = io {
+                combinedRuns(
+                    targets.associate { open ->
+                        val jmap = open.jmap as? Jmap
+                        val found = runConditionSearch(
+                            conditions.condition,
+                            searchExcept(open.key),
+                            jmap?.let { server ->
+                                { filter: JsonObject -> server.query(filter, SAVED_SEARCH_PAGE) }
+                            },
+                            open.store,
+                        )
+                        val mine = if (asked.knownSender) knownAddresses(open.key, memory) else emptySet()
+                        open.key to found.copy(
+                            messages = if (asked.active) found.messages.filter { matchesQuick(it, asked, mine) }
+                            else found.messages,
+                        )
+                    },
+                ).let { if (key == ALL_ACCOUNTS) it else it.copy(messages = it.messages.map { m -> m.copy(account = "") }) }
+            }
+            if (!live()) return
+            filterNote = run?.note
+            run?.note?.let { note -> run?.detail?.let { report(note, it) } }
+            emails = run?.messages ?: emails
+            learnFrom(emails)
+            loading = false
+            exhausted = true
+            return
+        }
         /*
          * What is already on disk goes up first, and the server is asked afterwards.
          *
@@ -2537,8 +2574,25 @@ private fun Reader(
         if (savedSearches.isEmpty()) return@LaunchedEffect
         delay(2000)
         val memory = books
-        savedSearchCounts = withContext(Dispatchers.IO) {
-            savedSearches.associate { search ->
+        // Searches with conditions are counted in SavedSearchRun.kt, and their split
+        // children come from the same pass, so a child appears or goes with the count.
+        val advanced = withContext(Dispatchers.IO) {
+            savedSearches.filter { it.condition != null }.associateWith { search ->
+                val targets = if (search.account == ALL_ACCOUNTS) sessions else sessions.filter { it.key == search.account }
+                combinedCounts(
+                    targets.map { open ->
+                        countConditionSearch(search, searchExcept(open.key), open.store, knownAddresses(open.key, memory))
+                    },
+                    search.split,
+                )
+            }
+        }
+        savedSearchGroups = advanced.entries.associate { (search, count) -> search.id to count.groups }
+        val advancedCounts = advanced.entries.flatMap { (search, count) ->
+            listOf(search.id to count.unread) + count.groups.map { childSearch(search, it).id to it.unread }
+        }.toMap()
+        savedSearchCounts = advancedCounts + withContext(Dispatchers.IO) {
+            savedSearches.filter { it.condition == null }.associate { search ->
                 val count = if (search.account == ALL_ACCOUNTS) {
                     sessions.sumOf { session ->
                         val store = session.store
@@ -5437,7 +5491,7 @@ private fun Reader(
                 here = here,
                 tags = remember(tagsSeen, tagColours) { mergedTags(tagsSeen, tagColours) },
                 hereTag = viewingTag,
-                savedSearches = savedSearches,
+                savedSearches = withSplitChildren(savedSearches, savedSearchGroups),
                 selectedSavedSearchId = activeSavedSearch?.id,
                 savedSearchCounts = savedSearchCounts,
                 onSelectSavedSearch = { search -> openSavedSearch(search) },
@@ -5487,6 +5541,24 @@ private fun Reader(
                 },
             )
             savedSearchAsk?.let { ask ->
+                // Editing opens the condition builder, which also converts a search saved
+                // before conditions existed. See SavedSearchBuilder.kt.
+                if (ask.job == SavedSearchJob.EditQuery) {
+                    SavedSearchBuilder(
+                        search = ask.search,
+                        onClose = { savedSearchAsk = null },
+                        onSave = { name, condition, split ->
+                            val updated = updateSavedSearchConditions(savedSearches, ask.search.id, name, condition, split)
+                            Settings.setSavedSearches(updated)
+                            savedSearches = updated
+                            val saved = updated.firstOrNull { it.id == ask.search.id }
+                            val showing = activeSavedSearch?.let { it.id == ask.search.id || it.parentId == ask.search.id } == true
+                            savedSearchAsk = null
+                            if (saved != null && showing) openSavedSearch(saved)
+                        },
+                    )
+                    return@let
+                }
                 SavedSearchDialog(
                     ask = ask,
                     onClose = { savedSearchAsk = null },
@@ -5527,7 +5599,7 @@ private fun Reader(
                                 val updated = deleteSavedSearch(savedSearches, ask.search.id)
                                 Settings.setSavedSearches(updated)
                                 savedSearches = updated
-                                if (activeSavedSearch?.id == ask.search.id) {
+                                if (activeSavedSearch?.id == ask.search.id || activeSavedSearch?.parentId == ask.search.id) {
                                     activeSavedSearch = null
                                     showingResults = false
                                     query = ""
@@ -7376,6 +7448,11 @@ private fun SavedSearchRow(
     onManage: ((SavedSearchJob) -> Unit)? = null,
     onClick: () -> Unit,
 ) {
+    // A split search's child is indented under it and has nothing to manage: it is worked
+    // out from the mail, so renaming or deleting it would be undone by the next count.
+    val child = search.parentId != null
+    if (child && collapsed) return
+    val onManage = onManage.takeIf { !child }
     val tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
     var menu by remember { mutableStateOf(false) }
     Row(
@@ -7387,7 +7464,7 @@ private fun SavedSearchRow(
             .onPointerEvent(PointerEventType.Press) { event ->
                 if (event.button == PointerButton.Secondary && onManage != null) menu = true
             }
-            .padding(start = if (collapsed) 0.dp else 10.dp)
+            .padding(start = if (collapsed) 0.dp else if (child) 28.dp else 10.dp)
             .padding(end = if (collapsed) 0.dp else 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = if (collapsed) Arrangement.Center else Arrangement.Start,
@@ -7399,7 +7476,7 @@ private fun SavedSearchRow(
                     onClick = { menu = false; manage(SavedSearchJob.Rename) },
                 )
                 DropdownMenuItem(
-                    text = { Text("Edit query") },
+                    text = { Text("Edit conditions") },
                     onClick = { menu = false; manage(SavedSearchJob.EditQuery) },
                 )
                 HorizontalDivider()
