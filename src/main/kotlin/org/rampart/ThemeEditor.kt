@@ -179,7 +179,10 @@ internal fun importTheme(): Theme? {
         fileFilter = FileNameExtensionFilter("Rampart theme (*.json)", "json")
     }
     if (chooser.showOpenDialog(null) != JFileChooser.APPROVE_OPTION) return null
-    return ThemeJson.decode(Files.readString(chooser.selectedFile.toPath()))
+    val path = chooser.selectedFile.toPath()
+    // A theme is a few hundred bytes. Anything far bigger is not one, and reading it whole could stall the app.
+    require(Files.size(path) <= 64 * 1024) { "That file is too large to be a theme." }
+    return ThemeJson.decode(Files.readString(path))
 }
 
 private fun exportTheme(theme: Theme) {
