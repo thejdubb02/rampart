@@ -158,6 +158,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
@@ -479,6 +480,13 @@ private fun ApplicationScope.Rampart() {
         windowState.isMinimized = false
     }
 
+    // Clickable notifications and the taskbar count, chosen once for this computer. See DesktopShell.kt.
+    remember(tray) {
+        NewMailNotices.shell = desktopShell(
+            if (isTraySupported) { title, body -> tray.sendNotification(Notification(title, body, Notification.Type.Info)) } else null,
+        )
+    }
+
     // No tray on this desktop means no notifications, and nothing else changes. Constructing
     // one anyway logs a warning on every start and still cannot deliver anything.
     if (isTraySupported) {
@@ -486,7 +494,7 @@ private fun ApplicationScope.Rampart() {
             icon = remember(icon, unread) { BadgedIcon(icon, unread) },
             state = tray,
             tooltip = if (unread > 0) "Rampart, $unread unread" else "Rampart",
-            onAction = ::show,
+            onAction = { show(); NewMailNotices.shell.trayActivated() },
             menu = {
                 Item(if (closed) "Open Rampart" else "Show Rampart", onClick = ::show)
                 Item("Quit", onClick = ::quit)
@@ -528,6 +536,8 @@ private fun ApplicationScope.Rampart() {
                 dark = theme.dark,
             )
         }
+        // The same count as the tray icon, on the taskbar button or the dock.
+        LaunchedEffect(unread) { NewMailNotices.shell.unread(unread, window) }
         LaunchedEffect(Unit) {
             // After the window is up, so the first message does not pay for starting WebKit.
             warmWebBody()
@@ -2398,7 +2408,7 @@ private fun Reader(
                 val hushed = found.fresh.filter { Muted.muted(open.key, it.threadId) }
                 if (hushed.isNotEmpty()) hush(open.key, hushed.map { it.id })
                 val announce = found.fresh.filterNot { it in hushed }
-                if (notifyOnArrival) arrivalText(announce)?.let { (title, body) -> notify(title, body) }
+                if (notifyOnArrival) NewMailNotices.arrived(open.key, announce)
                 if (Settings.ntfyImportantMail()) {
                     announce.filter { "\$important" in it.keywords }.forEach {
                         phoneAlert("Important new mail", "${it.from}: ${it.subject.ifBlank { "(no subject)" }}")
@@ -2769,6 +2779,36 @@ private fun Reader(
             }
         }
         scope.launch { reload() }
+    }
+
+    // New mail is announced a burst at a time, checked again just before it is shown.
+    LaunchedEffect(sessions) {
+        NewMailNotices.run { key ->
+            val open = sessions.firstOrNull { it.key == key } ?: return@run null
+            val inbox = folderFor("inbox", mailboxes[key].orEmpty()) ?: return@run null
+            withContext(Dispatchers.IO) { runCatching { open.jmap.emails(inbox.id, limit = 30) }.getOrNull() }
+        }
+    }
+    // A click on a notification opens that message, in its account's inbox.
+    LaunchedEffect(Unit) {
+        for (ref in NewMailNotices.opens) {
+            val inbox = folderFor("inbox", mailboxes[ref.account].orEmpty()) ?: continue
+            settingsOpen = false
+            contactsOpen = false
+            dashboardOpen = false
+            calendarOpen = false
+            activeSavedSearch = null
+            val alreadyThere = here?.first == ALL_ACCOUNTS || (here?.first == ref.account && here?.second?.id == inbox.id)
+            if (!alreadyThere) {
+                here = ref.account to inbox
+                // Changing folder clears the selection, so the message is chosen once the
+                // new list has it, or after a few seconds regardless.
+                withTimeoutOrNull(5_000) {
+                    snapshotFlow { emails }.first { list -> list.any { it.sameMail(ref.account, ref.summary.id) } }
+                }
+            }
+            selected = emails.firstOrNull { it.sameMail(ref.account, ref.summary.id) } ?: ref.summary.copy(account = ref.account)
+        }
     }
 
     LaunchedEffect(here) {

@@ -224,6 +224,16 @@ moment it happens and gated by the same classifier the open count already is, so
 still cannot make Rampart tell you somebody read something they never saw. Built with
 `grok-4.7-build-fast` from a written spec, reviewed here before it shipped.
 
+**New-mail notifications you can click (RAM-58), built 2026-09-29, not yet released.** A click
+opens that exact message: on Windows through the tray balloon, which Windows draws as a toast
+and reports back as a click on the tray icon; on Linux through libnotify's default action where
+the notification service supports actions. One notification per burst ("3 new messages from 2
+people"), and nothing for mail a filter filed away or another client marked read before the
+burst was ready. The unread count sits on the Windows taskbar button through ITaskbarList3 and
+on the macOS dock through AWT's badge. Quiet hours (synced) and a switch per account (this
+computer only) are in Settings, Notifications. `NotifyRules.kt` is the logic,
+`DesktopShell.kt` the platform seam, `NotifyRulesTest.kt` the check.
+
 ---
 
 ## The message header, and showing the working
