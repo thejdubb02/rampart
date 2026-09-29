@@ -758,6 +758,16 @@ a second card. Each address is taken to the server once and written down, so a c
 on purpose does not come back on the next reply. JMAP accounts with contacts only; IMAP
 keeps the local book. `LearnedContacts.kt`.
 
+**A person's history (RAM-108), built 2026-09-29, not yet released.** Clicking a sender or a
+recipient in a message's header, or a name on the contacts page, opens every message from or
+to that person, in every signed-in account and every folder, Sent included, in the ordinary
+list so every row action works. Every address on their card is looked for, not only the one
+clicked. The server is asked first, one JMAP request per account carrying the first page and
+the counts, all accounts at once; IMAP accounts and unreachable servers are answered from the
+copy on this computer, which now keeps who each message went to, and the view says which
+answered. Paged a hundred at a time across accounts; at 50,000 messages the copy answers a
+page in about 2 ms. `PersonHistory.kt`, `PersonHistoryTest.kt`.
+
 ### 2.9b Calendar
 
 **Built 2026-09-28, not yet released or checked against a live server.** A Calendar page
