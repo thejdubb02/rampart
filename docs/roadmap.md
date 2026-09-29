@@ -774,10 +774,10 @@ under the rules above. Gemini's four jobs, and where Rook stands on each:
 
 **Write for you.**
 - Help me write: a short instruction becomes a draft, with the thread as context.
-  *Cloud session, claude/writing-help.*
-- Polish, Formalize, Shorten, Elaborate, and "change it how?". *Cloud session.*
-- Proofread, as inline suggestions accepted one at a time. *Cloud session.*
-- Suggested replies: up to three full drafts on request. *Cloud session.*
+  *Started 2026-09-29 on the branch claude/writing-help, not released.*
+- Polish, Formalize, Shorten, Elaborate, and "change it how?". *Same branch, not released.*
+- Proofread, as inline suggestions accepted one at a time. *Same branch, not released.*
+- Suggested replies: up to three full drafts on request. *Same branch, not released.*
 - Matching the person's own tone from their Sent mail. *Not started. Needs a small style
   sample sent with the prompt, shown in the packet viewer like everything else.*
 

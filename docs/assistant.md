@@ -101,7 +101,27 @@ in the window, not in the message.
 Built 2026-09-22, as a prompt bar in the composer's own toolbar rather than a proposal
 that opens unasked: describe what the message needs to say, and Formalize, Elaborate and
 Shorten refine the draft that comes back, the same shape as Gmail's Help me write.
-`ComposeDraft.kt`.
+
+Rebuilt 2026-09-29 on the branch `claude/writing-help`, not yet released, as the whole of
+Gemini's writing help: Help me write with the thread as context, Polish, Formalize, Shorten,
+Elaborate and a "change it how?" box, Proofread as marks in the draft accepted one at a
+time, and Suggest replies above an open message. Three rules shape it:
+
+- **Only the person's own writing goes out.** The draft is cut at the first `-- ` line or
+  quote attribution, the same markers `signed` and `quoteStart` use, and only the part above
+  goes to the model. The signature and the quoted original are put back under the answer
+  byte for byte. A signature, a sign-off or a quote the model adds anyway is stripped.
+- **Nothing is written into the draft without Accept.** A rewrite is a preview with Accept
+  and Discard; a proofreading suggestion is Accept or Dismiss, one at a time, and one whose
+  original text is not found exactly in the person's own part is dropped. Accept goes
+  through the composer's own edit, so Undo takes it back.
+- **A suggested reply is a draft, never a message.** Picking one opens an ordinary reply
+  with those words above the quote, and it goes nowhere until Send.
+
+Mail sent as context is fenced between markers and the system prompt says it is data, not
+instructions. Every call is a button, under the compose agreement, the ceiling and the
+never-leaves folder list, and costs are recorded against compose. `WritingHelp.kt` holds the
+prompts and the parsing, `WritingHelpUi.kt` the buttons.
 
 **Triage.** "Is this a lead, an invoice, a newsletter or a scam." The output is a
 suggested tag, never an automatic file. Sorting mail out of sight on a model's say-so is
