@@ -93,6 +93,8 @@ Nothing below line 5 is scheduled; it is only sorted.
 
 **Not in the list, on purpose:** encryption, calendar, contacts as an application, the
 admin console, and everything else in tiers 3, 5 and 6. They are real and they are later.
+Encryption has since been started on its own branch, `claude/encryption` (2026-09-29, not
+released); tier 3 below says what it covers.
 
 **Already done:** the command palette (2.6), shipped in 0.1.53.
 
@@ -789,6 +791,21 @@ Roughly the spec's "trust core", and the part where being wrong is expensive.
 - **S/MIME or OpenPGP.** Pick one and finish it. A client that says a message is signed
   when it has not really checked is a lie with consequences, so half of either is worse
   than neither.
+
+  *Started 2026-09-29 on branch `claude/encryption` (Kaneo RAM-37), not released, and not
+  yet checked against a live server or a real correspondent.* Both, built in on Bouncy
+  Castle rather than picked between, because Stalwart's encryption at rest writes whichever
+  kind of key the person gave it. Reading PGP/MIME, inline PGP and S/MIME with a signature
+  badge that is loud in red whenever the signature is broken, unknown, untrusted or not the
+  sender's; signing and encrypting per message with the key chosen per identity, always
+  encrypted to the sender's own key too, never sent readable after encryption was asked for;
+  keys made, imported and exported, secret halves only in the credential store; recipient
+  keys from the address book, from mail, and on request from Web Key Directory and
+  keys.openpgp.org. Stalwart's own encryption at rest is a section of Settings, Encryption,
+  set as the signed-in user. Rook reads none of it unless asked per thread, and searching
+  inside encrypted mail is a setting, off by default. `encryption.md` has the design, the
+  Stalwart research and the list of what to check live; GnuPG and OpenSSL were checked
+  against it both ways on this machine.
 - **Attachment handling that assumes hostility.** No preview that executes anything.
 
 ---
@@ -940,8 +957,9 @@ Security changes the password, makes and revokes app passwords, and turns two-st
 on and off, all as the signed-in user. `account-security.md` has the object names, the two
 findings that shaped it (the server never checks a code against a new TOTP secret, and
 two-step login stops the mailbox password working for every mail app, Rampart included),
-and the list of what to confirm on a real server. API keys, public keys, encryption at rest
-and the display name are still to do, on the same plumbing.
+and the list of what to confirm on a real server. API keys and the display name are still
+to do, on the same plumbing. Public keys and encryption at rest were started 2026-09-29 on
+branch `claude/encryption`, not released: `encryption.md`.
 
 ---
 
