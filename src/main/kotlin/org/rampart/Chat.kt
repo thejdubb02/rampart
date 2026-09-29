@@ -182,6 +182,8 @@ internal fun converse(
     record: (Int, Int) -> Unit,
     /** Reading settings and putting changes on cards, when the window offers it. See `RookChanges.kt`. */
     settings: SettingsTools? = null,
+    /** Reading the calendar and putting events on cards, when the account has one. See `CalendarTools.kt`. */
+    calendar: CalendarTools? = null,
 ): List<Said> {
     val added = mutableListOf<Said>()
     repeat(ROUNDS) {
@@ -194,7 +196,7 @@ internal fun converse(
             return added
         }
         added += Said("call", reply.text.trim())
-        added += Said("result", carryOut(asked, shown, tools, settings))
+        added += Said("result", carryOut(asked, shown, tools, settings, calendar))
     }
     added += Said("result", "That went round in circles, so it stopped.")
     return added
@@ -206,7 +208,13 @@ internal fun converse(
  * Every answer is a sentence rather than a status, because it is read by a person in the
  * transcript and by the model on the next turn, and those two want the same thing.
  */
-private fun carryOut(asked: Asked, shown: MutableSet<String>, tools: MailTools, settings: SettingsTools?): String {
+private fun carryOut(
+    asked: Asked,
+    shown: MutableSet<String>,
+    tools: MailTools,
+    settings: SettingsTools?,
+    calendar: CalendarTools? = null,
+): String {
     fun ids(): List<String> = Chat.allowed(
         (asked.args["ids"] as? kotlinx.serialization.json.JsonArray)
             .orEmpty().mapNotNull { it.jsonPrimitive.contentOrNull },
@@ -258,7 +266,7 @@ private fun carryOut(asked: Asked, shown: MutableSet<String>, tools: MailTools, 
             else "That reply could not be opened."
         }
         "tracking_today" -> tools.trackingToday()
-        // A settings tool never changes anything here: at most it puts a card on screen.
-        else -> settings?.run(asked) ?: "There is no tool called ${asked.tool}."
+        // A settings or calendar tool never changes anything here: at most it puts a card on screen.
+        else -> settings?.run(asked) ?: calendar?.run(asked) ?: "There is no tool called ${asked.tool}."
     }
 }
