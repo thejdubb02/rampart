@@ -270,6 +270,51 @@ internal fun rewriteTrackedLinks(html: String, base: String, id: String): Rewrit
     return RewrittenLinks(document.body().html(), originals)
 }
 
+/** Restores redirects made by this client while leaving every unfamiliar address alone. */
+internal fun restoreTrackedLinks(
+    html: String,
+    base: String,
+    originals: Map<Pair<String, Int>, String>,
+): String {
+    if (base.isBlank() || originals.isEmpty()) return html
+    val server = runCatching { java.net.URI(base.trim().trimEnd('/')) }.getOrNull() ?: return html
+    val serverPath = server.path.orEmpty().trimEnd('/')
+    val document = Jsoup.parseBodyFragment(html)
+    document.outputSettings().prettyPrint(false)
+    document.select("a[href]").forEach { anchor ->
+        val target = runCatching { java.net.URI(anchor.attr("href").trim()) }.getOrNull() ?: return@forEach
+        if (
+            !target.scheme.equals(server.scheme, ignoreCase = true) ||
+            !target.host.equals(server.host, ignoreCase = true) ||
+            target.port != server.port || target.userInfo != server.userInfo
+        ) return@forEach
+        val route = target.path.orEmpty().removePrefix("$serverPath/c/")
+        if (route == target.path) return@forEach
+        val parts = route.split('/')
+        if (parts.size != 2) return@forEach
+        val number = parts[1].toIntOrNull() ?: return@forEach
+        originals[parts[0] to number]?.let { anchor.attr("href", it) }
+    }
+    return document.body().html()
+}
+
+/** Restores both representations used by the reader, Rook, replies, and forwards. */
+internal fun restoreTrackedLinks(
+    body: Body,
+    base: String,
+    originals: Map<Pair<String, Int>, String>,
+): Body {
+    if (base.isBlank() || originals.isEmpty()) return body
+    val prefix = base.trim().trimEnd('/')
+    val text = originals.entries.fold(body.text) { current, (key, original) ->
+        current?.replace("$prefix/c/${key.first}/${key.second}", original)
+    }
+    return body.copy(
+        html = body.html?.let { restoreTrackedLinks(it, base, originals) },
+        text = text,
+    )
+}
+
 /**
  * Whether a base URL can carry a pixel at all.
  *

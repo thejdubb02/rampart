@@ -186,6 +186,12 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             )
             """,
             """
+            CREATE TABLE IF NOT EXISTS tracked_link (
+                id TEXT NOT NULL, number INTEGER NOT NULL, url TEXT NOT NULL,
+                PRIMARY KEY (id, number)
+            )
+            """,
+            """
             CREATE TABLE IF NOT EXISTS fetched (
                 id TEXT NOT NULL, at INTEGER NOT NULL, userAgent TEXT NOT NULL, network TEXT NOT NULL,
                 classification TEXT NOT NULL DEFAULT '', event TEXT NOT NULL DEFAULT 'open', url TEXT NOT NULL DEFAULT '',
@@ -241,6 +247,12 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         val trackedColumns = connection.prepareStatement("PRAGMA table_info(tracked)").use { s ->
             s.executeQuery().use { rows -> buildList { while (rows.next()) add(rows.getString("name")) } }
         }
+        val trackedLinkColumns = connection.prepareStatement("PRAGMA table_info(tracked_link)").use { s ->
+            s.executeQuery().use { rows -> buildList { while (rows.next()) add(rows.getString("name")) } }
+        }
+        check(trackedLinkColumns.containsAll(listOf("id", "number", "url"))) {
+            "The tracked link table has an unsupported schema."
+        }
         if ("repliedAt" !in trackedColumns) connection.createStatement().use {
             it.execute("ALTER TABLE tracked ADD COLUMN repliedAt INTEGER")
         }
@@ -263,11 +275,15 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         val copied = runCatching {
             open(path, key).use { old ->
                 val tracking = old.tracking(Int.MAX_VALUE)
+                val links = old.trackedLinks()
                 val was = connection.autoCommit
                 connection.autoCommit = false
                 try {
                     tracking.forEach { (tracked, fetches) ->
-                        track(tracked)
+                        track(
+                            tracked,
+                            links.filterKeys { it.first == tracked.id }.toSortedMap(compareBy { it.second }).values.toList(),
+                        )
                         recordFetches(fetches)
                     }
                     connection.commit()
@@ -283,17 +299,56 @@ internal class Store(private val connection: Connection) : AutoCloseable {
     }
 
     /** Remembers that a message went out tracked. */
-    @Synchronized fun track(tracked: Tracked) {
-        connection.prepareStatement(
-            "INSERT OR REPLACE INTO tracked (id, messageId, recipient, subject, sentAt, repliedAt) VALUES (?, ?, ?, ?, ?, ?)",
-        ).use { s ->
-            s.setString(1, tracked.id)
-            s.setString(2, tracked.messageId)
-            s.setString(3, tracked.recipient)
-            s.setString(4, tracked.subject)
-            s.setLong(5, tracked.sentAt.toEpochMilli())
-            if (tracked.repliedAt == null) s.setNull(6, java.sql.Types.BIGINT) else s.setLong(6, tracked.repliedAt.toEpochMilli())
-            s.executeUpdate()
+    @Synchronized fun track(tracked: Tracked, links: List<String> = emptyList()) {
+        val was = connection.autoCommit
+        if (was) connection.autoCommit = false
+        try {
+            connection.prepareStatement(
+                "INSERT OR REPLACE INTO tracked (id, messageId, recipient, subject, sentAt, repliedAt) " +
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+            ).use { s ->
+                s.setString(1, tracked.id)
+                s.setString(2, tracked.messageId)
+                s.setString(3, tracked.recipient)
+                s.setString(4, tracked.subject)
+                s.setLong(5, tracked.sentAt.toEpochMilli())
+                if (tracked.repliedAt == null) {
+                    s.setNull(6, java.sql.Types.BIGINT)
+                } else {
+                    s.setLong(6, tracked.repliedAt.toEpochMilli())
+                }
+                s.executeUpdate()
+            }
+            connection.prepareStatement("DELETE FROM tracked_link WHERE id = ?").use { s ->
+                s.setString(1, tracked.id)
+                s.executeUpdate()
+            }
+            if (links.isNotEmpty()) connection.prepareStatement(
+                "INSERT INTO tracked_link (id, number, url) VALUES (?, ?, ?)",
+            ).use { s ->
+                links.forEachIndexed { number, url ->
+                    s.setString(1, tracked.id)
+                    s.setInt(2, number)
+                    s.setString(3, url)
+                    s.addBatch()
+                }
+                s.executeBatch()
+            }
+            if (was) connection.commit()
+        } catch (e: Exception) {
+            if (was) connection.rollback()
+            throw e
+        } finally {
+            if (was) connection.autoCommit = true
+        }
+    }
+
+    /** Original destinations for redirects minted by this account. */
+    @Synchronized fun trackedLinks(): Map<Pair<String, Int>, String> = connection.prepareStatement(
+        "SELECT id, number, url FROM tracked_link",
+    ).use { s ->
+        s.executeQuery().use { rows ->
+            buildMap { while (rows.next()) put(rows.getString(1) to rows.getInt(2), rows.getString(3)) }
         }
     }
 

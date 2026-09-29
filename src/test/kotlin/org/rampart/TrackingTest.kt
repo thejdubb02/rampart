@@ -39,6 +39,40 @@ class TrackingTest {
     }
 
     @Test
+    fun `restore maps only known links on the configured server`() {
+        val html = """<a href="https://companion.example/c/known/0">known</a> """ +
+            """<a href="https://companion.example/c/unknown/0">unknown</a> """ +
+            """<a href="https://other.example/c/known/0">other</a>"""
+        val restored = restoreTrackedLinks(
+            html,
+            "https://companion.example",
+            mapOf(("known" to 0) to "https://original.example/page"),
+        )
+        assertTrue(restored.contains("href=\"https://original.example/page\""))
+        assertTrue(restored.contains("href=\"https://companion.example/c/unknown/0\""))
+        assertTrue(restored.contains("href=\"https://other.example/c/known/0\""))
+    }
+
+    @Test
+    fun `reply and forward quote restored destinations`() {
+        val tracked = Body(
+            html = """<p>Read <a href="https://companion.example/c/known/0">the report</a>.</p>""",
+            text = "Read https://companion.example/c/known/0",
+        )
+        val restored = restoreTrackedLinks(
+            tracked,
+            "https://companion.example",
+            mapOf(("known" to 0) to "https://original.example/report"),
+        )
+        val message = Summary("m", "Dana", "dana@example.org", "Report", "2026-09-29T10:00:00Z", "", true)
+
+        assertTrue(replyTo(message, restored, "me@example.org").body.contains("https://original.example/report"))
+        assertTrue(forwardOf(message, restored, "me@example.org").body.contains("https://original.example/report"))
+        assertFalse(replyTo(message, restored, "me@example.org").body.contains("/c/known/0"))
+        assertFalse(forwardOf(message, restored, "me@example.org").body.contains("/c/known/0"))
+    }
+
+    @Test
     fun `timeline keeps events newest first and counts only person opens`() {
         val tracked = Tracked("id", "message", "", "susan@example.org", "Audit", Instant.ofEpochMilli(0))
         val events = listOf(

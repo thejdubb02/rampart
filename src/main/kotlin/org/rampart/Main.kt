@@ -1582,6 +1582,11 @@ private fun Reader(
     fun knownDomains(): Set<String> =
         books.values.flatten().map { domainOf(it.email) }.filter { it.isNotBlank() }.toSet()
 
+    fun restoredBody(account: String, body: Body): Body {
+        val links = runCatching { session(account).store?.trackedLinks().orEmpty() }.getOrDefault(emptyMap())
+        return restoreTrackedLinks(body, Settings.trackingServer(), links)
+    }
+
     fun publishCard(
         account: String,
         id: String,
@@ -1595,9 +1600,10 @@ private fun Reader(
         emailBlobId: String?,
         loaded: Boolean,
     ) {
+        val restored = restoredBody(account, body)
         updateCard(account, id, epoch) {
             copy(
-                body = body,
+                body = restored,
                 bodyError = null,
                 attachments = attachments,
                 imageBytes = pictures,
@@ -1663,7 +1669,7 @@ private fun Reader(
         val showing = cards[slot]
         if (
             kept != null && showing?.reading != null && showing.pageRemote == remote &&
-            showing.body == kept.body && cacheStillGood(key, id, kept)
+            showing.body == restoredBody(key, kept.body) && cacheStillGood(key, id, kept)
         ) {
             if (!live()) return
             Diagnostics.count(Metric.MESSAGE_OPEN_CACHE_HIT)
@@ -1676,7 +1682,7 @@ private fun Reader(
                 prepareReading(
                     findSummary(key, id)?.fromEmail.orEmpty(),
                     findSummary(key, id)?.from.orEmpty(),
-                    kept.body,
+                    restoredBody(key, kept.body),
                     kept.attachments,
                     kept.pictures,
                     remote,
@@ -1718,7 +1724,7 @@ private fun Reader(
                 prepareReading(
                     person?.fromEmail.orEmpty(),
                     person?.from.orEmpty(),
-                    fresh.body,
+                    restoredBody(key, fresh.body),
                     fresh.attachments,
                     pictures,
                     remote,
@@ -1743,7 +1749,7 @@ private fun Reader(
             if (same) {
                 updateCard(key, id, epoch) {
                     copy(
-                        body = fresh.body,
+                        body = restoredBody(key, fresh.body),
                         attachments = fresh.attachments,
                         imageBytes = pictures,
                         images = reading.images,
@@ -3171,7 +3177,7 @@ private fun Reader(
                 // Written down only once it has actually gone. A tracked id for a
                 // message that failed to send would sit in the list forever waiting
                 // for an open that cannot come.
-                tracked?.let { account.store?.track(it) }
+                tracked?.let { account.store?.track(it, clickLinks) }
                 if (Settings.ntfyOpenLabels()) {
                     tracked?.let { row ->
                         val token = Secrets.trackingToken()
@@ -3287,7 +3293,7 @@ private fun Reader(
                     TrackingClient.registerLinks(trackingBase, token, tracked!!.id, tracked!!.sentAt, clickLinks)
                 }
                 val made = account.jmap.sendDelayed(outgoing, identity, draftsId, sentId, holdUntil)
-                tracked?.let { account.store?.track(it) }
+                tracked?.let { account.store?.track(it, clickLinks) }
                 val cleanup = draftId?.let { id ->
                     runCatching { account.jmap.destroy(listOf(id)) }.exceptionOrNull()
                 }
@@ -3588,7 +3594,7 @@ private fun Reader(
             }.getOrDefault(emptyList())
 
         override fun read(id: String): String? =
-            runCatching { plainTextOf(session(key).jmap.body(id)) }.getOrNull()?.ifBlank { null }
+            runCatching { plainTextOf(restoredBody(key, session(key).jmap.body(id))) }.getOrNull()?.ifBlank { null }
 
         override fun file(ids: List<String>, role: String): Int {
             if (ids.isEmpty()) return 0
@@ -3631,7 +3637,7 @@ private fun Reader(
 
         override fun draftReply(id: String, text: String): Boolean {
             val message = (emails + thread).firstOrNull { it.id == id } ?: return false
-            val letter = runCatching { session(key).jmap.body(id) }.getOrNull()
+            val letter = runCatching { restoredBody(key, session(key).jmap.body(id)) }.getOrNull()
             scope.launch {
                 val ours = identities[key].orEmpty().map { it.email }.toSet()
                 sendError = null; sendDetail = null
@@ -3712,7 +3718,7 @@ private fun Reader(
         thread.ifEmpty { listOf(message) }.map { m ->
             async(Dispatchers.IO) {
                 val text = cards[CardKey(key, m.id)]?.body?.let(::plainTextOf)
-                    ?: runCatching { plainTextOf(session(key).jmap.body(m.id)) }.getOrDefault("")
+                    ?: runCatching { plainTextOf(restoredBody(key, session(key).jmap.body(m.id))) }.getOrDefault("")
                 Turn(m.from, m.receivedAt, text)
             }
         }.awaitAll()
@@ -3993,7 +3999,7 @@ private fun Reader(
         val key = accountOf(message) ?: return
         sendError = null; sendDetail = null
         scope.launch {
-            val letter = cardFor(message).body ?: io { session(key).jmap.body(message.id) }
+            val letter = cardFor(message).body ?: io { restoredBody(key, session(key).jmap.body(message.id)) }
             val mine = identities[key].orEmpty().map { it.email }
             val from = identityFor(letter, mine, mine.firstOrNull().orEmpty())
             val draft = io {
@@ -4020,7 +4026,7 @@ private fun Reader(
             if (key != null) {
                 scope.launch {
                     val ours = identities[key].orEmpty().map { it.email }
-                    val text = io { session(key).jmap.body(message.id) }
+                    val text = io { restoredBody(key, session(key).jmap.body(message.id)) }
                     write(key, replyTo(message, text, writingIdentity(text, key), all, ours.toSet()))
                 }
             }
@@ -4032,7 +4038,7 @@ private fun Reader(
                     // This message's own body, not whatever is open in the reader. Forwarding
                     // from a row while looking at something else would otherwise answer as
                     // the identity the other message was addressed to.
-                    val forwarded = io { session(key).jmap.body(message.id) }
+                    val forwarded = io { restoredBody(key, session(key).jmap.body(message.id)) }
                     val mine = identities[key].orEmpty().map { it.email }
                     write(key, forwardOf(message, forwarded, identityFor(forwarded, mine, mine.firstOrNull().orEmpty())))
                 }

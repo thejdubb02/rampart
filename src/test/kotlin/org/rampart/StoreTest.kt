@@ -47,6 +47,20 @@ class StoreTest {
     }
 
     @Test
+    fun `tracked link originals survive the trip`() = withStore { store ->
+        val tracked = Tracked("known", "message", "", "dana@example.org", "Report", Instant.EPOCH)
+        store.track(tracked, listOf("https://first.example", "https://second.example"))
+
+        assertEquals(
+            mapOf(
+                ("known" to 0) to "https://first.example",
+                ("known" to 1) to "https://second.example",
+            ),
+            store.trackedLinks(),
+        )
+    }
+
+    @Test
     fun `what goes in comes back, newest first`() = withStore { store ->
         store.put("inbox", messages)
         assertEquals(listOf("b", "c", "a"), store.messages("inbox").map { it.id })
