@@ -44,10 +44,10 @@ absent reads as a broken app.
 
 What needs it today:
 
-- **Open tracking.** A tracking pixel has to be fetched from somewhere, and a desktop app
+- **Open and click tracking.** A tracking pixel and link redirect have to be fetched from somewhere, and a desktop app
   is not somewhere. The companion serves a 1x1 GIF at an id Rampart minted, keeps the log
   of what was fetched and when, posts person opens to ntfy or Gotify when configured, and
-  answers one authenticated question: what has opened since I last asked. `open-tracking.md`
+  answers one authenticated question: what has opened or been clicked since I last asked. `open-tracking.md`
   has the design.
 - **Diagnostics.** Local timing and health statistics work with no server and no setting
   at all: the Diagnostics settings page shows them from this computer alone. Sending the

@@ -21,6 +21,8 @@ data class Fetch(
     val network: String,
     /** Why this fetch is or is not evidence that a person read the message. */
     val classification: OpenClassification = OpenClassification.PERSON,
+    val event: String = "open",
+    val url: String = "",
 )
 
 enum class OpenClassification(val wireName: String) {
@@ -32,6 +34,7 @@ enum class OpenClassification(val wireName: String) {
 }
 
 data class TrackingLabel(val id: String, val label: String, val createdAt: Long)
+data class TrackedLink(val id: String, val number: Int, val url: String, val createdAt: Long)
 
 /**
  * One line of Rampart's own diagnostics: how a named metric went, aggregated by the
@@ -83,10 +86,18 @@ class Log(path: String) : AutoCloseable {
             if ("classification" !in columns) {
                 s.execute("ALTER TABLE fetch ADD COLUMN classification TEXT NOT NULL DEFAULT 'person'")
             }
+            if ("event" !in columns) s.execute("ALTER TABLE fetch ADD COLUMN event TEXT NOT NULL DEFAULT 'open'")
+            if ("url" !in columns) s.execute("ALTER TABLE fetch ADD COLUMN url TEXT NOT NULL DEFAULT ''")
             s.execute(
                 "CREATE TABLE IF NOT EXISTS tracking_label (" +
                     "id TEXT PRIMARY KEY, label TEXT NOT NULL, createdAt INTEGER NOT NULL)",
             )
+            s.execute(
+                "CREATE TABLE IF NOT EXISTS tracked_link (" +
+                    "id TEXT NOT NULL, number INTEGER NOT NULL, url TEXT NOT NULL, createdAt INTEGER NOT NULL, " +
+                    "PRIMARY KEY (id, number))",
+            )
+            s.execute("CREATE TABLE IF NOT EXISTS tracking_reply (id TEXT PRIMARY KEY, createdAt INTEGER NOT NULL)")
             // Diagnostics, in the same database rather than a second file: this is still
             // one companion doing more than one job, not two companions.
             s.execute(
@@ -101,14 +112,41 @@ class Log(path: String) : AutoCloseable {
     @Synchronized
     fun record(fetch: Fetch) {
         connection.prepareStatement(
-            "INSERT INTO fetch (id, at, userAgent, network, classification) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO fetch (id, at, userAgent, network, classification, event, url) VALUES (?, ?, ?, ?, ?, ?, ?)",
         ).use { s ->
             s.setString(1, fetch.id)
             s.setLong(2, fetch.at)
             s.setString(3, fetch.userAgent.take(400))
             s.setString(4, fetch.network)
             s.setString(5, fetch.classification.wireName)
+            s.setString(6, fetch.event)
+            s.setString(7, fetch.url.take(4096))
             s.executeUpdate()
+        }
+    }
+
+    @Synchronized
+    fun setLinks(links: List<TrackedLink>) {
+        if (links.isEmpty()) return
+        connection.prepareStatement(
+            "INSERT INTO tracked_link (id, number, url, createdAt) VALUES (?, ?, ?, ?) " +
+                "ON CONFLICT(id, number) DO UPDATE SET url = excluded.url, createdAt = excluded.createdAt",
+        ).use { s ->
+            links.forEach { link ->
+                s.setString(1, link.id); s.setInt(2, link.number); s.setString(3, link.url); s.setLong(4, link.createdAt)
+                s.addBatch()
+            }
+            s.executeBatch()
+        }
+    }
+
+    @Synchronized
+    fun linkFor(id: String, number: Int): TrackedLink? = connection.prepareStatement(
+        "SELECT id, number, url, createdAt FROM tracked_link WHERE id = ? AND number = ?",
+    ).use { s ->
+        s.setString(1, id); s.setInt(2, number)
+        s.executeQuery().use { rows ->
+            if (rows.next()) TrackedLink(rows.getString(1), rows.getInt(2), rows.getString(3), rows.getLong(4)) else null
         }
     }
 
@@ -121,7 +159,7 @@ class Log(path: String) : AutoCloseable {
      */
     fun since(since: Long, limit: Int = 1000): List<Fetch> =
         connection.prepareStatement(
-            "SELECT id, at, userAgent, network, classification FROM fetch WHERE at > ? ORDER BY at ASC LIMIT ?",
+            "SELECT id, at, userAgent, network, classification, event, url FROM fetch WHERE at > ? ORDER BY at ASC LIMIT ?",
         ).use { s ->
             s.setLong(1, since)
             s.setInt(2, limit)
@@ -133,6 +171,7 @@ class Log(path: String) : AutoCloseable {
                                 rows.getString(1), rows.getLong(2), rows.getString(3), rows.getString(4),
                                 OpenClassification.entries.firstOrNull { it.wireName == rows.getString(5) }
                                     ?: OpenClassification.PERSON,
+                                rows.getString(6), rows.getString(7),
                             ),
                         )
                     }
@@ -143,7 +182,7 @@ class Log(path: String) : AutoCloseable {
     @Synchronized
     fun fetchesFor(id: String): List<Fetch> =
         connection.prepareStatement(
-            "SELECT id, at, userAgent, network, classification FROM fetch WHERE id = ? ORDER BY at ASC",
+            "SELECT id, at, userAgent, network, classification, event, url FROM fetch WHERE id = ? ORDER BY at ASC",
         ).use { s ->
             s.setString(1, id)
             s.executeQuery().use { rows ->
@@ -154,6 +193,7 @@ class Log(path: String) : AutoCloseable {
                                 rows.getString(1), rows.getLong(2), rows.getString(3), rows.getString(4),
                                 OpenClassification.entries.firstOrNull { it.wireName == rows.getString(5) }
                                     ?: OpenClassification.PERSON,
+                                rows.getString(6), rows.getString(7),
                             ),
                         )
                     }
@@ -180,6 +220,16 @@ class Log(path: String) : AutoCloseable {
             s.setString(1, id)
             s.executeQuery().use { rows -> if (rows.next()) rows.getString(1) else null }
         }
+
+    @Synchronized fun stopAlerts(id: String, at: Long) {
+        connection.prepareStatement("INSERT OR REPLACE INTO tracking_reply (id, createdAt) VALUES (?, ?)").use { s ->
+            s.setString(1, id); s.setLong(2, at); s.executeUpdate()
+        }
+    }
+
+    @Synchronized fun alertsEnabled(id: String): Boolean = connection.prepareStatement(
+        "SELECT 1 FROM tracking_reply WHERE id = ?",
+    ).use { s -> s.setString(1, id); s.executeQuery().use { !it.next() } }
 
     /**
      * Writes down one batch of aggregates a client sent, stamped with when the companion
@@ -254,7 +304,14 @@ class Log(path: String) : AutoCloseable {
             s.setLong(1, cutoff)
             s.executeUpdate()
         }
-        return fetches + diagnostics + labels
+        val links = connection.prepareStatement("DELETE FROM tracked_link WHERE createdAt < ?").use { s ->
+            s.setLong(1, cutoff)
+            s.executeUpdate()
+        }
+        val replies = connection.prepareStatement("DELETE FROM tracking_reply WHERE createdAt < ?").use { s ->
+            s.setLong(1, cutoff); s.executeUpdate()
+        }
+        return fetches + diagnostics + labels + links + replies
     }
 
     override fun close() = connection.close()

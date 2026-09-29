@@ -100,8 +100,11 @@ alone still works on `/diag` the same as it always did.
 | Route | Auth | What |
 |---|---|---|
 | `GET /o/<id>.gif` | none, by necessity | A 1x1 transparent GIF, 42 bytes, `no-store`. Records the fetch |
-| `GET /opens?since=<ms>` | `Authorization: Bearer <token>` | Everything fetched since that moment, oldest first |
+| `GET /opens?since=<ms>` | `Authorization: Bearer <token>` | Every open and click since that moment, oldest first |
 | `POST /labels` | `Authorization: Bearer <token>` | Registers an optional short label for a tracking id |
+| `POST /links` | `Authorization: Bearer <token>` | Registers click destinations for one opted-in tracked message |
+| `POST /replied` | `Authorization: Bearer <token>` | Stops phone alerts after a recipient replies |
+| `GET /c/<id>/<n>` | none, by necessity | Records a classified click and redirects to its destination |
 | `POST /diag` | `Authorization: Bearer <token>` or `<diag-token>` | Aggregated diagnostics, a batch at a time. See below |
 | `GET /health` | none, and never gate it | `ok` |
 
@@ -118,8 +121,9 @@ image, so the client describes it as a first open only.
 
 `/labels` accepts `{"id":"...","label":"Susan, site audit"}`. Rampart calls it only
 after the user opts in to named phone alerts. Without that opt-in, the companion still knows
-only the random id and request metadata. Labels expire under `RAMPART_TRACKER_KEEP_DAYS`
-with the tracking records they describe.
+only the random id and request metadata. Labels and registered click destinations expire
+under `RAMPART_TRACKER_KEEP_DAYS` with the tracking records they describe. Destinations
+exist only for messages whose click switch was on. The plain-text message is never rewritten.
 
 When `RAMPART_NTFY_URL` or `RAMPART_GOTIFY_URL` is set, a person open is posted away from the
 pixel request with a short timeout. The native ntfy request uses the title `Email opened`, the

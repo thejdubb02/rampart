@@ -70,17 +70,31 @@ fun main() {
     // single thread, which would let one slow client hold up somebody's image loading.
     server.executor = Executors.newFixedThreadPool(8)
 
-    server.createContext("/o/") { exchange -> pixel(exchange, log, pushClients, pushes) }
-    server.createContext("/opens") { exchange -> opens(exchange, log, token, pushClients.isNotEmpty()) }
-    server.createContext("/labels") { exchange -> labels(exchange, log, token) }
-    server.createContext("/diag") { exchange -> diag(exchange, log, token, diagToken) }
+    installRoutes(server, log, token, diagToken, pushClients, pushes)
     /*
      * Never behind anything. A health check that answers 200 from a login page says the
      * service is up when it is not, which is the trap the rules file calls out by name.
      */
-    server.createContext("/health") { exchange -> reply(exchange, 200, "ok".toByteArray(), "text/plain") }
     server.start()
     println("Rampart tracker listening on $port")
+}
+
+internal fun installRoutes(
+    server: HttpServer,
+    log: Log,
+    token: String,
+    diagToken: String? = null,
+    pushClients: List<PushClient> = emptyList(),
+    pushes: java.util.concurrent.Executor = java.util.concurrent.Executor { it.run() },
+) {
+    server.createContext("/o/") { exchange -> pixel(exchange, log, pushClients, pushes) }
+    server.createContext("/opens") { exchange -> opens(exchange, log, token, pushClients.isNotEmpty()) }
+    server.createContext("/labels") { exchange -> labels(exchange, log, token) }
+    server.createContext("/links") { exchange -> links(exchange, log, token) }
+    server.createContext("/replied") { exchange -> replied(exchange, log, token) }
+    server.createContext("/c/") { exchange -> click(exchange, log, pushClients, pushes) }
+    server.createContext("/diag") { exchange -> diag(exchange, log, token, diagToken) }
+    server.createContext("/health") { exchange -> reply(exchange, 200, "ok".toByteArray(), "text/plain") }
 }
 
 /**
@@ -109,7 +123,7 @@ private fun pixel(exchange: HttpExchange, log: Log, pushClients: List<PushClient
                     ),
                 ).also(log::record)
             }
-            if (fetch.classification == OpenClassification.PERSON && pushClients.isNotEmpty()) {
+            if (fetch.classification == OpenClassification.PERSON && pushClients.isNotEmpty() && log.alertsEnabled(id)) {
                 val count = log.fetchesFor(id).count { it.classification == OpenClassification.PERSON }
                 val label = log.labelFor(id)
                 val notification = openNotification(label, count)
@@ -156,6 +170,8 @@ private fun opens(exchange: HttpExchange, log: Log, token: String, pushesConfigu
             append(""""userAgent":""").append(quoted(fetch.userAgent)).append(',')
             append(""""network":""").append(quoted(fetch.network))
             append(',').append(""""classification":""").append(quoted(fetch.classification.wireName))
+            append(',').append(""""event":""").append(quoted(fetch.event))
+            append(',').append(""""url":""").append(quoted(fetch.url))
             append("}")
         }
         append("]}")
@@ -186,6 +202,90 @@ private fun labels(exchange: HttpExchange, log: Log, token: String) {
         return
     }
     log.setLabel(TrackingLabel(id, label, System.currentTimeMillis()))
+    reply(exchange, 200, """{"stored":true}""".toByteArray(), "application/json")
+}
+
+private fun links(exchange: HttpExchange, log: Log, token: String) {
+    if (exchange.requestMethod != "POST") {
+        reply(exchange, 405, """{"error":"use POST"}""".toByteArray(), "application/json")
+        return
+    }
+    val given = exchange.requestHeaders.getFirst("Authorization").orEmpty().removePrefix("Bearer ").trim()
+    if (!labelAuthorised(given, token)) {
+        reply(exchange, 401, """{"error":"unauthorised"}""".toByteArray(), "application/json")
+        return
+    }
+    val raw = exchange.requestBody.use { it.readNBytes(65_537) }
+    if (raw.size > 65_536) {
+        reply(exchange, 413, """{"error":"too large"}""".toByteArray(), "application/json")
+        return
+    }
+    val body = parseJson(String(raw, Charsets.UTF_8)) as? Map<*, *>
+    val id = (body?.get("id") as? String)?.takeIf(::validTrackingId)
+    val sentAt = (body?.get("sentAt") as? Double)?.toLong() ?: System.currentTimeMillis()
+    val registered = (body?.get("links") as? List<*>).orEmpty().mapIndexedNotNull { index, value ->
+        (value as? String)?.takeIf { url ->
+            url.length <= 4096 && runCatching { URI(url).scheme.lowercase() in setOf("http", "https") }.getOrDefault(false)
+        }?.let { TrackedLink(id.orEmpty(), index, it, sentAt) }
+    }
+    if (id == null || registered.isEmpty()) {
+        reply(exchange, 400, """{"error":"invalid links"}""".toByteArray(), "application/json")
+        return
+    }
+    log.setLinks(registered)
+    reply(exchange, 200, """{"stored":${registered.size}}""".toByteArray(), "application/json")
+}
+
+private fun click(exchange: HttpExchange, log: Log, pushClients: List<PushClient>, pushes: java.util.concurrent.Executor) {
+    val parts = exchange.requestURI.path.removePrefix("/c/").split('/')
+    val id = parts.getOrNull(0)?.takeIf(::validTrackingId)
+    val number = parts.getOrNull(1)?.toIntOrNull()
+    val link = if (id == null || number == null) null else log.linkFor(id, number)
+    if (link == null) {
+        reply(exchange, 404, "not found".toByteArray(), "text/plain")
+        return
+    }
+    val at = System.currentTimeMillis()
+    val previous = log.fetchesFor(link.id).filter { it.event == "click" && it.url == link.url }
+    val candidate = Fetch(
+        id = link.id, at = at,
+        userAgent = exchange.requestHeaders.getFirst("User-Agent").orEmpty(),
+        network = network(callerAddress(exchange)), event = "click", url = link.url,
+    )
+    val recorded = candidate.copy(
+        classification = classifyOpen(OpenSignals(candidate.userAgent, candidate.network, at, previous, link.createdAt)),
+    )
+    log.record(recorded)
+    if (recorded.classification == OpenClassification.PERSON && log.alertsEnabled(link.id)) {
+        val label = log.labelFor(link.id)
+        val domain = runCatching { URI(link.url).host }.getOrNull().orEmpty()
+        val notification = PushNotification(
+            "Link clicked",
+            if (label.isNullOrBlank()) "A link in a tracked email was clicked" else "$label clicked $domain",
+            link.url,
+        )
+        pushClients.forEach { client -> pushes.execute { runCatching { client.send(notification) } } }
+    }
+    exchange.responseHeaders.add("Location", link.url)
+    exchange.responseHeaders.add("Cache-Control", "no-store")
+    reply(exchange, 302, ByteArray(0), "text/plain")
+}
+
+private fun replied(exchange: HttpExchange, log: Log, token: String) {
+    if (exchange.requestMethod != "POST") {
+        reply(exchange, 405, """{"error":"use POST"}""".toByteArray(), "application/json"); return
+    }
+    val given = exchange.requestHeaders.getFirst("Authorization").orEmpty().removePrefix("Bearer ").trim()
+    if (!labelAuthorised(given, token)) {
+        reply(exchange, 401, """{"error":"unauthorised"}""".toByteArray(), "application/json"); return
+    }
+    val raw = exchange.requestBody.use { it.readNBytes(4097) }
+    val body = parseJson(String(raw, Charsets.UTF_8)) as? Map<*, *>
+    val id = (body?.get("id") as? String)?.takeIf(::validTrackingId)
+    if (id == null) {
+        reply(exchange, 400, """{"error":"invalid id"}""".toByteArray(), "application/json"); return
+    }
+    log.stopAlerts(id, System.currentTimeMillis())
     reply(exchange, 200, """{"stored":true}""".toByteArray(), "application/json")
 }
 

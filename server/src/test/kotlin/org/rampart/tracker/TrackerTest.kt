@@ -4,6 +4,10 @@ import java.nio.file.Files
 import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import java.util.concurrent.ArrayBlockingQueue
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -12,6 +16,43 @@ import kotlin.test.assertTrue
 class TrackerTest {
 
     private fun log(): Log = Log(Files.createTempDirectory("tracker").resolve("t.db").toString())
+
+    @Test
+    fun `link registration needs auth and click redirects immediately`() {
+        log().use { log ->
+            val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+            installRoutes(server, log, "main-token-value")
+            server.start()
+            try {
+                val base = "http://127.0.0.1:${server.address.port}"
+                val body = """{"id":"abc","sentAt":1000,"links":["https://example.org/report"]}"""
+                fun register(token: String?) = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(URI("$base/links")).apply {
+                        token?.let { header("Authorization", "Bearer $it") }
+                    }.POST(HttpRequest.BodyPublishers.ofString(body)).build(),
+                    HttpResponse.BodyHandlers.discarding(),
+                )
+                assertEquals(401, register(null).statusCode())
+                assertEquals(401, register("wrong-token-value").statusCode())
+                assertEquals(200, register("main-token-value").statusCode())
+                val clicked = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build().send(
+                    HttpRequest.newBuilder(URI("$base/c/abc/0")).header("User-Agent", "Mozilla/5.0 Firefox/130").GET().build(),
+                    HttpResponse.BodyHandlers.discarding(),
+                )
+                assertEquals(302, clicked.statusCode())
+                assertEquals("https://example.org/report", clicked.headers().firstValue("Location").orElse(""))
+                assertEquals("click", log.since(0).single().event)
+            } finally {
+                server.stop(0)
+            }
+        }
+    }
+
+    @Test
+    fun `an immediate non-browser click is classified as a scanner`() {
+        val classification = classifyOpen(OpenSignals("mail-fetcher", "", 12_000, emptyList(), 1_000))
+        assertEquals(OpenClassification.SECURITY_SCANNER, classification)
+    }
 
     @Test
     fun `an address is reduced to its network, never kept whole`() {
