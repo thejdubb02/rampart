@@ -478,7 +478,7 @@ internal const val FILE_PAGE = 250
 /** A ceiling on pages, so a server that keeps reporting more cannot keep the page loading forever. */
 private const val MAX_PAGES = 40
 
-internal class FileStore(private val link: FilesTransport) {
+internal class FileStore(internal val link: FilesTransport) {
 
     /** Every node in the account. Blocking; call it off the window's thread. */
     fun tree(): FileTree {

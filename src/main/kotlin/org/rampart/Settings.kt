@@ -26,12 +26,18 @@ data class SavedWindow(val x: Int, val y: Int, val width: Int, val height: Int, 
  * lose the theme.
  */
 object Settings {
-    private val store = JsonStore("settings.json")
+    /** Internal so settings sync (SettingsSync.kt) merges under the same lock every write takes. */
+    internal val store = JsonStore("settings.json")
 
     private fun read(): JsonObject = store.read()
 
+    /** Stamps whatever a synced key the change touched, so it can win or lose on its own. */
     private fun write(change: MutableMap<String, kotlinx.serialization.json.JsonElement>.() -> Unit) =
-        store.write(change)
+        store.write {
+            val before = toMap()
+            change()
+            if (stampChanges(SYNCED_SETTINGS, before, this, System.currentTimeMillis())) SettingsSync.localChanged()
+        }
 
     /** The chosen theme's key, or null before anyone has chosen one. */
     fun theme(): String? = read()["theme"]?.jsonPrimitive?.contentOrNull

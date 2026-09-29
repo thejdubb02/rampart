@@ -182,7 +182,10 @@ internal fun SettingsPane(
                 CompositionLocalProvider(LocalHighlightedSetting provides highlightedSetting) {
                     Column(Modifier.widthIn(max = 720.dp).fillMaxWidth()) {
                         when (page) {
-                            "accounts" -> AccountsPage(accounts, onAddAccount, quotas)
+                            "accounts" -> Column {
+                                AccountsPage(accounts, onAddAccount, quotas)
+                                SettingsSyncSection()
+                            }
                             "security" -> SecurityPage(security, accounts, account, onAccount)
                             "phone" -> PhonePage(security, accounts, account, onAccount)
                             "notifications" -> NotificationsPage(

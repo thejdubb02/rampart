@@ -831,6 +831,12 @@ and by drop, download, open, new folder, rename, move, delete), Save to Files be
 attachment and From Files in the composer. What the server does, and why an attachment is
 copied through Blob/upload rather than by its own blobId, is in `docs/files.md`.
 
+**Settings that follow you between computers (RAM-103) was built on 2026-09-29, on the
+branch `claude/settings-sync`: not released, and not yet checked against a live server.**
+An allowlist of Rampart's own settings goes into `Rampart/settings.json` in each account's
+Files, newest wins per setting, with a switch to turn it off on one computer. Accounts
+without file storage keep the local file and say so. `docs/settings-sync.md` has the design.
+
 ---
 
 ## Tier 6, the Stalwart admin console
