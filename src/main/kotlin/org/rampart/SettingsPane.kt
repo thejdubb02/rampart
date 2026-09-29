@@ -184,6 +184,7 @@ internal fun SettingsPane(
                         when (page) {
                             "accounts" -> Column {
                                 AccountsPage(accounts, onAddAccount, quotas)
+                                AccountColoursSection(accounts)
                                 SettingsSyncSection()
                             }
                             "security" -> SecurityPage(security, accounts, account, onAccount)

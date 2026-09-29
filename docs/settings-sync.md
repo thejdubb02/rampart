@@ -35,8 +35,8 @@ An explicit allowlist, `SYNCED_SETTINGS` and `SYNCED_ASSISTANT` in `SettingsSync
 `Settings.kt` from now on until somebody adds it to the list on purpose.
 
 Synced, from `settings.json`: `theme`, `customThemes`, `iconPack`, `loader`, `density`,
-`tintRowsByTag`, `tagColours`, `hoverActions`, `savedSearches`, `order`, `markReadDelay`,
-`archiveBy`,
+`tintRowsByTag`, `tagColours`, `tintRowsByAccount`, `hoverActions`, `savedSearches`,
+`order`, `markReadDelay`, `archiveBy`,
 `messageMode`, `messageScale`, `undoSeconds`, `undoBarSeconds`, `signatureAboveQuote`,
 `confirmBeforeSend`, `defaultReplyAll`, `exactIdentitiesOnly`, `subAddressDelimiter`,
 `attachmentPosition`, `attachmentClickBehavior`, `trackedDomains`, `changelogSuppressed`.
@@ -61,6 +61,10 @@ Never synced, and why:
   and widening it is a decision made in front of a message.
 - **Machine state:** the tracking cursor, the last changelog seen, the stamps below, and the
   sync switch itself.
+- **Account colours.** They are keyed by account, and this file is written to every
+  account's own storage, so syncing them would put each account's address and server into
+  the others. An account's colour starts as one worked out from its key, so it is the same
+  on every computer until somebody changes it on one.
 
 ## The file
 
@@ -152,8 +156,8 @@ dragging a slider is one write), and every thirty minutes for changes made elsew
 background thread, one account at a time. With more than one account, a sync that brought
 something in from the second account's file runs once more so the first account's file gets
 it too. What another computer changed is redrawn at once for the settings the window holds
-in memory (theme, icons, loader, density, tag colours and tinting, hover buttons, undo
-strip, sort order,
+in memory (theme, icons, loader, density, tag colours and tinting, tinting by account, hover
+buttons, undo strip, sort order,
 message page and size, saved searches).
 
 ## The settings page

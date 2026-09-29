@@ -2493,6 +2493,7 @@ private fun Reader(
         if ("settings.tintRowsByTag" in changed) tintRows = Settings.tintRowsByTag()
         if ("settings.tagColours" in changed) tagColours = Settings.tagColours()
         if ("settings.hoverActions" in changed) HoverChoice.reload()
+        if ("settings.tintRowsByAccount" in changed || "settings.accountColours" in changed) AccountTintState.reload()
         if ("settings.undoBarSeconds" in changed) undoBarSeconds = Settings.undoBarSeconds()
         if ("settings.order" in changed) order = Settings.order()
         if ("settings.messageMode" in changed) messageMode = Settings.messageMode()
@@ -5348,6 +5349,7 @@ private fun Reader(
             LocalSenderPhotos provides senderPhotos,
             LocalTagColours provides tagColours,
             LocalTintRowsByTag provides tintRows,
+            LocalAccountTints provides AccountTintState.tints(sessions.map { it.key }),
             LocalLoader provides loader,
             LocalListDensity provides density,
         ) {
@@ -8118,9 +8120,12 @@ private fun MessageRow(
      * The first tag wins where a message has several. Blending them makes a brown nobody
      * chose, and the chips beside the subject already say what the others are.
      */
-    val tint = if (!LocalTintRowsByTag.current) null else {
-        tagsOf(message.keywords, LocalTagColours.current).firstOrNull()?.let { Color(it.color) }
+    val tagTint = if (!LocalTintRowsByTag.current) null else {
+        tagsOf(message.keywords, LocalTagColours.current).firstOrNull()?.color
     }
+    // The account's colour where there is no tag's, and only in the merged inbox, which is
+    // the only list whose rows carry an account. See [rowTint] for why the tag wins.
+    val tint = rowTint(tagTint, LocalAccountTints.current[message.account])?.let { Color(it) }
     val background = when {
         selected -> MaterialTheme.colorScheme.surfaceVariant
         tint != null && !message.seen -> tint.copy(alpha = 0.22f)
