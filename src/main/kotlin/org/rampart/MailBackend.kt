@@ -149,6 +149,14 @@ internal interface MailBackend {
     /** The account's state and one message's stamp, for deciding whether a kept copy is still good. */
     fun stateAndStamp(id: String): Pair<String?, ContentStamp?> = mailState() to contentStamp(id)
 
+    /**
+     * A page of a person's history, from or to any of [addresses], newest first, and the
+     * counts with the first page. Null where this server cannot be asked such a thing, which
+     * is IMAP: a SEARCH per address over every folder is a round trip per folder, and the
+     * copy on this computer answers instead. See PersonHistory.kt.
+     */
+    fun personPage(addresses: List<String>, position: Int, limit: Int, withStats: Boolean): PersonPage? = null
+
     /** The address books and every card in them. */
     fun booksAndContacts(): Pair<List<ContactBook>, List<Pair<Contact, JsonObject>>> =
         runCatching { addressBooks() }.getOrDefault(emptyList()) to contacts()
