@@ -207,8 +207,9 @@ internal object WritingHelp {
         return ask + "\n\nThe conversation this replies to, oldest first:\n" + thread(subject, turns)
     }
 
-    fun helpPacket(model: String, instruction: String, subject: String, turns: List<Turn>): String =
-        Llm.packet(model, helpSystem(), helpUser(instruction, subject, turns), WRITE_TOKENS)
+    /** [extras] is the tone sample and an attached file, when the person asked for them (RookExtras.kt). */
+    fun helpPacket(model: String, instruction: String, subject: String, turns: List<Turn>, extras: RookExtras = RookExtras.NONE): String =
+        Llm.packet(model, helpSystem() + extras.system(), helpUser(instruction, subject, turns) + extras.user(), WRITE_TOKENS)
 
     // Refine
 
@@ -339,8 +340,8 @@ internal object WritingHelp {
     fun repliesUser(subject: String, turns: List<Turn>): String =
         "Suggest replies to the latest message in this conversation, oldest first:\n" + thread(subject, turns)
 
-    fun repliesPacket(model: String, subject: String, turns: List<Turn>): String =
-        Llm.packet(model, repliesSystem(), repliesUser(subject, turns), REPLY_TOKENS)
+    fun repliesPacket(model: String, subject: String, turns: List<Turn>, extras: RookExtras = RookExtras.NONE): String =
+        Llm.packet(model, repliesSystem() + extras.system(), repliesUser(subject, turns) + extras.user(), REPLY_TOKENS)
 
     /**
      * The replies in the model's answer, cleaned, without repeats, at most [MOST_REPLIES].

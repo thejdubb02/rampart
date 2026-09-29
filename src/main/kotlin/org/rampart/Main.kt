@@ -2477,6 +2477,9 @@ private fun Reader(
     }
     // An event Rook proposed, as a card waiting for Save. See CalendarFromMailUi.kt.
     ProposedEventDialog()
+    // The same for a task, and whether any account can keep one. See TasksUi.kt.
+    ProposedTaskDialog()
+    TasksFollow(sessions.map { it.jmap })
 
     // The page or the panel beside the mail: either one showing is a reason to read again.
     val contactsShowing = contactsOpen || AppBar.showing(SideTool.CONTACTS)
@@ -3836,6 +3839,13 @@ private fun Reader(
         val open = selected?.takeIf { accountOf(it) == key }
         val openText = open?.let { cardFor(it).body }?.let(::plainTextOf).orEmpty()
         open?.let { chatShown += it.id }
+        // Only the open message can be linked from a task Rook proposes. See TaskFromMail.kt.
+        val tasks = taskToolsFor(
+            here?.jmap,
+            here?.let { shortAccountName(it.account.name, it.account.email) }.orEmpty(),
+            open?.let { taskLinkOf(it, cardFor(it).body) },
+        )
+        val attached = RookAttachment.file
         scope.launch {
             val added = withContext(Dispatchers.IO) {
                 runCatching {
@@ -3846,7 +3856,9 @@ private fun Reader(
                             key = Secrets.loadNamed(Assistant.KEY),
                             system = Chat.system(folders, who) + "\n\n" + settingsPrompt() +
                                 "\n\n" + calendarPrompt(java.time.LocalDate.now(), java.time.ZoneId.systemDefault()) +
-                                open?.let { "\n\n" + Chat.openMessage(it, openText) }.orEmpty(),
+                                "\n\n" + taskPrompt(java.time.LocalDate.now(), java.time.ZoneId.systemDefault(), open != null) +
+                                open?.let { "\n\n" + Chat.openMessage(it, openText) }.orEmpty() +
+                                rookFileContext(attached),
                             history = history,
                             shown = chatShown,
                             tools = toolsFor(key),
@@ -3855,6 +3867,7 @@ private fun Reader(
                             },
                             settings = settings,
                             calendar = calendar,
+                            tasks = tasks,
                         )
                     } finally {
                         drafted += settings.drafted
@@ -3864,6 +3877,7 @@ private fun Reader(
             said = said + added
             settingCards = settingCards.add(drafted)
             ProposedEvents.offer(calendar, here?.jmap, key)
+            ProposedTasks.offer(tasks, here?.jmap)
             chatThinking = false
         }
     }
@@ -4653,6 +4667,7 @@ private fun Reader(
                     folder = currentFolderName(key),
                     subject = cardSummary.subject,
                     turns = { summariseTurns(key, cardSummary) },
+                    backend = sessions.firstOrNull { it.key == key }?.jmap,
                     onPick = { words ->
                         sendError = null; sendDetail = null
                         val all = bareReplyAll(Settings.defaultReplyAll(), hasOtherRecipients(cardSummary, card.body, ours))
@@ -4810,7 +4825,7 @@ private fun Reader(
             "calendar" -> { calendarOpen = true; settingsOpen = false; dashboardOpen = false; contactsOpen = false }
             // Rook and the other panels beside the mail, the same toggle their button and
             // their Ctrl key are.
-            "assistant", "side-calendar", "side-contacts", "side-files" -> SideTool.byCommand(id)?.let { AppBar.toggle(it) }
+            "assistant", "side-calendar", "side-contacts", "side-files", "side-tasks" -> SideTool.byCommand(id)?.let { AppBar.toggle(it) }
             // Only where there is a conversation. Muting one message is not a thing, and a
             // command that quietly does nothing is worse than one that is not offered.
             "mute" -> selected?.takeIf { thread.size > 1 }?.let { muteConversation(it, !conversationMuted) }
@@ -5461,6 +5476,11 @@ private fun Reader(
                             }
                         },
                         modifier = Modifier.fillMaxSize(),
+                        // Saved prompts and a file as context. See RookExtrasUi.kt.
+                        extras = { typed, enabled, insert ->
+                            val key = writingAccount()
+                            RookPanelExtras(key?.let { session(it).jmap }, key, typed, enabled, insert)
+                        },
                     )
                     SideTool.CALENDAR -> {
                         val key = (here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key)
@@ -5475,6 +5495,11 @@ private fun Reader(
                     SideTool.FILES -> FilesPanel(writingAccount()?.let { session(it) }) { folder ->
                         AppBar.close(SideTool.FILES)
                         FilesPage.openAt(folder)
+                    }
+                    SideTool.TASKS -> {
+                        val key = (here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key)
+                        val open = sessions.firstOrNull { it.key == key }
+                        TasksPanel(open?.jmap, open?.let { shortAccountName(it.account.name, it.account.email) }.orEmpty())
                     }
                 }
             },
@@ -9259,6 +9284,8 @@ internal fun Message(
                     }
                     // A proper invitation already has its own card, so the chip is for everything else.
                     if (invitation == null) addToCalendar?.let { AddToCalendar(it, summary, body) }
+                    // Make a task, on the same account's server. See TasksUi.kt.
+                    addToCalendar?.let { MakeTask(it, summary, body) }
 
                     /*
                      * The sign-in code, in a size somebody can read across a desk.

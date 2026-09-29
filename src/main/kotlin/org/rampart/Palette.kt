@@ -87,6 +87,7 @@ internal val COMMANDS: List<Command> = listOf(
     Command("Calendar beside the mail", "Ctrl+2", "side-calendar"),
     Command("Contacts beside the mail", "Ctrl+3", "side-contacts"),
     Command("Files beside the mail", "Ctrl+4", "side-files"),
+    Command("Tasks beside the mail", "Ctrl+5", "side-tasks"),
     Command("How your mail is going", null, "dashboard"),
     Command("New folder", null, "new-folder"),
     // Both of these act on what is open, like Reply does, and both were reachable only by

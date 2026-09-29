@@ -88,6 +88,11 @@ internal fun ChatPane(
      * instead, because there the width is whatever the panel was dragged to.
      */
     modifier: Modifier = Modifier.width(360.dp),
+    /**
+     * A row above the box, given what is typed, whether it may be used, and a way to put
+     * words in the box. The window puts saved prompts and a file as context there.
+     */
+    extras: @Composable (typed: () -> String, enabled: Boolean, insert: (String) -> Unit) -> Unit = { _, _, _ -> },
 ) {
     var typed by remember { mutableStateOf("") }
     var asking by remember { mutableStateOf<String?>(null) }
@@ -205,6 +210,7 @@ internal fun ChatPane(
                     }
                 }
             }
+            extras({ typed }, !thinking) { typed = it }
             OutlinedTextField(
                 value = typed,
                 onValueChange = { typed = it },

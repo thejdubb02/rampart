@@ -1676,21 +1676,56 @@ internal class Jmap private constructor(
      * request path, with the file storage capability named for those calls and no others,
      * for the reason given on [call].
      */
-    internal fun fileStore(): FileStore? {
+    internal fun fileStore(): FileStore? = filesTransport()?.let(::FileStore)
+
+    /** The signed file storage path on its own, for a feature that keeps one file there (SavedPrompts.kt). */
+    internal fun filesTransport(): FilesTransport? {
         if (!hasFileStorage) return null
         val jmap = this
-        return FileStore(
-            object : FilesTransport {
-                override val accountId: String get() = jmap.accountId
-                override val canSliceBlobs: Boolean get() = BLOB in capabilities
-                override fun fileCall(vararg invocations: JsonArray): List<JsonArray> =
-                    call(*invocations, also = FILENODE)
-                override fun blobCall(vararg invocations: JsonArray): List<JsonArray> =
-                    call(*invocations, also = BLOB)
-                override fun upload(file: Path): Attachment = jmap.upload(file)
-                override fun download(attachment: Attachment, into: Path): Path = jmap.download(attachment, into)
-            },
-        )
+        return object : FilesTransport {
+            override val accountId: String get() = jmap.accountId
+            override val canSliceBlobs: Boolean get() = BLOB in capabilities
+            override fun fileCall(vararg invocations: JsonArray): List<JsonArray> =
+                call(*invocations, also = FILENODE)
+            override fun blobCall(vararg invocations: JsonArray): List<JsonArray> =
+                call(*invocations, also = BLOB)
+            override fun upload(file: Path): Attachment = jmap.upload(file)
+            override fun download(attachment: Attachment, into: Path): Path = jmap.download(attachment, into)
+        }
+    }
+
+    /**
+     * Requests to this server's own WebDAV tree, signed with this session's credential, for
+     * tasks over Stalwart's CalDAV (TaskStore.kt). The same origin the JMAP API is on, so it
+     * reaches the server the person signed in to and nowhere else. Null when the session is
+     * not signed with a password, since then there is no login name to put in the path.
+     */
+    internal fun davTransport(): DavTransport? {
+        val login = credential.takeIf { it.startsWith("Basic ") }?.let {
+            runCatching { String(Base64.getDecoder().decode(it.removePrefix("Basic ")), Charsets.UTF_8).substringBefore(':') }.getOrNull()
+        }?.ifBlank { null } ?: return null
+        val origin = URI.create(apiUrl).resolve("/")
+        return object : DavTransport {
+            override val user: String = login
+
+            override fun send(method: String, path: String, body: String?, headers: Map<String, String>): DavReply = try {
+                val target = origin.resolve(path)
+                if (target.host != origin.host || target.scheme != origin.scheme || target.port != origin.port) {
+                    throw JmapError("The calendar address pointed away from this server, so Rampart did not follow it.")
+                }
+                val request = HttpRequest.newBuilder(target)
+                    .header("Authorization", credential)
+                    .timeout(Duration.ofSeconds(60))
+                    .method(method, body?.let { HttpRequest.BodyPublishers.ofString(it) } ?: HttpRequest.BodyPublishers.noBody())
+                headers.forEach { (name, value) -> request.header(name, value) }
+                val response = http.send(request.build(), HttpResponse.BodyHandlers.ofString())
+                DavReply(response.statusCode(), response.body().orEmpty())
+            } catch (e: JmapError) {
+                throw e
+            } catch (e: Exception) {
+                throw JmapError(plainNetworkError(e, origin.host ?: apiUrl))
+            }
+        }
     }
 
     /**

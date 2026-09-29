@@ -1172,6 +1172,7 @@ internal fun Composer(
                         account = account,
                         folder = folder,
                         onReplace = { apply(TextFieldValue(it)) },
+                        backend = schedule?.backend,
                     )
                 }
                 HorizontalDivider()

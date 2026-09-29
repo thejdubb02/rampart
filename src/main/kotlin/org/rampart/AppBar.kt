@@ -126,6 +126,7 @@ private fun digitOf(key: Key): Int? = when (key) {
     Key.Two, Key.NumPad2 -> 2
     Key.Three, Key.NumPad3 -> 3
     Key.Four, Key.NumPad4 -> 4
+    Key.Five, Key.NumPad5 -> 5
     else -> null
 }
 
@@ -221,6 +222,8 @@ private fun Bar(
             // Files is only for an account that keeps files, the way its old sidebar button
             // was. The key still answers, and the panel says why there is nothing in it.
             if (tool == SideTool.FILES && !FilesPage.offered && !AppBar.showing(tool)) return@forEach
+            // Tasks the same way, for an account with somewhere to keep one (TasksUi.kt).
+            if (tool == SideTool.TASKS && !TasksPanelState.offered && !AppBar.showing(tool)) return@forEach
             BarButton(tool, working)
         }
         Spacer(Modifier.weight(1f))
@@ -272,6 +275,7 @@ private fun BarButton(tool: SideTool, working: Boolean) {
                 SideTool.CALENDAR -> RampartIcons.Calendar
                 SideTool.CONTACTS -> RampartIcons.Contacts
                 SideTool.FILES -> FilesGlyph
+                SideTool.TASKS -> RampartIcons.Check
             }
             if (glyph == null) {
                 RookAvatar(size = 20.dp, ring = open, working = working)

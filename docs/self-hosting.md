@@ -22,7 +22,8 @@ which means offline. The mailbox dashboard: volume in and out, how much junk you
 who you talk to, who you never reply to, how fast you answer and what is still waiting on
 you. Folder management. The command palette and the shortcuts. Templates. Undo-send, which
 is held in the client. Read receipts, which are a standard mail header and not a tracker.
-Recipient autocomplete.
+Recipient autocomplete. Rook's Match my tone, which samples your own Sent folder. Saved
+prompts on an account without Files, kept on this computer and labelled so.
 
 **This is the default shape and the one to aim for.** The dashboard is the worked example:
 every number on it is counted from mail already in the mailbox, so it needs no pixel, no
@@ -83,6 +84,13 @@ server what it can do and hides what it cannot.
   a separate protocol Rampart does not speak, so an IMAP account gets a sentence saying so.
   The same goes for what reads and writes it from the mail: Add to calendar, Help me
   schedule and Rook's calendar tools.
+- **Tasks from mail and the Tasks panel**, which need somewhere on the server to keep a
+  task: JMAP Tasks (`urn:ietf:params:jmap:tasks`) where a server advertises it, otherwise
+  Stalwart's own CalDAV, written as you with the mail sign-in. Stalwart 0.16 offers the
+  second. Any other account hides the button. See `rook-extras.md`.
+- **Files as context for Rook, and saved prompts kept on the server**, which need JMAP
+  file storage (`urn:ietf:params:jmap:filenode`). Without it there is no Add a file, and
+  saved prompts stay on this computer.
 - **Instant new-mail push**, which needs JMAP over WebSocket. Without it Rampart polls, so
   the mail still arrives, a little later.
 - **Server-side settings, identities, aliases and the admin console**, which are Stalwart's

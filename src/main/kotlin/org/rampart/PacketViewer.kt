@@ -38,6 +38,8 @@ internal fun PacketViewer(
     onSend: () -> Unit,
     onAgree: () -> Unit,
     onDismiss: () -> Unit,
+    /** One sentence above the packet about something in it worth pointing at, such as a sample of the person's own mail. */
+    note: String? = null,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -52,6 +54,10 @@ internal fun PacketViewer(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline,
                     )
+                    Spacer(Modifier.height(8.dp))
+                }
+                if (note != null) {
+                    Text(note, style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.height(8.dp))
                 }
                 // Read only and scrollable within its own bounds, the same way the filter

@@ -11,10 +11,10 @@ class SideToolsTest {
     @Test
     fun `the bar lists Rook, Calendar, Contacts and Files, in that order`() {
         assertEquals(
-            listOf(SideTool.ROOK, SideTool.CALENDAR, SideTool.CONTACTS, SideTool.FILES),
+            listOf(SideTool.ROOK, SideTool.CALENDAR, SideTool.CONTACTS, SideTool.FILES, SideTool.TASKS),
             SideTool.entries.toList(),
         )
-        assertEquals(listOf(1, 2, 3, 4), SideTool.entries.map { it.digit })
+        assertEquals(listOf(1, 2, 3, 4, 5), SideTool.entries.map { it.digit })
     }
 
     @Test
@@ -92,7 +92,7 @@ class SideToolsTest {
         assertNull(SideTool.forKey(2, ctrl = false, shift = false, alt = false, meta = false))
         assertNull(SideTool.forKey(2, ctrl = true, shift = true, alt = false, meta = false))
         assertNull(SideTool.forKey(2, ctrl = true, shift = false, alt = true, meta = false))
-        assertNull(SideTool.forKey(5, ctrl = true, shift = false, alt = false, meta = false))
+        assertNull(SideTool.forKey(6, ctrl = true, shift = false, alt = false, meta = false))
         assertNull(SideTool.forKey(null, ctrl = true, shift = false, alt = false, meta = false))
     }
 

@@ -92,11 +92,24 @@ internal class WritingHelpState {
     /** A packet shown before the first call goes, and what pressing Send it does. */
     var waiting by mutableStateOf<HeldPacket?>(null)
 
+    /** A document from Files sent as context with Help me write, until it is taken off. See RookExtras.kt. */
+    var file by mutableStateOf<AttachedFile?>(null)
+
+    /** Why the last Help me write went without a sample of the person's writing, when Match my tone is on. */
+    var toneNote by mutableStateOf<String?>(null)
+
     val busy: Boolean get() = running != null
 }
 
-/** A packet held for the person to look at, and the call that goes when they agree. */
-internal class HeldPacket(val packet: String, val go: () -> Unit)
+/**
+ * A packet held for the person to look at, and the call that goes when they agree.
+ * [tone] is true when it carries a sample of their sent mail, which is agreed to on its own.
+ */
+internal class HeldPacket(val packet: String, val go: () -> Unit, val tone: Boolean = false)
+
+/** What the packet viewer says above a packet that carries a sample of the person's own mail. */
+internal const val TONE_NOTE =
+    "Match my tone is on, so this also carries a sample of your own sent mail, between <<<STYLE and STYLE>>>."
 
 /**
  * The composer's text drawn with the proofreading suggestions marked.
@@ -151,6 +164,8 @@ internal fun WritingHelpPanel(
     account: String?,
     folder: String?,
     onReplace: (String) -> Unit,
+    /** The account's session, for its sent mail, its Files and its saved prompts. Null leaves those out. */
+    backend: MailBackend? = null,
 ) {
     val scope = rememberCoroutineScope()
     // Read when the panel opens and again after each call, rather than on every keystroke,
@@ -164,7 +179,7 @@ internal fun WritingHelpPanel(
      * One way out to the model for every button here. The gate is asked again at the moment
      * of the press, because the ceiling may have been reached by the call before this one.
      */
-    fun call(label: String, verb: String, packetFor: (String) -> String, handle: (String) -> Unit) {
+    fun call(label: String, verb: String, packetFor: (String) -> String, tone: Boolean = false, handle: (String) -> Unit) {
         val config = Assistant.config()
         val stop = Assistant.whyNot(Assistant.COMPOSE, config, account, folder)
         if (stop != null) {
@@ -196,17 +211,19 @@ internal fun WritingHelpPanel(
                 }
             }
         }
-        if (Assistant.agreed(Assistant.COMPOSE)) {
+        // A sample of sent mail is agreed to on its own, so the first one shows its packet
+        // even to somebody who agreed to Help me write long ago.
+        if (Assistant.agreed(Assistant.COMPOSE) && (!tone || Assistant.agreed(TONE_FEATURE))) {
             go()
         } else {
-            state.waiting = HeldPacket(packet, go)
+            state.waiting = HeldPacket(packet, go, tone)
         }
     }
 
     /** A rewrite of the person's own part, shown as a preview under [label]. */
-    fun rewrite(label: String, verb: String, packetFor: (String) -> String) {
+    fun rewrite(label: String, verb: String, tone: Boolean = false, packetFor: (String) -> String) {
         val before = own
-        call(label, verb, packetFor) { answer ->
+        call(label, verb, packetFor, tone) { answer ->
             val text = WritingHelp.cleanText(answer, before)
             if (text.isBlank()) throw LlmError("Rook sent back nothing that could go in a draft.")
             state.proofs = emptyList()
@@ -226,8 +243,29 @@ internal fun WritingHelpPanel(
     fun write() {
         val instruction = state.instruction.trim()
         if (instruction.isEmpty() || state.busy) return
-        rewrite("Help me write", "write that") { model ->
-            WritingHelp.helpPacket(model, instruction, subject, replyContext)
+        val file = state.file
+        val mail = backend
+        state.toneNote = null
+        if (mail == null || !ToneSetting.on()) {
+            rewrite("Help me write", "write that") { model ->
+                WritingHelp.helpPacket(model, instruction, subject, replyContext, RookExtras(file = file))
+            }
+            return
+        }
+        // The sample is read from Sent first, off the window's thread, and only then is the
+        // packet built, so what the viewer shows is what goes.
+        state.running = "Help me write"
+        scope.launch {
+            val read = withContext(Dispatchers.IO) {
+                runCatching { readToneSample(mail, account?.let { Assistant.deniedFolders(it) }.orEmpty(), ::plainTextOf) }
+                    .getOrElse { ToneRead.Skipped("Your sent mail could not be read, so no sample of your writing was sent.") }
+            }
+            state.running = null
+            val style = (read as? ToneRead.Sample)?.text.orEmpty()
+            state.toneNote = (read as? ToneRead.Skipped)?.reason
+            rewrite("Help me write", "write that", tone = style.isNotBlank()) { model ->
+                WritingHelp.helpPacket(model, instruction, subject, replyContext, RookExtras(style, file))
+            }
         }
     }
 
@@ -272,6 +310,21 @@ internal fun WritingHelpPanel(
                 enabled = !state.busy,
                 onSubmit = ::write,
             )
+            if (backend != null && account != null) {
+                val shelf = remember(backend, account) { promptShelfOf(backend, account) }
+                // Read once when the panel opens rather than from disk on every keystroke.
+                val matching = remember { ToneSetting.on() }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    SavedPromptsMenu(shelf, { state.instruction }, !state.busy) { state.instruction = it }
+                    AttachFileForRook(backend, state.file, !state.busy) { state.file = it }
+                    if (matching) {
+                        Text("Matching your tone", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                    }
+                }
+                state.toneNote?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                }
+            }
             if (own.isNotBlank()) {
                 Row(
                     Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 6.dp),
@@ -334,8 +387,12 @@ internal fun WritingHelpPanel(
                 state.waiting = null
                 held.go()
             },
-            onAgree = { Assistant.agree(Assistant.COMPOSE) },
+            onAgree = {
+                Assistant.agree(Assistant.COMPOSE)
+                if (held.tone) Assistant.agree(TONE_FEATURE)
+            },
             onDismiss = { state.waiting = null },
+            note = if (held.tone) TONE_NOTE else null,
         )
     }
 }
@@ -538,6 +595,8 @@ internal class SuggestReplies(private val scope: CoroutineScope) {
         subject: String,
         turns: suspend () -> List<Turn>,
         onPick: (String) -> Unit,
+        /** The account's session, for a sample of its sent mail when Match my tone is on. */
+        backend: MailBackend? = null,
     ): SuggestRepliesActions? {
         val config = Assistant.config()
         if (config.mode == AssistantMode.OFF) return null
@@ -549,7 +608,7 @@ internal class SuggestReplies(private val scope: CoroutineScope) {
             error = if (ours) error else null,
             detail = if (ours) detail else null,
             waiting = if (ours) waiting else null,
-            onSuggest = { suggest(threadId, account, folder, subject, turns) },
+            onSuggest = { suggest(threadId, account, folder, subject, turns, backend) },
             onPick = onPick,
             onCloseWaiting = { waiting = null },
         )
@@ -561,6 +620,7 @@ internal class SuggestReplies(private val scope: CoroutineScope) {
         folder: String?,
         subject: String,
         turns: suspend () -> List<Turn>,
+        backend: MailBackend?,
     ) {
         if (running) return
         val config = Assistant.config()
@@ -571,8 +631,18 @@ internal class SuggestReplies(private val scope: CoroutineScope) {
         if (error != null) return
         running = true
         scope.launch {
+            var tone = false
             val packet = try {
-                withContext(Dispatchers.IO) { WritingHelp.repliesPacket(config.model, subject, turns()) }
+                withContext(Dispatchers.IO) {
+                    // A sample that cannot be read is left out rather than stopping the replies.
+                    val style = if (backend != null && ToneSetting.on()) {
+                        (runCatching { readToneSample(backend, Assistant.deniedFolders(account), ::plainTextOf) }.getOrNull() as? ToneRead.Sample)?.text.orEmpty()
+                    } else {
+                        ""
+                    }
+                    tone = style.isNotBlank()
+                    WritingHelp.repliesPacket(config.model, subject, turns(), RookExtras(style = style))
+                }
             } catch (e: CancellationException) {
                 running = false
                 throw e
@@ -583,13 +653,13 @@ internal class SuggestReplies(private val scope: CoroutineScope) {
             }
             running = false
             if (thread != threadId) return@launch
-            if (Assistant.agreed(Assistant.COMPOSE)) {
+            if (Assistant.agreed(Assistant.COMPOSE) && (!tone || Assistant.agreed(TONE_FEATURE))) {
                 send(threadId, packet, config)
             } else {
-                waiting = HeldPacket(packet) {
+                waiting = HeldPacket(packet, {
                     waiting = null
                     scope.launch { send(threadId, packet, config) }
-                }
+                }, tone)
             }
         }
     }
@@ -711,8 +781,12 @@ internal fun SuggestRepliesCard(actions: SuggestRepliesActions) {
             packet = held.packet,
             agreed = false,
             onSend = held.go,
-            onAgree = { Assistant.agree(Assistant.COMPOSE) },
+            onAgree = {
+                Assistant.agree(Assistant.COMPOSE)
+                if (held.tone) Assistant.agree(TONE_FEATURE)
+            },
             onDismiss = actions.onCloseWaiting,
+            note = if (held.tone) TONE_NOTE else null,
         )
     }
 }
