@@ -1251,6 +1251,9 @@ private fun Reader(
     }
     var here by remember { mutableStateOf<Pair<String, Mailbox>?>(null) }
     var emails by remember { mutableStateOf<List<Summary>>(emptyList()) }
+    // Which folder the rows in `emails` came from, so switching folders never shows the
+    // last folder's rows under the new folder's name while the new one loads.
+    var emailsFrom by remember { mutableStateOf<Any?>(null) }
     var selected by remember { mutableStateOf<Summary?>(null) }
     /**
      * Everything fetched for the open conversation's messages, by id. See [Card].
@@ -1915,6 +1918,8 @@ private fun Reader(
         val request = ListRequest(key, mailbox.id, query, showingResults, viewingTag, quick, 0)
         val epoch = ++listEpoch
         loadingMore = false
+        val folder = listOf(key, mailbox.id, viewingTag, showingResults)
+        if (folder != emailsFrom) { emails = emptyList(); emailsFrom = folder }
         fun live() = epoch == listEpoch && here?.let {
             ListRequest(it.first, it.second.id, query, showingResults, viewingTag, quick, 0)
         } == request
