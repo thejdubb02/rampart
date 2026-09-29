@@ -99,7 +99,7 @@ class FiltersTest {
     fun `a rule we do not understand is not rebuilt`() {
         val odd = """
             /* @metadata:begin
-            {"version":1,"rules":[{"id":"x","name":"Lists","conditions":[{"field":"list_id",
+            {"version":1,"rules":[{"id":"x","name":"Lists","conditions":[{"field":"date",
             "comparator":"contains","value":"news"}],"actions":[{"type":"move","value":"Lists"}]}]}
             @metadata:end */
         """.trimIndent()

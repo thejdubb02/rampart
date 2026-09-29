@@ -18,7 +18,7 @@ class RuleInWordsTest {
     private val dmarc = """
         {"name":"DMARC reports","matchType":"all","stopProcessing":false,
          "conditions":[{"field":"subject","comparator":"contains","value":"Report Domain"}],
-         "actions":[{"type":"mark_read"},{"type":"delete"}]}
+         "actions":[{"type":"mark_read"},{"type":"discard"}]}
     """.trimIndent()
 
     @Test
@@ -71,7 +71,7 @@ class RuleInWordsTest {
     @Test
     fun `an invented folder is refused, and names the one it invented`() {
         val answer = """
-            {"name":"Bills","conditions":[{"field":"from","comparator":"contains","value":"billing@"}],
+            {"name":"Bills","matchType":"all","stopProcessing":false,"conditions":[{"field":"from","comparator":"contains","value":"billing@"}],
              "actions":[{"type":"move","value":"Bills"}]}
         """.trimIndent()
         assertEquals("There is no folder called Bills.", ruleOfAnswer(answer, folders).exceptionOrNull()?.message)
@@ -80,7 +80,7 @@ class RuleInWordsTest {
     @Test
     fun `a folder that is only wrong about case is corrected`() {
         val answer = """
-            {"name":"Bills","conditions":[{"field":"from","comparator":"contains","value":"billing@"}],
+            {"name":"Bills","matchType":"all","stopProcessing":false,"conditions":[{"field":"from","comparator":"contains","value":"billing@"}],
              "actions":[{"type":"move","value":"invoices"}]}
         """.trimIndent()
         assertEquals(listOf(Act.FileInto("Invoices")), ruleOfAnswer(answer, folders).getOrThrow().acts)
@@ -88,7 +88,7 @@ class RuleInWordsTest {
 
     @Test
     fun `a rule with nothing to do is refused`() {
-        val answer = """{"name":"Nothing","conditions":[{"field":"from","comparator":"is","value":"x@y.z"}],"actions":[]}"""
+        val answer = """{"name":"Nothing","matchType":"all","stopProcessing":false,"conditions":[{"field":"from","comparator":"is","value":"x@y.z"}],"actions":[]}"""
         assertTrue(ruleOfAnswer(answer, folders).isFailure)
     }
 
@@ -102,12 +102,12 @@ class RuleInWordsTest {
      * The one thing in the answer that is never taken as given.
      */
     @Test
-    fun `the id is ours, never the model's`() {
+    fun `an id from the model is refused`() {
         val answer = """
-            {"id":"f1","name":"Bills","conditions":[{"field":"from","comparator":"is","value":"a@b.c"}],
+            {"id":"f1","name":"Bills","matchType":"all","stopProcessing":false,"conditions":[{"field":"from","comparator":"is","value":"a@b.c"}],
              "actions":[{"type":"delete"}]}
         """.trimIndent()
-        assertTrue(ruleOfAnswer(answer, folders).getOrThrow().id != "f1")
+        assertEquals("The rule contained unsupported field 'id'.", ruleOfAnswer(answer, folders).exceptionOrNull()?.message)
     }
 
     /** The prompt has to carry the real folder names, or every move is a guess. */

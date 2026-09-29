@@ -4055,6 +4055,23 @@ private fun Reader(
         }
     }
 
+    fun createFilterFolder(name: String) {
+        val targets = sessions.filter { session ->
+            (filterAccount == null || session.key == filterAccount) &&
+                mailboxes[session.key].orEmpty().none { it.name.equals(name, ignoreCase = true) }
+        }
+        filtersSaving = true
+        scope.launch {
+            filtersError = runCatching {
+                targets.forEach { target ->
+                    withContext(Dispatchers.IO) { target.jmap.createMailbox(name) }
+                    refreshFolders(target.key)
+                }
+            }.exceptionOrNull()?.let(::whyFailed)
+            filtersSaving = false
+        }
+    }
+
     /*
      * Saves the set kept for every account, and puts it on every account's server.
      *
@@ -5493,6 +5510,7 @@ private fun Reader(
                     globalFilters = globalFilters,
                     onGlobalFilters = { saveGlobalFilters(it) },
                     onFilters = { next -> filterAccount?.let { saveFilters(it, next) } },
+                    onCreateFilterFolder = ::createFilterFolder,
                     onFilterBusy = { filterBusy = it },
                     onClose = { settingsOpen = false },
                     security = currentSettingsAccount?.let { key -> sessions.firstOrNull { it.key == key } },

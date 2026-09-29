@@ -65,6 +65,7 @@ internal fun FiltersPage(
     error: String?,
     supported: Boolean,
     onSave: (Script) -> Unit,
+    onCreateFolder: ((String) -> Unit)? = null,
     /** Told while the "describe a filter" box has a request of its own in flight. */
     onBusy: (Boolean) -> Unit = {},
 ) {
@@ -84,10 +85,10 @@ internal fun FiltersPage(
     Spacer(Modifier.height(14.dp))
 
     if (chosen == null) {
-        Everywhere(globals, accounts, folders, saving, error, onGlobals, onBusy)
+        Everywhere(globals, accounts, folders, saving, error, onGlobals, onBusy, onCreateFolder)
         return
     }
-    OneAccount(script, chosen, globals, folders, saving, error, supported, onSave, onBusy)
+    OneAccount(script, chosen, globals, folders, saving, error, supported, onSave, onBusy, onCreateFolder)
 }
 
 /** Which set of rules is on the screen. Always shown, so the global set is one click away. */
@@ -124,8 +125,9 @@ private fun Everywhere(
     error: String?,
     onGlobals: (GlobalFilters) -> Unit,
     onBusy: (Boolean) -> Unit = {},
+    onCreateFolder: ((String) -> Unit)? = null,
 ) {
-    RuleList(globals.rules, folders, saving, onBusy = onBusy) { onGlobals(globals.copy(rules = it)) }
+    RuleList(globals.rules, folders, saving, onBusy = onBusy, onCreateFolder = onCreateFolder) { onGlobals(globals.copy(rules = it)) }
 
     if (accounts.size > 1) {
         Spacer(Modifier.height(18.dp))
@@ -166,6 +168,7 @@ private fun OneAccount(
     supported: Boolean,
     onSave: (Script) -> Unit,
     onBusy: (Boolean) -> Unit = {},
+    onCreateFolder: ((String) -> Unit)? = null,
 ) {
     if (!supported) {
         Note("This server does not offer Sieve, so rules cannot be kept on it.")
@@ -207,6 +210,7 @@ private fun OneAccount(
             ) { Text("Show the script") }
         },
         onBusy = onBusy,
+        onCreateFolder = onCreateFolder,
         onChange = { next -> onSave(scriptFor(script.copy(rules = next), inherited)) },
     )
 
@@ -245,11 +249,12 @@ private fun RuleList(
     inherited: List<Rule> = emptyList(),
     extra: @Composable RowScope.() -> Unit = {},
     onBusy: (Boolean) -> Unit = {},
+    onCreateFolder: ((String) -> Unit)? = null,
     onChange: (List<Rule>) -> Unit,
 ) {
     var editing by remember(rules, inherited) { mutableStateOf<Rule?>(null) }
 
-    DescribeRule(folders, onBusy = onBusy) { made -> onChange(rules + made) }
+    DescribeRule(folders, onBusy = onBusy, onCreateFolder = onCreateFolder) { made -> onChange(rules + made) }
     Spacer(Modifier.height(14.dp))
 
     inherited.forEach { rule ->
@@ -315,7 +320,9 @@ private fun RuleList(
  */
 /** Folder names every one of [perAccount] has, since a rule kept for all of them can only file into what they share. */
 internal fun commonFolders(perAccount: List<Set<String>>): List<String> =
-    perAccount.reduceOrNull { all, next -> all intersect next }.orEmpty().sorted()
+    perAccount.firstOrNull().orEmpty().filter { candidate ->
+        perAccount.all { folders -> folders.any { it.equals(candidate, ignoreCase = true) } }
+    }.sorted()
 
 internal fun filterSeed(message: Summary): String {
     val who = message.fromEmail.trim().ifBlank { message.from.trim() }.ifBlank { "this sender" }
@@ -336,6 +343,7 @@ internal fun FilterFromMessageDialog(
     onClose: () -> Unit,
     onMade: (Rule) -> Unit,
     onBusy: (Boolean) -> Unit = {},
+    onCreateFolder: ((String) -> Unit)? = null,
 ) {
     AlertDialog(
         onDismissRequest = onClose,
@@ -375,6 +383,7 @@ private fun DescribeRule(
     seed: String = "",
     /** Told while the request this box sends is in flight. */
     onBusy: (Boolean) -> Unit = {},
+    onCreateFolder: ((String) -> Unit)? = null,
     onMade: (Rule) -> Unit,
 ) {
     val config = remember { Assistant.config() }
@@ -388,6 +397,7 @@ private fun DescribeRule(
     var thinking by remember { mutableStateOf(false) }
     LaunchedEffect(thinking) { onBusy(thinking) }
     var trouble by remember { mutableStateOf<String?>(null) }
+    var missingFolder by remember { mutableStateOf<String?>(null) }
     var draft by remember { mutableStateOf<Rule?>(null) }
     // The exact packet, held while it is being shown. Being asked the first time is not a
     // dialog about a feature, it is this text, before it goes anywhere.
@@ -396,6 +406,7 @@ private fun DescribeRule(
     fun send(packet: String) {
         thinking = true
         trouble = null
+        missingFolder = null
         scope.launch {
             val outcome = runCatching {
                 withContext(Dispatchers.IO) {
@@ -408,10 +419,35 @@ private fun DescribeRule(
             thinking = false
             outcome.fold(
                 onSuccess = { reply ->
-                    ruleOfAnswer(reply.text, folders).fold(
-                        onSuccess = { draft = it },
-                        onFailure = { trouble = it.message },
-                    )
+                    val first = ruleOfAnswer(reply.text, folders)
+                    if (first.isSuccess) {
+                        draft = first.getOrThrow()
+                    } else if (first.exceptionOrNull() is MissingFolder) {
+                        missingFolder = (first.exceptionOrNull() as MissingFolder).folder
+                        trouble = first.exceptionOrNull()?.message
+                    } else {
+                        val repaired = runCatching {
+                            withContext(Dispatchers.IO) {
+                                val key = Secrets.loadNamed(Assistant.KEY)
+                                val repair = ruleRepairPacket(
+                                    config,
+                                    words,
+                                    folders,
+                                    reply.text,
+                                    first.exceptionOrNull()?.message ?: "The rule was invalid.",
+                                )
+                                Llm.ask(config, key, repair).also {
+                                    Assistant.record(Assistant.FILTER, it.tokensIn, it.tokensOut, config)
+                                }
+                            }
+                        }.mapCatching { ruleOfAnswer(it.text, folders).getOrThrow() }
+                        repaired.fold(
+                            onSuccess = { draft = it },
+                            onFailure = {
+                                trouble = "I could not understand that as a filter. Try saying which mail to match and what to do with it."
+                            },
+                        )
+                    }
                 },
                 onFailure = { trouble = it.message ?: "The model could not be reached." },
             )
@@ -449,6 +485,11 @@ private fun DescribeRule(
         trouble?.let {
             Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         }
+        missingFolder?.let { folder ->
+            if (onCreateFolder != null) {
+                TextButton(onClick = { onCreateFolder(folder); missingFolder = null }) { Text("Create $folder") }
+            }
+        }
     }
 
     /*
@@ -466,19 +507,21 @@ private fun DescribeRule(
             Column(Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
                 Text(rule.name, style = MaterialTheme.typography.bodyMedium)
                 Text(
-                    summarise(rule),
+                    previewRule(rule),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.outline,
                 )
+                Spacer(Modifier.height(8.dp))
+                RawScript(sieveOf(Script(listOf(rule))))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = { draft = null }) { Text("Discard") }
+                    TextButton(onClick = { draft = null }) { Text("Edit") }
                     TextButton(
                         onClick = {
                             draft = null
                             words = ""
                             onMade(rule)
                         },
-                    ) { Text("Add it") }
+                    ) { Text("Save") }
                 }
             }
         }
@@ -604,9 +647,50 @@ internal fun summarise(rule: Rule): String {
             Act.MarkRead -> "mark read"
             Act.Star -> "star"
             Act.Delete -> "delete"
+            is Act.Forward -> "forward to ${it.address}"
         }
     }
     return "If $when_, $then."
+}
+
+/** A generated rule in the natural language used on its confirmation card. */
+internal fun previewRule(rule: Rule): String {
+    if (rule.tests.isEmpty() || rule.acts.isEmpty()) return "Incomplete."
+    val join = if (rule.all) " and " else " or "
+    val conditionParts = rule.tests.map { test ->
+        when (test.field) {
+            Field.FROM -> if (test.match == Match.CONTAINS && test.value.startsWith("@")) {
+                "from anyone at ${test.value.drop(1)}"
+            } else "whose from address ${test.match.label} ${test.value}"
+            Field.TO -> "sent to someone whose address ${test.match.label} ${test.value}"
+            Field.CC -> "copied to someone whose address ${test.match.label} ${test.value}"
+            Field.SUBJECT -> "whose subject ${test.match.label} ${test.value}"
+            Field.BODY -> "whose body ${test.match.label} ${test.value}"
+            Field.HEADER -> "whose ${test.header} header ${test.match.label} ${test.value}"
+            Field.SIZE -> if (test.value.startsWith(">")) "larger than ${test.value.drop(1).trim()}" else "smaller than ${test.value.drop(1).trim()}"
+            Field.ATTACHMENT -> "with an attachment"
+            Field.LIST_ID -> "whose List-Id ${test.match.label} ${test.value}"
+        }
+    }
+    val conditions = conditionParts.foldIndexed("") { index, current, part ->
+        when {
+            index == 0 -> part
+            rule.all && part.startsWith("whose ") -> "$current $part"
+            else -> "$current$join$part"
+        }
+    }
+    val actions = rule.acts.map {
+        when (it) {
+            is Act.FileInto -> "goes to ${it.folder}"
+            is Act.Tag -> "is tagged ${it.keyword}"
+            Act.MarkRead -> "is marked read"
+            Act.Star -> "is starred"
+            Act.Delete -> "is discarded"
+            is Act.Forward -> "is forwarded to ${it.address}"
+        }
+    }.toMutableList()
+    if (rule.stop) actions += "stops later rules"
+    return "Mail $conditions " + actions.joinToString(" and ") + "."
 }
 
 /** Editing one rule. Deliberately one condition and one action: the rest is the raw editor. */
@@ -655,6 +739,7 @@ private fun RuleEditor(rule: Rule, folders: List<String>, onClose: () -> Unit, o
                         Act.MarkRead -> "Mark read"
                         Act.Star -> "Star"
                         Act.Delete -> "Delete"
+                        is Act.Forward -> "Forward"
                         is Act.Tag -> "File into"
                     }
                     Picker(actions, current) { picked ->

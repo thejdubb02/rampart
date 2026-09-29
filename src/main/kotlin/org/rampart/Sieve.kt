@@ -53,6 +53,10 @@ internal enum class Field(val wire: String, val label: String, val header: Strin
     CC("cc", "Cc", "Cc"),
     SUBJECT("subject", "Subject", "Subject"),
     BODY("body", "Body", null),
+    HEADER("header", "Header", null),
+    SIZE("size", "Size", null),
+    ATTACHMENT("has_attachment", "Has attachment", null),
+    LIST_ID("list_id", "List-Id", "List-Id"),
 }
 
 /** How it compares. */
@@ -61,6 +65,7 @@ internal enum class Match(val wire: String, val label: String) {
     IS("is", "is exactly"),
     STARTS("starts_with", "starts with"),
     ENDS("ends_with", "ends with"),
+    MATCHES("matches", "matches"),
 }
 
 /** What it does when it matches. */
@@ -70,9 +75,10 @@ internal sealed interface Act {
     data object MarkRead : Act
     data object Star : Act
     data object Delete : Act
+    data class Forward(val address: String) : Act
 }
 
-internal data class Test(val field: Field, val match: Match, val value: String)
+internal data class Test(val field: Field, val match: Match, val value: String, val header: String? = null)
 
 /**
  * One rule.
@@ -172,12 +178,18 @@ private fun tailOf(body: String, rules: List<Rule>): String {
                 i++
             }
             line.startsWith("#") && named in names -> {
-                // Skip the comment and the block under it, however long it runs.
                 i++
                 while (i < lines.size && lines[i].trim().isEmpty()) i++
-                val close = lines.drop(i).indexOfFirst { it.trim() == "}" }
-                if (close < 0) return lines.drop(i).joinToString("\n").trim()
-                i += close + 1
+                var depth = 0
+                var mainBlock = false
+                while (i < lines.size) {
+                    val generated = lines[i]
+                    if (depth == 0 && generated.trimStart().startsWith("if ")) mainBlock = true
+                    depth += generated.count { it == '{' } - generated.count { it == '}' }
+                    i++
+                    if (mainBlock && depth == 0) break
+                }
+                if (!mainBlock || depth != 0) return lines.drop(i).joinToString("\n").trim()
             }
             else -> return lines.drop(i).joinToString("\n").trim()
         }
@@ -200,6 +212,7 @@ internal fun ruleOf(element: kotlinx.serialization.json.JsonElement): Rule? {
             field ?: Field.FROM,
             match ?: Match.CONTAINS,
             co["value"]?.jsonPrimitive?.content.orEmpty(),
+            co["header"]?.jsonPrimitive?.content,
         )
     }
 
@@ -212,6 +225,7 @@ internal fun ruleOf(element: kotlinx.serialization.json.JsonElement): Rule? {
             "mark_flagged", "flag", "star" -> Act.Star
             "delete", "discard" -> Act.Delete
             "tag", "addflag", "label" -> Act.Tag(value)
+            "forward", "redirect" -> Act.Forward(value)
             else -> {
                 understood = false
                 null
@@ -251,6 +265,7 @@ private fun pattern(match: Match, value: String): String {
     return when (match) {
         Match.STARTS -> "$escaped*"
         Match.ENDS -> "*$escaped"
+        Match.MATCHES -> value
         else -> value
     }
 }
@@ -258,11 +273,16 @@ private fun pattern(match: Match, value: String): String {
 private fun tagOf(match: Match) = when (match) {
     Match.CONTAINS -> ":contains"
     Match.IS -> ":is"
-    Match.STARTS, Match.ENDS -> ":matches"
+    Match.STARTS, Match.ENDS, Match.MATCHES -> ":matches"
 }
 
 private fun testLine(test: Test): String = when (test.field) {
     Field.BODY -> "body :text ${tagOf(test.match)} ${sieveQuote(pattern(test.match, test.value))}"
+    Field.HEADER -> "header ${tagOf(test.match)} ${sieveQuote(test.header!!)} " +
+        sieveQuote(pattern(test.match, test.value))
+    Field.SIZE -> "size ${if (test.value.startsWith(">")) ":over" else ":under"} " +
+        test.value.drop(1).trim()
+    Field.ATTACHMENT -> "string :is \"\${rampart_has_attachment}\" \"1\""
     else -> "header ${tagOf(test.match)} ${sieveQuote(test.field.header!!)} " +
         sieveQuote(pattern(test.match, test.value))
 }
@@ -273,6 +293,7 @@ private fun actLine(act: Act): String = when (act) {
     Act.MarkRead -> "addflag \"\\\\Seen\";"
     Act.Star -> "addflag \"\\\\Flagged\";"
     Act.Delete -> "discard;"
+    is Act.Forward -> "redirect ${sieveQuote(act.address)};"
 }
 
 /** Which extensions the script actually uses, so the `require` line is not a guess. */
@@ -280,6 +301,11 @@ private fun required(rules: List<Rule>): List<String> = buildList {
     if (rules.any { r -> r.acts.any { it is Act.FileInto } }) add("fileinto")
     if (rules.any { r -> r.acts.any { it is Act.Tag || it is Act.MarkRead || it is Act.Star } }) add("imap4flags")
     if (rules.any { r -> r.tests.any { it.field == Field.BODY } }) add("body")
+    if (rules.any { r -> r.tests.any { it.field == Field.ATTACHMENT } }) {
+        add("variables")
+        add("mime")
+        add("foreverypart")
+    }
 }
 
 /**
@@ -311,6 +337,7 @@ private fun built(rule: Rule): JsonObject = buildJsonObject {
                         put("field", it.field.wire)
                         put("comparator", it.match.wire)
                         put("value", it.value)
+                        it.header?.let { name -> put("header", name) }
                     },
                 )
             }
@@ -328,6 +355,7 @@ private fun built(rule: Rule): JsonObject = buildJsonObject {
                             Act.MarkRead -> put("type", "mark_read")
                             Act.Star -> put("type", "mark_flagged")
                             Act.Delete -> put("type", "delete")
+                            is Act.Forward -> { put("type", "forward"); put("value", it.address) }
                         }
                     },
                 )
@@ -364,6 +392,15 @@ internal fun sieveOf(script: Script): String {
     }
     live.forEach { rule ->
         out.append("# Rule: ").append(rule.name).append('\n')
+        if (rule.tests.any { it.field == Field.ATTACHMENT }) {
+            out.append("set \"rampart_has_attachment\" \"0\";\n")
+            out.append("foreverypart {\n")
+            out.append("    if anyof(\n")
+            out.append("        header :mime :param \"filename\" :matches \"Content-Disposition\" \"*\",\n")
+            out.append("        header :mime :param \"name\" :matches \"Content-Type\" \"*\"\n")
+            out.append("    ) { set \"rampart_has_attachment\" \"1\"; }\n")
+            out.append("}\n")
+        }
         val join = if (rule.all) "allof" else "anyof"
         val condition = if (rule.tests.size == 1) {
             testLine(rule.tests.single())

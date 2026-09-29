@@ -118,7 +118,7 @@ class SieveTest {
     fun `a rule with an action we do not offer is kept and flagged`() {
         val meta = """{"version":1,"rules":[{"id":"x","name":"Forwarder","enabled":true,"matchType":"all",""" +
             """"conditions":[{"field":"from","comparator":"contains","value":"a.test"}],""" +
-            """"actions":[{"type":"redirect","value":"someone@else.test"}],"stopProcessing":false}]}"""
+            """"actions":[{"type":"vacation","value":"Away"}],"stopProcessing":false}]}"""
         val script = scriptOf("/* @metadata:begin\n$meta\n@metadata:end */\n")
         assertFalse(script.editable)
         assertContains(script.tail, meta)
@@ -127,14 +127,14 @@ class SieveTest {
     @Test
     fun `an unknown action beside a known one makes the whole script read only`() {
         val source = """/* @metadata:begin
-            {"version":1,"rules":[{"id":"x","name":"Mixed","enabled":true,"matchType":"all","conditions":[{"field":"from","comparator":"contains","value":"a.test"}],"actions":[{"type":"mark_read"},{"type":"redirect","value":"elsewhere.test"}],"stopProcessing":false}]}
+            {"version":1,"rules":[{"id":"x","name":"Mixed","enabled":true,"matchType":"all","conditions":[{"field":"from","comparator":"contains","value":"a.test"}],"actions":[{"type":"mark_read"},{"type":"vacation","value":"Away"}],"stopProcessing":false}]}
             @metadata:end */
 
             require ["imap4flags"];
             # Rule: Mixed
             if header :contains "From" "a.test" {
                 addflag "\\Seen";
-                redirect "elsewhere.test";
+                vacation "Away";
             }
         """.trimIndent()
 
@@ -147,11 +147,11 @@ class SieveTest {
     @Test
     fun `a condition on a header we do not offer is kept and flagged`() {
         val meta = """{"version":1,"rules":[{"id":"x","name":"List","enabled":true,"matchType":"all",""" +
-            """"conditions":[{"field":"list_id","comparator":"contains","value":"announce"}],""" +
+            """"conditions":[{"field":"date","comparator":"contains","value":"announce"}],""" +
             """"actions":[{"type":"move","value":"Lists"}],"stopProcessing":false}]}"""
         val script = scriptOf("/* @metadata:begin\n$meta\n@metadata:end */\n")
         assertFalse(script.editable)
-        assertContains(script.tail, "list_id")
+        assertContains(script.tail, "date")
     }
 
     // --- generating -------------------------------------------------------------------

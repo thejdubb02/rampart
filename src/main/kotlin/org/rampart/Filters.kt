@@ -118,7 +118,11 @@ internal fun pushGlobals(jmap: MailBackend, globals: List<Rule>): Boolean {
     val own = if (chosen == null) Script(emptyList()) else scriptOf(jmap.sieveText(chosen))
     if (chosen != null && !own.editable) return false
     jmap.saveSieve(chosen?.name ?: "rampart", sieveOf(scriptFor(own, globals)), chosen)
-    return true
+    val landed = theOneRunning(jmap.sieveScripts()) ?: return false
+    val readBack = scriptOf(jmap.sieveText(landed))
+    val actualGlobals = readBack.rules.filter { it.global }.map { it.copy(raw = null) }
+    val expectedGlobals = globals.map { it.copy(global = true, raw = null) }
+    return readBack.editable && actualGlobals == expectedGlobals
 }
 
 /**

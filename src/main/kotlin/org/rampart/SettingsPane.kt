@@ -125,6 +125,7 @@ internal fun SettingsPane(
     globalFilters: GlobalFilters,
     onGlobalFilters: (GlobalFilters) -> Unit,
     onFilters: (Script) -> Unit,
+    onCreateFilterFolder: ((String) -> Unit)? = null,
     /** Told while the filters page's "describe a filter" box has a request in flight. */
     onFilterBusy: (Boolean) -> Unit = {},
     onClose: () -> Unit,
@@ -184,6 +185,7 @@ internal fun SettingsPane(
                             error = filtersError,
                             supported = filtersSupported,
                             onSave = onFilters,
+                            onCreateFolder = onCreateFilterFolder,
                             onBusy = onFilterBusy,
                         )
                         "themes" -> ThemesPage(onTheme, iconPack, onIconPack, onTintRowsByTag, onLoader, onTrackingServer, onDensity)
