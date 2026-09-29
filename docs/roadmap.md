@@ -1083,7 +1083,7 @@ Spark, Mailspring, Canary and Superhuman users rely on daily, ordered by real us
 | Unified inbox that still sends from the right address | Built, with a warning above Send when replying from a different address than the mail came to (RAM-107) |
 | Modern sign-in (OAuth for Gmail and Microsoft) | Built (RAM-39); needs a client ID registered with Google and with Microsoft before it can be used |
 | Exchange / Microsoft 365 native (EWS or Graph) | **Missing.** IMAP and JMAP only |
-| Offline cache | Bodies cached; attachments not kept offline (**partial**) |
+| Offline cache | Bodies cached; attachments offline built, not released (RAM-110, branch `claude/follow-up`) |
 | Threads, three panes, density, dark mode | Built |
 | Fast local search with operators (from:, has:attachment, dates) | Built |
 | Attachments: drag and drop into the composer, preview in place | Built: preview in place by default (images, PDF), files dropped or pasted onto the composer attach, pasted screenshots go in inline (RAM-109) |
@@ -1106,7 +1106,7 @@ Spark, Mailspring, Canary and Superhuman users rely on daily, ordered by real us
 |---|---|
 | Calendar and invitations | Built |
 | Contacts with history ("every mail from this person") | Built: one person's mail across every account, asked of the server and paged (RAM-108) |
-| Follow-up flags with a date | In progress (RAM-110, with offline attachments) |
+| Follow-up flags with a date | Built (RAM-110, with offline attachments) |
 | Folders and labels together | Built |
 | Colour by account | Built (RAM-42): rows in All inboxes, off by default |
 
@@ -1117,6 +1117,30 @@ mbox and .eml built; **Outlook PST missing**).
 **The gaps, as cards:** attachments offline and follow-up flags with a date (in progress), a focused inbox (people
 vs newsletters), PST import, and Exchange. Exchange is the largest by far and is only
 worth it if Rampart is aimed at offices; it is logged, not scheduled.
+
+**Follow-up flags and attachments offline (RAM-110) were started on 2026-09-29, on the
+branch `claude/follow-up`: not released, and not yet checked against a live server.**
+
+- *Follow up*, from the row menu and the reader: tomorrow, in 3 days or next week (the
+  snooze's own 09:00), or a typed date and time. Kept on the message as keywords, so every
+  device and every IMAP client sees it: `$followup`, the due minute in UTC as
+  `$followup-20261003t0900z`, and `$followup-noreply` for "only if no reply" on a message
+  you sent, which a reply from anyone else in the thread clears on the server by itself
+  (JMAP only: an IMAP thread is one folder, so there it says why it is not offered). A
+  Follow up view in the sidebar lists what is due, and each due flag raises one desktop
+  notice, remembered per account in `followup-notified.json` so a restart does not repeat
+  it. The reminder only fires while Rampart runs, the same ceiling snooze has.
+- *Keep attachments for offline use*, per account under Settings, Accounts, off by
+  default: the Inbox's last 30 days, 25 MB a file and 2 GB in all unless changed, one
+  file at a time in the background, sealed with AES-256-GCM under a key derived from the
+  store's key. Oldest message goes first when full; turning it off deletes the lot.
+  Unavailable, with a sentence, where there is no store key. Opening a file uses the kept
+  copy when there is one, connected or not.
+- Found on the way, from Stalwart 0.16's source: the per-account message cache has room
+  for 99 distinct custom keywords (`crates/email/src/cache/email.rs`), and one past that is
+  stored but left out of Email/get, `hasKeyword` and IMAP FETCH. Every snooze time and every
+  follow-up date is a distinct keyword, so a heavy user of both, plus their tags, could
+  reach it. Worth a card of its own.
 
 ---
 
