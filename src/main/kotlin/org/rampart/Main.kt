@@ -1420,6 +1420,16 @@ private fun Reader(
     fun accountOf(message: Summary?): String? =
         message?.account?.ifBlank { null } ?: here?.first?.takeIf { it != ALL_ACCOUNTS }
 
+    /** How the list collapses its rows into conversations. See [ThreadContext]. */
+    fun threadContext() = ThreadContext(
+        account = here?.first?.takeIf { it != ALL_ACCOUNTS },
+        collapse = !showingResults && activeSavedSearch == null && viewingTag == null,
+        leaveOut = sessions.associate { open ->
+            val boxes = mailboxes[open.key].orEmpty()
+            open.key to setOfNotNull(folderFor("trash", boxes)?.id, folderFor("junk", boxes)?.id)
+        },
+    )
+
     /** [Card] for [message], or an empty one for a message nothing has been fetched for yet. */
     fun cardFor(message: Summary?): Card {
         val account = message?.let { accountOf(it) } ?: return Card()
@@ -2319,6 +2329,9 @@ private fun Reader(
         emails = emails.map(::paint)
         thread = thread.map(::paint)
         selected?.let { if (it.sameMail(account, ids) && (onlyIf == null || it.seen == onlyIf)) selected = it.copy(seen = read) }
+        // And the conversations behind collapsed rows, so a row whose unread comes from
+        // another message in it changes with the click. See [ThreadGists].
+        ThreadGists.paint(account, ids, seen = read)
     }
 
     /** Writes the rows just marked back to each account's own folder. */
@@ -2761,6 +2774,20 @@ private fun Reader(
         }
         reload()
     }
+    // What the list needs to collapse its rows: each account's joins, and the conversation
+    // behind each row that stands for more than one message. See ThreadRowsState.kt. Not
+    // for a search, whose rows are drawn as they matched.
+    LaunchedEffect(emails, showingResults, activeSavedSearch, viewingTag) {
+        sessions.forEach { open ->
+            Rethreads.load(open.key) { open.store }?.let {
+                report("The conversations joined on this computer could not be read.", it)
+            }
+        }
+        if (showingResults || activeSavedSearch != null || viewingTag != null) return@LaunchedEffect
+        ThreadGists.fill(emails, { accountOf(it) }) { key -> sessions.firstOrNull { it.key == key }?.jmap }?.let {
+            report("Rampart could not read the rest of these conversations, so each row shows only its own message.", whyFailed(it))
+        }
+    }
     // Whether the server holds a mute for this conversation. Its own effect, so the first
     // read of an account's filters does not hold up the rest of opening the message.
     LaunchedEffect(selected) {
@@ -2775,8 +2802,9 @@ private fun Reader(
         if (onServer.getOrDefault(false)) conversationMuted = true
     }
     // selectedForMenu is a key so a left-click on a draft that a right-click already
-    // selected still opens it.
-    LaunchedEffect(selected, selectedForMenu) {
+    // selected still opens it. Rethreads.changes is one so a join or a split made while the
+    // conversation is open redraws it.
+    LaunchedEffect(selected, selectedForMenu, Rethreads.changes) {
         val message = selected ?: return@LaunchedEffect
         val key = accountOf(message) ?: return@LaunchedEffect
         paperMessages = emptySet()
@@ -2826,7 +2854,11 @@ private fun Reader(
                  * opening a message cost two of them end to end before the rest of the
                  * conversation was even known to be there.
                  */
-                fetchedThread = async(Dispatchers.IO) { tried { session(key).jmap.thread(message.threadId) } }
+                // After any joins and splits made on this computer, which with none made is
+                // exactly the server's thread. See [rethreadedThread].
+                val re = Rethreads.of(key)
+                val known = if (re.empty) emptyList() else emails.filter { accountOf(it) == key }
+                fetchedThread = async(Dispatchers.IO) { tried { rethreadedThread(session(key).jmap, message, re, known) } }
             }
             // A stored copy that still matches the server opens with no further fetch.
             // loadCard is what decides, and it builds the page before the card is shown.
@@ -3739,12 +3771,28 @@ private fun Reader(
         fun show(value: Boolean) {
             emails = emails.map { if (it.sameMail(message)) it.copy(flagged = value) else it }
             if (selected?.sameMail(message) == true) selected = selected?.copy(flagged = value)
+            ThreadGists.paint(key, setOf(message.id), flagged = value)
         }
         show(wanted)
         scope.launch {
             if (changed(key) { session(key).jmap.setKeyword(listOf(message.id), "\$flagged", wanted) } == null) {
                 show(!wanted)
             }
+        }
+    }
+
+    /** A star on or off for several messages at once: the rest of a collapsed conversation. */
+    fun starMany(key: String, ids: Set<String>, on: Boolean) {
+        if (ids.isEmpty()) return
+        fun show(value: Boolean) {
+            emails = emails.map { if (it.sameMail(key, ids)) it.copy(flagged = value) else it }
+            thread = thread.map { if (it.sameMail(key, ids)) it.copy(flagged = value) else it }
+            selected?.let { if (it.sameMail(key, ids)) selected = it.copy(flagged = value) }
+            ThreadGists.paint(key, ids, flagged = value)
+        }
+        show(on)
+        scope.launch {
+            if (changed(key) { session(key).jmap.setKeyword(ids.toList(), "\$flagged", on) } == null) show(!on)
         }
     }
 
@@ -4154,6 +4202,54 @@ private fun Reader(
     }
 
     /*
+     * Joining conversations and splitting a message out of one, kept on this computer
+     * because no server can hold it: see [Rethreading]. The undo strip takes either back,
+     * by putting the joins as they were rather than working the change out in reverse.
+     */
+    fun rethread(key: String, next: Rethreading, notice: String, reopen: Boolean) {
+        val before = Rethreads.of(key)
+        scope.launch {
+            Rethreads.save(key, { session(key).store }, next, reopen)?.let {
+                report("That could not be changed on this computer.", it)
+                return@launch
+            }
+            if (reopen) thread = emptyList()
+            undo = Undoable(emptyList(), "", notice = notice, local = {
+                scope.launch {
+                    val failed = Rethreads.save(key, { session(key).store }, before, reopen)
+                    if (failed != null) report("That could not be undone.", failed)
+                    else if (reopen) thread = emptyList()
+                }
+            })
+        }
+    }
+
+    /** The picked rows as one conversation. Refused, in one sentence, across accounts. */
+    fun joinPicked() {
+        val rows = threadRowsFor(emails, threadContext()).flatMap { it.rows }.filter { rowToken(it) in picked }
+        val accounts = rows.mapNotNull { accountOf(it) }.distinct()
+        if (accounts.size > 1) {
+            report(JOIN_ACROSS_ACCOUNTS)
+            return
+        }
+        val key = accounts.singleOrNull() ?: return
+        val threads = rows.map { threadKey(it) }.distinct()
+        val next = Rethreads.of(key).joined(threads, rows.map { it.id })
+        if (next == Rethreads.of(key)) {
+            report("Those are already one conversation.")
+            return
+        }
+        picked = emptySet()
+        rethread(key, next, "${rows.size} conversations joined into one.", reopen = false)
+    }
+
+    /** [message] in a conversation of its own, from the reader's conversation menu. */
+    fun splitOut(message: Summary) {
+        val key = accountOf(message) ?: return
+        rethread(key, Rethreads.of(key).split(message.id), "1 message split into its own conversation.", reopen = true)
+    }
+
+    /*
      * The same operations, reachable without opening the message first.
      *
      * Reply and forward have to fetch that message's body before they can quote it: the
@@ -4388,6 +4484,8 @@ private fun Reader(
                 mailboxes[key].orEmpty().filter { it.id != sourceFolder(key) && it.role !in MOVE_COVERED }
             }.orEmpty()
         },
+        markIds = { message, ids, read -> accountOf(message)?.let { setSeen(it, ids, read) } },
+        starIds = { message, ids, on -> accountOf(message)?.let { starMany(it, ids, on) } },
     )
 
     /**
@@ -4454,6 +4552,7 @@ private fun Reader(
                     onArchive = { fileConversation(message, "archive", "Archived") },
                     onTrash = { fileConversation(message, "trash", "Deleted") },
                     onMute = { on -> muteConversation(message, on) },
+                    onSplit = { splitOut(message) },
                 )
             },
         )
@@ -6069,6 +6168,7 @@ private fun Reader(
                             )
                         }
                     } else null,
+                    threads = threadContext(),
                     onSelect = { message, ctrl, shift ->
                         val token = rowToken(message)
                         picked = pickedAfter(emails.map { rowToken(it) }, picked, anchor, token, ctrl, shift)
@@ -6100,11 +6200,17 @@ private fun Reader(
                         }
                         undo?.let { last ->
                             UndoBar(
-                                text = movedNotice(last.count, last.what),
+                                text = last.notice ?: movedNotice(last.count, last.what),
                                 seconds = undoBarSeconds,
                                 restartOn = last,
                                 onUndo = {
-                                    scope.launch {
+                                    // A join or a split is put back on this computer, with
+                                    // nothing to send to any server.
+                                    val putBack = last.local
+                                    if (putBack != null) {
+                                        putBack()
+                                        undo = null
+                                    } else scope.launch {
                                         // Every account is put back, and the notice only clears if they all
                                         // did. One that failed leaves the offer up rather than pretending.
                                         val results = withContext(Dispatchers.IO) {
@@ -6149,6 +6255,7 @@ private fun Reader(
                         }
                     } == true,
                     onClear = { picked = emptySet() },
+                    onJoin = if (threadContext().collapse) ({ joinPicked() }) else null,
                     onFile = { role, what ->
                         // Grouped by account, because in the merged inbox the picked
                         // messages can come from several, and each has its own Archive.
@@ -7821,10 +7928,22 @@ internal fun MessageList(
      */
     showHover: Boolean = false,
     density: Density = LocalListDensity.current,
+    /** How rows stand for conversations. See [threadRowsFor]; the default changes nothing. */
+    threads: ThreadContext = ThreadContext(),
     onSelect: (Summary, ctrl: Boolean, shift: Boolean) -> Unit,
 ) {
     // Table and Cards are drawn in ListLayoutsUi.kt. Normal is the path below, unchanged.
     val layout = ListLayoutState.layout
+    // One row per conversation, saying what its newest message says, worked out once here
+    // so every layout draws the same rows. Selecting, dragging and every action get the
+    // folder's own message back, never the newest one the row shows. See ThreadRows.kt.
+    val collapsed = remember(emails, threads, ThreadGists.version, Rethreads.version) { threadRowsFor(emails, threads) }
+    val shown = remember(collapsed) { collapsed.map { it.shown } }
+    val byToken = remember(collapsed) { collapsed.associateBy { rowToken(it.shown) } }
+    val threadedActions = threadActions(rowActions) { byToken[rowToken(it)] }
+    val toRaw: (Summary) -> Summary = { byToken[rowToken(it)]?.raw ?: it }
+    val pick: (Summary, Boolean, Boolean) -> Unit = { message, ctrl, shift -> onSelect(toRaw(message), ctrl, shift) }
+    val drag: ((Summary, Offset?) -> Unit)? = onDrag?.let { inner -> { message: Summary, at: Offset? -> inner(toRaw(message), at) } }
     Column(
         Modifier.width(listPaneWidth(layout)).fillMaxHeight().background(MaterialTheme.colorScheme.surface),
     ) {
@@ -7964,25 +8083,25 @@ internal fun MessageList(
                 )
             }
             if (emails.isNotEmpty() && layout != ListLayout.NORMAL) {
-                LayoutList(layout, emails, order, selected, picked, rowActions, loadingMore, scroll, onSelect)
+                LayoutList(layout, shown, order, selected, picked, threadedActions, loadingMore, scroll, pick)
             }
             if (emails.isNotEmpty() && layout == ListLayout.NORMAL) {
                 LazyColumn(Modifier.fillMaxSize(), state = scroll) {
                     // LazyColumn only builds the rows on screen, so a folder with thirty
                     // thousand messages in it costs the same as one with twenty. What that
                     // folder still needs is the next page, which is what `onNeedMore` is.
-                    items(sorted(emails, order), key = { rowToken(it) }) { message ->
+                    items(sorted(shown, order), key = { rowToken(it) }) { message ->
                         MessageRow(
                             message = message,
                             selected = rowToken(message) == selected?.let(::rowToken) || rowToken(message) in picked,
                             accountLabel = accountLabels[message.account],
-                            actions = rowActions,
+                            actions = threadedActions,
                             showHover = showHover,
                             scheduledAt = scheduled[message.id],
                             trackingBadge = trackingBadges[message.messageId],
                             density = density,
-                            onDrag = onDrag,
-                            onSelect = onSelect,
+                            onDrag = drag,
+                            onSelect = pick,
                         )
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     }
@@ -8610,6 +8729,12 @@ internal data class RowActions(
     val moveInto: ((Summary, String) -> Unit)? = null,
     /** The folders Move offers for this row. */
     val folders: ((Summary) -> List<Mailbox>)? = null,
+    /**
+     * Read or unread, and a star off, for several messages of the row's account at once:
+     * the rest of a collapsed conversation. See [threadActions].
+     */
+    val markIds: ((Summary, Set<String>, Boolean) -> Unit)? = null,
+    val starIds: ((Summary, Set<String>, Boolean) -> Unit)? = null,
 )
 
 /**
@@ -8672,6 +8797,8 @@ internal data class ConversationActions(
     val onArchive: () -> Unit,
     val onTrash: () -> Unit,
     val onMute: (Boolean) -> Unit,
+    /** This one message out into a conversation of its own, on this computer. See [Rethreading]. */
+    val onSplit: (() -> Unit)? = null,
 )
 
 
@@ -9992,6 +10119,10 @@ internal data class Undoable(
     val moves: List<Move>,
     /** What to call it on screen, already in the past tense. */
     val what: String,
+    /** The whole sentence, for something that was not a move. Null says it with [movedNotice]. */
+    val notice: String? = null,
+    /** Puts back a change kept on this computer (a join or a split), in place of [moves]. */
+    val local: (() -> Unit)? = null,
 ) {
     val count: Int get() = moves.sumOf { it.ids.size }
 }
@@ -10011,6 +10142,8 @@ private fun Picked(
     onRead: () -> Unit,
     /** Whether the folder being looked at is Junk, which swaps Spam for Not spam. */
     inJunk: Boolean = false,
+    /** Makes the picked conversations one, on this computer. Null where the list is not collapsed. */
+    onJoin: (() -> Unit)? = null,
 ) {
     Column(
         Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
@@ -10028,6 +10161,8 @@ private fun Picked(
             OutlinedButton(onClick = { onFile("trash", "deleted") }) { Text("Delete") }
             OutlinedButton(onClick = onRead) { Text("Mark read") }
         }
+        // Undoable, so it sits with the rest. Nothing on the server changes. See [Rethreading].
+        onJoin?.let { join -> OutlinedButton(onClick = join) { Text("Join into one conversation") } }
         TextButton(onClick = onClear) { Text("Clear", style = MaterialTheme.typography.bodySmall) }
     }
 }

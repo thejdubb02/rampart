@@ -385,6 +385,7 @@ private fun MoreMenu(
                     more = false
                     conv.onMute(!conv.muted)
                 }
+                conv.onSplit?.let { split -> MenuItem("Split this message out") { more = false; split() } }
                 conv.muteNote?.let { note ->
                     Text(
                         note,

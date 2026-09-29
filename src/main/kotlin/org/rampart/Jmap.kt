@@ -536,6 +536,41 @@ internal class Jmap private constructor(
         return ids.mapNotNull { found[it] }
     }
 
+    /**
+     * Every message of several conversations, in one round trip, for the rows that stand
+     * for them. See [ThreadGist].
+     *
+     * Thread/get names the messages and Email/get fills them in by back reference, so no ids
+     * come through us. A small set of properties, since this is asked for a page of rows at
+     * a time: enough to say who wrote last and whether anything is unread, and which folder
+     * each message is in so a deleted reply is not taken for the latest one.
+     */
+    override fun threadMembers(threadIds: Collection<String>): Map<String, ThreadGist> {
+        val ids = threadIds.filter { it.isNotBlank() }.distinct()
+        if (ids.isEmpty()) return emptyMap()
+        val responses = call(
+            invoke("Thread/get", "t") { putJsonArray("ids") { ids.forEach { add(it) } } },
+            invoke("Email/get", "g") {
+                putJsonObject("#ids") {
+                    put("resultOf", "t"); put("name", "Thread/get"); put("path", "/list/*/emailIds")
+                }
+                putJsonArray("properties") {
+                    listOf("id", "threadId", "from", "subject", "receivedAt", "preview", "keywords", "mailboxIds")
+                        .forEach { add(it) }
+                }
+            },
+        )
+        val found = responses[1].list().associate { element ->
+            val o = element.jsonObject
+            o["id"].require("id") to (jsonToSummary(o) to (o["mailboxIds"] as? JsonObject)?.keys.orEmpty())
+        }
+        return responses[0].list().associate { element ->
+            val o = element.jsonObject
+            val members = (o["emailIds"] as? JsonArray)?.mapNotNull { it.str() }.orEmpty().mapNotNull { found[it] }
+            o["id"].require("id") to ThreadGist(members.map { it.first }, members.associate { it.first.id to it.second })
+        }
+    }
+
     override fun body(id: String): Body = open(id).body
 
     override fun attachments(emailId: String): List<Attachment> = open(emailId).attachments

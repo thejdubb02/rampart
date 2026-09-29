@@ -84,6 +84,15 @@ internal interface MailBackend {
 
     fun thread(threadId: String): List<Summary>
 
+    /**
+     * Every message of each of [threadIds], and the folders each one is in. See [ThreadGist].
+     *
+     * The default asks [thread] once per thread and knows no folders, which is all a server
+     * without server-side threads can do. JMAP answers every thread in one round trip.
+     */
+    fun threadMembers(threadIds: Collection<String>): Map<String, ThreadGist> =
+        threadIds.associateWith { ThreadGist(thread(it)) }
+
     fun body(id: String): Body
 
     fun attachments(emailId: String): List<Attachment>

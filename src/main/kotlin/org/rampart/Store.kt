@@ -221,6 +221,11 @@ internal class Store(private val connection: Connection) : AutoCloseable {
                 calendar TEXT
             )
             """,
+            // Conversations joined and messages split out by hand. Not a cache of anything:
+            // see [Rethreading] for why this is the one thing kept here that the server
+            // cannot give back. A new table, so a file that already exists gains it on open.
+            "CREATE TABLE IF NOT EXISTS rethread (kind TEXT NOT NULL, id TEXT NOT NULL, " +
+                "grp TEXT NOT NULL DEFAULT '', PRIMARY KEY (kind, id))",
             """
             CREATE TABLE IF NOT EXISTS kept_picture (
                 id TEXT NOT NULL,
@@ -1311,6 +1316,36 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             }
         }
         forgetFrom(mailbox, idsMissingFromPage(cached, page.map { DatedId(it.id, it.receivedAt) }))
+    }
+
+    /** The joins and splits made on this account. See [Rethreading]. */
+    @Synchronized fun rethreading(): Rethreading =
+        connection.prepareStatement("SELECT kind, id, grp FROM rethread").use { s ->
+            s.executeQuery().use { rows -> rethreadingOf(buildList { while (rows.next()) add(Triple(rows.getString(1), rows.getString(2), rows.getString(3))) }) }
+        }
+
+    /** Replaces the joins and splits with [value], in one transaction so a failure leaves the old ones. */
+    @Synchronized fun setRethreading(value: Rethreading) {
+        val was = connection.autoCommit
+        connection.autoCommit = false
+        try {
+            connection.createStatement().use { it.execute("DELETE FROM rethread") }
+            connection.prepareStatement("INSERT INTO rethread (kind, id, grp) VALUES (?,?,?)").use { s ->
+                rethreadRows(value).forEach { (kind, id, grp) ->
+                    s.setString(1, kind)
+                    s.setString(2, id)
+                    s.setString(3, grp)
+                    s.addBatch()
+                }
+                s.executeBatch()
+            }
+            connection.commit()
+        } catch (e: Exception) {
+            connection.rollback()
+            throw e
+        } finally {
+            connection.autoCommit = was
+        }
     }
 
     /** What the server's state was when this folder was last read, so a refresh can skip. */
