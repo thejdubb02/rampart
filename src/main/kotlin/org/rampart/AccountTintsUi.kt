@@ -43,7 +43,7 @@ internal object AccountTintState {
     var colours by mutableStateOf(runCatching { Settings.accountColours() }.getOrDefault(emptyMap()))
         private set
 
-    fun setTintByAccount(on: Boolean) {
+    fun chooseTintByAccount(on: Boolean) {
         tintByAccount = on
         Settings.setTintRowsByAccount(on)
     }
@@ -87,14 +87,14 @@ internal fun AccountColoursSection(accounts: List<AccountMailboxes>) {
     val keys = accounts.map { it.key }
     val several = keys.size > 1
     Row(
-        Modifier.fillMaxWidth().clickable(enabled = several) { AccountTintState.setTintByAccount(!AccountTintState.tintByAccount) }
+        Modifier.fillMaxWidth().clickable(enabled = several) { AccountTintState.chooseTintByAccount(!AccountTintState.tintByAccount) }
             .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Switch(
             checked = AccountTintState.tintByAccount && several,
             enabled = several,
-            onCheckedChange = { AccountTintState.setTintByAccount(it) },
+            onCheckedChange = { AccountTintState.chooseTintByAccount(it) },
         )
         Spacer(Modifier.width(12.dp))
         Text("Colour rows by account in All inboxes", style = MaterialTheme.typography.bodyMedium)
