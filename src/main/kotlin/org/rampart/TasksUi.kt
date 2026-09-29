@@ -171,23 +171,22 @@ internal fun MakeTask(context: MailCalendar, summary: Summary, body: Body?) {
     }
 
     Column(Modifier.fillMaxWidth()) {
-        Spacer(Modifier.height(8.dp))
         val open = form
         if (open == null) {
-            Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
-                modifier = Modifier.clip(CircleShape).clickable(enabled = !running) { press() },
+            // A small link like Add tag above it, not a pill: it is an occasional action and
+            // should not take a line and a half of the header.
+            Row(
+                Modifier.clip(CircleShape).clickable(enabled = !running) { press() }
+                    .padding(horizontal = 9.dp, vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(RampartIcons.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(15.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        if (running) "Rook is reading the message" else "Make a task",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
+                Icon(RampartIcons.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(12.dp))
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    if (running) "Rook is reading the message" else "Make a task",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
             }
         } else {
             TaskCard(initial = open, backend = context.backend, heading = "Make a task", onClose = { form = null })

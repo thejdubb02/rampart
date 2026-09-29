@@ -1055,13 +1055,13 @@ Spark, Mailspring, Canary and Superhuman users rely on daily, ordered by real us
 | Feature | Rampart |
 |---|---|
 | Several accounts in one window | Built |
-| Unified inbox that still sends from the right address | Built; a warning when replying from a different account than the mail came to is **missing** |
-| Modern sign-in (OAuth for Gmail and Microsoft) | Cloud brief written (RAM-39) |
+| Unified inbox that still sends from the right address | Built, with a warning above Send when replying from a different address than the mail came to (RAM-107) |
+| Modern sign-in (OAuth for Gmail and Microsoft) | Built (RAM-39); needs a client ID registered with Google and with Microsoft before it can be used |
 | Exchange / Microsoft 365 native (EWS or Graph) | **Missing.** IMAP and JMAP only |
 | Offline cache | Bodies cached; attachments not kept offline (**partial**) |
 | Threads, three panes, density, dark mode | Built |
 | Fast local search with operators (from:, has:attachment, dates) | Built |
-| Attachments: drag and drop into the composer, preview in place | Preview built (images, PDF); **drag and drop into the composer missing** |
+| Attachments: drag and drop into the composer, preview in place | Built: preview in place by default (images, PDF), files dropped or pasted onto the composer attach, pasted screenshots go in inline (RAM-109) |
 | Per-account identity, signatures, visible From | Built |
 
 **Daily workflow.**
@@ -1080,17 +1080,16 @@ Spark, Mailspring, Canary and Superhuman users rely on daily, ordered by real us
 | Feature | Rampart |
 |---|---|
 | Calendar and invitations | Built |
-| Contacts with history ("every mail from this person") | **Missing** |
-| Follow-up flags with a date | **Partial** (snooze and tasks, no flag with a due date) |
+| Contacts with history ("every mail from this person") | Built: one person's mail across every account, asked of the server and paged (RAM-108) |
+| Follow-up flags with a date | In progress (RAM-110, with offline attachments) |
 | Folders and labels together | Built |
-| Colour by account | Built, not released (RAM-42): rows in All inboxes, off by default |
+| Colour by account | Built (RAM-42): rows in All inboxes, off by default |
 
 **Trust.** Local credentials, phishing warnings that show the real address, PGP and
-S/MIME (RAM-37, in progress), faithful HTML rendering, reliable sync, and import (Maildir,
+S/MIME (RAM-37, built), faithful HTML rendering, reliable sync, and import (Maildir,
 mbox and .eml built; **Outlook PST missing**).
 
-**The gaps, as cards:** wrong-account reply warning, contact history, drag and drop into
-the composer, attachments offline, follow-up flags with a date, a focused inbox (people
+**The gaps, as cards:** attachments offline and follow-up flags with a date (in progress), a focused inbox (people
 vs newsletters), PST import, and Exchange. Exchange is the largest by far and is only
 worth it if Rampart is aimed at offices; it is logged, not scheduled.
 
