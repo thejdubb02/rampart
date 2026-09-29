@@ -199,6 +199,20 @@ object Settings {
             value.jsonPrimitive.longOrNull?.let { key to it }
         }?.toMap() ?: emptyMap()
 
+    /** Shared mailboxes in the cross-account views, and what feeds each view. The keys are in UnifiedViews.kt. */
+    internal fun sharingPrefs(): Map<String, String> =
+        (read()["sharing"] as? JsonObject)?.mapNotNull { (key, value) ->
+            (value as? JsonPrimitive)?.contentOrNull?.let { key to it }
+        }?.toMap() ?: emptyMap()
+
+    /** [change] is a key and its new value, or null to forget it, as UnifiedViews.kt builds them. */
+    internal fun setSharingPref(change: Pair<String, String?>) = write {
+        val current = (this["sharing"] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
+        val value = change.second
+        if (value == null) current.remove(change.first) else current[change.first] = JsonPrimitive(value)
+        put("sharing", JsonObject(current))
+    }
+
     /** [colour] null puts a tag back to the colour derived from its name. */
     fun setTagColour(keyword: String, colour: Long?) = write {
         val current = (this["tagColours"] as? JsonObject)?.toMutableMap() ?: mutableMapOf()

@@ -38,7 +38,9 @@ Synced, from `settings.json`: `theme`, `customThemes`, `iconPack`, `loader`, `de
 `tintRowsByTag`, `tagColours`, `savedSearches`, `order`, `markReadDelay`, `archiveBy`,
 `messageMode`, `messageScale`, `undoSeconds`, `undoBarSeconds`, `signatureAboveQuote`,
 `confirmBeforeSend`, `defaultReplyAll`, `exactIdentitiesOnly`, `subAddressDelimiter`,
-`attachmentPosition`, `attachmentClickBehavior`, `trackedDomains`, `changelogSuppressed`.
+`attachmentPosition`, `attachmentClickBehavior`, `trackedDomains`, `changelogSuppressed`,
+`sharing` (which shared mailboxes go into the cross-account views, and which folders feed
+All unread, All starred and All mail).
 
 Synced, from `assistant.json`: `deniedFolders`, the folders Rook must never read. A
 boundary drawn on one computer is one its owner expects on the next.
