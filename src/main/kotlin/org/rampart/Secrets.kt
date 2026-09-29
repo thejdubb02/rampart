@@ -159,6 +159,23 @@ object Secrets {
         return store(named(name), value)
     }
 
+    /**
+     * An OAuth account's access and refresh tokens, as one JSON line.
+     *
+     * Kept under a made-up account of their own rather than in the account's password slot,
+     * the same trick [mailKey] uses, so a token can never be read back as a password and an
+     * account that once had a password keeps nothing of it once it signs in the other way.
+     */
+    internal fun oauthTokenAccount(account: SavedAccount) =
+        SavedAccount("${account.name} (OAuth sign-in)", account.server, "oauth:${account.email}")
+
+    fun loadOAuthTokens(account: SavedAccount): String? = load(oauthTokenAccount(account))
+
+    /** Null when they were kept, otherwise the reason they were not. */
+    fun storeOAuthTokens(account: SavedAccount, json: String): String? = store(oauthTokenAccount(account), json)
+
+    fun forgetOAuthTokens(account: SavedAccount) = forget(oauthTokenAccount(account))
+
     const val NTFY_TOKEN = "ntfy-token"
     const val GOTIFY_TOKEN = "gotify-token"
 

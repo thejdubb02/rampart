@@ -35,6 +35,8 @@ data class SavedAccount(
     val protocol: String = "jmap",
     /** Where mail is sent from. Empty on JMAP, which sends through the same server. */
     val sendServer: String = "",
+    /** The provider an account signs in through in the browser, or empty for a password. */
+    val oauth: String = "",
 )
 
 object Accounts {
@@ -60,7 +62,7 @@ object Accounts {
             // A record with no protocol is a JMAP account: that is all Rampart could save
             // until now, and treating it as IMAP would send a JMAP host to the wrong protocol.
             val protocol = o.text("protocol") ?: "jmap"
-            SavedAccount(o.text("name") ?: email, server, email, protocol, o.text("sendServer") ?: "")
+            SavedAccount(o.text("name") ?: email, server, email, protocol, o.text("sendServer") ?: "", o.text("oauth") ?: "")
         }
     }.getOrDefault(emptyList())
 
@@ -78,6 +80,7 @@ object Accounts {
                                 put("email", it.email)
                                 put("protocol", it.protocol)
                                 put("sendServer", it.sendServer)
+                                if (it.oauth.isNotBlank()) put("oauth", it.oauth)
                             },
                         )
                     }
