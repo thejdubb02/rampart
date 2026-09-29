@@ -25,13 +25,3 @@ internal fun arrivals(state: String, summaries: List<Summary>, known: Set<String
         summaries = summaries,
         fresh = if (known == null) emptyList() else summaries.filter { !it.seen && it.id !in known },
     )
-
-/**
- * One line for the notification. Several messages at once become one notification rather
- * than a stack of them, because a stack is what makes people turn notifications off.
- */
-internal fun arrivalText(fresh: List<Summary>): Pair<String, String>? = when (fresh.size) {
-    0 -> null
-    1 -> fresh[0].from to fresh[0].subject.ifBlank { "(no subject)" }
-    else -> "${fresh.size} new messages" to fresh.take(3).joinToString(", ") { it.from }
-}

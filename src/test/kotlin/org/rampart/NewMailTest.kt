@@ -2,7 +2,6 @@ package org.rampart
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class NewMailTest {
@@ -27,14 +26,5 @@ class NewMailTest {
     fun readingElsewhereIsNotAnArrival() {
         val found = arrivals("s3", listOf(mail("a", seen = true)), known = setOf("a"))
         assertTrue(found.fresh.isEmpty())
-    }
-
-    @Test
-    fun oneNotificationForHowEverManyArrived() {
-        assertNull(arrivalText(emptyList()))
-        assertEquals("Dana" to "Hello", arrivalText(listOf(mail("a"))))
-        assertEquals("(no subject)", arrivalText(listOf(mail("a", subject = " ")))!!.second)
-        val many = listOf(mail("a", "Dana"), mail("b", "Alex"), mail("c", "Sam"), mail("d", "Jo"))
-        assertEquals("4 new messages" to "Dana, Alex, Sam", arrivalText(many))
     }
 }

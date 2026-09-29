@@ -239,7 +239,7 @@ internal fun opensToAnnounce(fetches: List<Fetch>, tracked: Map<String, Tracked>
  *
  * The title and the body between them say who opened it and which message. That is the
  * part a badge on the message itself cannot say while you are doing something else,
- * the same compromise [arrivalText] makes for new mail.
+ * the same compromise [burstNotice] makes for new mail.
  */
 internal fun openText(opened: List<Tracked>): Pair<String, String>? = when (opened.size) {
     0 -> null
