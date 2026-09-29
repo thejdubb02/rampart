@@ -1251,6 +1251,9 @@ private fun Reader(
     }
     var here by remember { mutableStateOf<Pair<String, Mailbox>?>(null) }
     var emails by remember { mutableStateOf<List<Summary>>(emptyList()) }
+    // True when the selection came from a right-click, which picks the row for its menu
+    // and must not also open a draft in the composer.
+    var selectedForMenu by remember { mutableStateOf(false) }
     // Which folder the rows in `emails` came from, so switching folders never shows the
     // last folder's rows under the new folder's name while the new one loads.
     var emailsFrom by remember { mutableStateOf<Any?>(null) }
@@ -2769,7 +2772,9 @@ private fun Reader(
         }
         if (onServer.getOrDefault(false)) conversationMuted = true
     }
-    LaunchedEffect(selected) {
+    // selectedForMenu is a key so a left-click on a draft that a right-click already
+    // selected still opens it.
+    LaunchedEffect(selected, selectedForMenu) {
         val message = selected ?: return@LaunchedEffect
         val key = accountOf(message) ?: return@LaunchedEffect
         paperMessages = emptySet()
@@ -2885,7 +2890,7 @@ private fun Reader(
         // instead of leaving the old one behind. The from address is the one the draft
         // was saved with. The account's first identity is only the stand-in when the
         // draft itself names nobody.
-        if (here?.second?.role == "drafts" && !showingResults) {
+        if (here?.second?.role == "drafts" && !showingResults && !selectedForMenu) {
             sendError = null; sendDetail = null
             val from = message.fromEmail.ifBlank {
                 identities[key].orEmpty().firstOrNull()?.email.orEmpty()
@@ -6053,7 +6058,8 @@ private fun Reader(
                         val token = rowToken(message)
                         picked = pickedAfter(emails.map { rowToken(it) }, picked, anchor, token, ctrl, shift)
                         if (!shift) anchor = token
-                        if (!ctrl && !shift) selected = message
+                        if (!ctrl && !shift) { selectedForMenu = RowPress.menu; selected = message }
+                        RowPress.menu = false
                     },
                 )
                 Box(Modifier.matchParentSize(), contentAlignment = Alignment.BottomCenter) {
@@ -8136,7 +8142,7 @@ private fun MessageRow(
                     // message other than the one under the pointer is how the wrong thing
                     // gets deleted.
                     PointerButton.Secondary -> {
-                        if (!selected) onSelect(message, false, false)
+                        if (!selected) { RowPress.menu = true; onSelect(message, false, false) }
                         menu = true
                     }
                     else -> Unit
@@ -10065,3 +10071,6 @@ internal fun pickedAfter(
  * enough that opening a folder does not quietly download it.
  */
 private const val READ_AHEAD = 12
+
+/** Set by a right-click just before it selects a row, read once by the list's onSelect. */
+internal object RowPress { var menu = false }

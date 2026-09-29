@@ -174,7 +174,7 @@ private fun Modifier.pressed(
             onSelect(message, keys.isCtrlPressed || keys.isMetaPressed, keys.isShiftPressed)
         }
         PointerButton.Secondary -> {
-            if (!selected) onSelect(message, false, false)
+            if (!selected) { RowPress.menu = true; onSelect(message, false, false) }
             onMenu()
         }
         else -> Unit
