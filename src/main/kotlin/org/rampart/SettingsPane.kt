@@ -32,9 +32,16 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.material3.OutlinedButton
@@ -137,6 +144,9 @@ internal fun SettingsPane(
     initialPage: String = SettingsPages.first().first,
 ) {
     var page by remember { mutableStateOf(initialPage) }
+    var highlightedSetting by remember { mutableStateOf<SettingSearchItem?>(null) }
+    val coroutineScope = rememberCoroutineScope()
+
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
@@ -151,56 +161,71 @@ internal fun SettingsPane(
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
         Row(Modifier.fillMaxSize()) {
-            SettingsNav(page) { page = it }
+            SettingsNav(
+                current = page,
+                onPick = { page = it },
+                onPickSetting = { setting ->
+                    page = setting.pageKey
+                    highlightedSetting = setting
+                    coroutineScope.launch {
+                        delay(2000L)
+                        if (highlightedSetting == setting) {
+                            highlightedSetting = null
+                        }
+                    }
+                },
+            )
             VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Column(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(28.dp),
             ) {
-                Column(Modifier.widthIn(max = 720.dp).fillMaxWidth()) {
-                    when (page) {
-                        "accounts" -> AccountsPage(accounts, onAddAccount, quotas)
-                        "security" -> SecurityPage(security, accounts, account, onAccount)
-                        "phone" -> PhonePage(security, accounts, account, onAccount)
-                        "notifications" -> NotificationsPage(
-                            notifyOnArrival, onNotifyOnArrival, notifyOnOpen, onNotifyOnOpen,
-                        )
-                        "reading" -> ReadingPage(onUndoBarSeconds, onMessageMode, onMessageScale)
-                        "filters" -> FiltersPage(
-                            script = filters,
-                            accounts = accounts,
-                            chosen = filterAccount,
-                            onChoose = onFilterAccount,
-                            globals = globalFilters,
-                            onGlobals = onGlobalFilters,
-                            /*
-                             * Only real folders, so nobody files into one that does not
-                             * exist. The chosen account's own, because a rule filing into
-                             * another account's folder is one the server will refuse.
-                             * Rules kept for every account offer what they all have.
-                             */
-                            folders = commonFolders(
-                                accounts
-                                    .filter { filterAccount == null || it.key == filterAccount }
-                                    .map { account -> account.mailboxes.map { it.name }.toSet() },
-                            ),
-                            saving = filtersSaving,
-                            error = filtersError,
-                            supported = filtersSupported,
-                            onSave = onFilters,
-                            onCreateFolder = onCreateFilterFolder,
-                            onBusy = onFilterBusy,
-                        )
-                        "themes" -> ThemesPage(onTheme, iconPack, onIconPack, onTintRowsByTag, onLoader, onTrackingServer, onDensity)
-                        "identities" -> IdentitiesPage(
-                            accounts, account, onAccount, identities, signatureError, onSignature, onPickSignatureImage,
-                        )
-                        "away" -> AwayPage(accounts, account, onAccount, vacation, vacationError, onVacation)
-                        "export" -> ExportMailPage(accounts, account, onAccount, backendFor)
-                        "tracking" -> TrackingPage(onTrackingServer)
-                        "assistant" -> AssistantPage(accounts)
-                        "admin" -> AdminLoginPage()
-                        "diagnostics" -> DiagnosticsPage()
-                        "about" -> AboutPage(update, checkingUpdate, updateCheckFailure, onCheckNow, onRestart)
+                CompositionLocalProvider(LocalHighlightedSetting provides highlightedSetting) {
+                    Column(Modifier.widthIn(max = 720.dp).fillMaxWidth()) {
+                        when (page) {
+                            "accounts" -> AccountsPage(accounts, onAddAccount, quotas)
+                            "security" -> SecurityPage(security, accounts, account, onAccount)
+                            "phone" -> PhonePage(security, accounts, account, onAccount)
+                            "notifications" -> NotificationsPage(
+                                notifyOnArrival, onNotifyOnArrival, notifyOnOpen, onNotifyOnOpen,
+                            )
+                            "reading" -> ReadingPage(onUndoBarSeconds, onMessageMode, onMessageScale)
+                            "filters" -> FiltersPage(
+                                script = filters,
+                                accounts = accounts,
+                                chosen = filterAccount,
+                                onChoose = onFilterAccount,
+                                globals = globalFilters,
+                                onGlobals = onGlobalFilters,
+                                /*
+                                 * Only real folders, so nobody files into one that does not
+                                 * exist. The chosen account's own, because a rule filing into
+                                 * another account's folder is one the server will refuse.
+                                 * Rules kept for every account offer what they all have.
+                                 */
+                                folders = commonFolders(
+                                    accounts
+                                        .filter { filterAccount == null || it.key == filterAccount }
+                                        .map { account -> account.mailboxes.map { it.name }.toSet() },
+                                ),
+                                saving = filtersSaving,
+                                error = filtersError,
+                                supported = filtersSupported,
+                                onSave = onFilters,
+                                onCreateFolder = onCreateFilterFolder,
+                                onBusy = onFilterBusy,
+                            )
+                            "themes" -> ThemesPage(onTheme, iconPack, onIconPack, onTintRowsByTag, onLoader, onTrackingServer, onDensity)
+                            "identities" -> IdentitiesPage(
+                                accounts, account, onAccount, identities, signatureError, onSignature, onPickSignatureImage,
+                            )
+                            "away" -> AwayPage(accounts, account, onAccount, vacation, vacationError, onVacation)
+                            "export" -> ExportMailPage(accounts, account, onAccount, backendFor)
+                            "tracking" -> TrackingPage(onTrackingServer)
+                            "assistant" -> AssistantPage(accounts)
+                            "admin" -> AdminLoginPage()
+                            "diagnostics" -> DiagnosticsPage()
+                            "about" -> AboutPage(update, checkingUpdate, updateCheckFailure, onCheckNow, onRestart)
+                        }
                     }
                 }
             }
@@ -215,7 +240,7 @@ internal fun SettingsPane(
  * a run of pages sharing one is drawn under it. Two levels of data for a menu with six
  * entries in it would be more machinery than the menu.
  */
-private val SettingsPages: List<Triple<String, String, String>> = listOf(
+internal val SettingsPages: List<Triple<String, String, String>> = listOf(
     Triple("accounts", "Accounts", "General"),
     Triple("security", "Security", "General"),
     Triple("phone", "Your phone", "General"),
@@ -236,36 +261,165 @@ private val SettingsPages: List<Triple<String, String, String>> = listOf(
 )
 
 @Composable
-private fun SettingsNav(current: String, onPick: (String) -> Unit) {
+private fun SettingsNav(
+    current: String,
+    onPick: (String) -> Unit,
+    onPickSetting: (SettingSearchItem) -> Unit = {},
+) {
+    var query by remember { mutableStateOf("") }
+    val searchItems = remember { defaultSettingSearchItems() }
+    val result = remember(query, searchItems) { searchSettings(query, searchItems, SettingsPages) }
+
     Column(
-        Modifier.width(232.dp).fillMaxHeight().verticalScroll(rememberScrollState())
-            .padding(vertical = 14.dp, horizontal = 10.dp),
+        Modifier.width(232.dp).fillMaxHeight().padding(vertical = 10.dp, horizontal = 10.dp),
     ) {
-        var heading: String? = null
-        SettingsPages.forEach { (key, label, group) ->
-            if (group != heading) {
-                heading = group
-                Text(
-                    group.uppercase(),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.padding(start = 10.dp, top = 14.dp, bottom = 5.dp),
+        Row(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                RampartIcons.Search,
+                contentDescription = "Search settings",
+                tint = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Box(Modifier.weight(1f)) {
+                if (query.isEmpty()) {
+                    Text(
+                        "Search settings",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+                BasicTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    modifier = Modifier.fillMaxWidth().onPreviewKeyEvent { event ->
+                        if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                            query = ""
+                            true
+                        } else {
+                            false
+                        }
+                    },
                 )
             }
-            val here = key == current
-            Text(
-                label,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = if (here) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (here) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small)
-                    .background(
-                        if (here) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
+            if (query.isNotEmpty()) {
+                Icon(
+                    RampartIcons.Close,
+                    contentDescription = "Clear search",
+                    tint = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.size(14.dp).clip(CircleShape).clickable { query = "" },
+                )
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        Column(
+            Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+        ) {
+            if (query.isNotBlank()) {
+                if (result.settings.isNotEmpty()) {
+                    Text(
+                        "SETTINGS",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.padding(start = 10.dp, top = 6.dp, bottom = 4.dp),
                     )
-                    .clickable { onPick(key) }
-                    .padding(horizontal = 10.dp, vertical = 7.dp),
-            )
+                    result.settings.forEach { item ->
+                        Column(
+                            modifier = Modifier.fillMaxWidth()
+                                .clip(MaterialTheme.shapes.small)
+                                .clickable { onPickSetting(item) }
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                        ) {
+                            Text(
+                                item.name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                item.pageTitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline,
+                            )
+                        }
+                    }
+                }
+
+                if (result.emptyMessage != null) {
+                    Text(
+                        result.emptyMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.padding(start = 10.dp, top = 8.dp, bottom = 8.dp),
+                    )
+                }
+
+                if (result.filteredPages.isNotEmpty()) {
+                    var heading: String? = null
+                    result.filteredPages.forEach { (key, label, group) ->
+                        if (group != heading) {
+                            heading = group
+                            Text(
+                                group.uppercase(),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.padding(start = 10.dp, top = 12.dp, bottom = 5.dp),
+                            )
+                        }
+                        val here = key == current
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (here) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (here) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small)
+                                .background(
+                                    if (here) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
+                                )
+                                .clickable { onPick(key) }
+                                .padding(horizontal = 10.dp, vertical = 7.dp),
+                        )
+                    }
+                }
+            } else {
+                var heading: String? = null
+                SettingsPages.forEach { (key, label, group) ->
+                    if (group != heading) {
+                        heading = group
+                        Text(
+                            group.uppercase(),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.padding(start = 10.dp, top = 14.dp, bottom = 5.dp),
+                        )
+                    }
+                    val here = key == current
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (here) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (here) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small)
+                            .background(
+                                if (here) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
+                            )
+                            .clickable { onPick(key) }
+                            .padding(horizontal = 10.dp, vertical = 7.dp),
+                    )
+                }
+            }
         }
     }
 }
@@ -1816,13 +1970,31 @@ internal fun updateFailureMessage(reason: UpdateCheckFailure): String = when (re
 
 @Composable
 internal fun Section(title: String, note: String) {
-    Text(title, style = MaterialTheme.typography.titleMedium)
-    Text(
-        note,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.outline,
-        modifier = Modifier.padding(top = 2.dp, bottom = 12.dp),
+    val highlight = LocalHighlightedSetting.current
+    val isHighlighted = highlight != null && (
+        highlight.name.equals(title, ignoreCase = true) ||
+        title.contains(highlight.name, ignoreCase = true) ||
+        highlight.name.contains(title, ignoreCase = true) ||
+        title.contains(highlight.id.removePrefix("rampart."), ignoreCase = true) ||
+        highlight.keywords.split(" ").any { it.length > 3 && title.contains(it, ignoreCase = true) }
     )
+    val modifier = if (isHighlighted) {
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f))
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+    } else {
+        Modifier.fillMaxWidth()
+    }
+    Column(modifier) {
+        Text(title, style = MaterialTheme.typography.titleMedium)
+        Text(
+            note,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline,
+            modifier = Modifier.padding(top = 2.dp, bottom = 12.dp),
+        )
+    }
 }
 
 /**

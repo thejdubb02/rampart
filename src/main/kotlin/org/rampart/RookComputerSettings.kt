@@ -20,11 +20,11 @@ import kotlinx.serialization.json.contentOrNull
  * file needs nothing from the window and can be tested on its own.
  */
 internal data class ComputerChoices(
-    val themes: List<SettingOption>,
+    val themes: List<SettingOption> = emptyList(),
     /** Keys of the themes drawn dark, so a question about dark mode can be answered from the map. */
-    val darkThemes: Set<String>,
-    val iconPacks: List<SettingOption>,
-    val loaders: List<SettingOption>,
+    val darkThemes: Set<String> = emptySet(),
+    val iconPacks: List<SettingOption> = emptyList(),
+    val loaders: List<SettingOption> = emptyList(),
     /** The model, where it is reached and the monthly ceiling, in words. */
     val assistant: () -> String = { "" },
     /** The accounts signed in on this computer, by address. */
