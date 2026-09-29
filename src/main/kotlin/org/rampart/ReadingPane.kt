@@ -280,6 +280,11 @@ internal fun Message(
      */
     onHeaderClick: (() -> Unit)? = null,
     /**
+     * A name or address in the header was clicked: open that person's history. Null where
+     * there is nowhere to show one, and the names are then plain text.
+     */
+    onPerson: ((name: String, address: String) -> Unit)? = null,
+    /**
      * The scroll this card shares with the rest of its stack, when it has one.
      *
      * Null draws this card on its own scroll, filling the pane, exactly as a single message
@@ -708,7 +713,13 @@ internal fun Message(
                                         fontWeight = FontWeight.SemiBold,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f, fill = false),
+                                        // Its own click, inside the row's: the name opens the
+                                        // person, anywhere else on the row folds the card.
+                                        modifier = Modifier.weight(1f, fill = false).let { name ->
+                                            val open = onPerson?.takeIf { summary.fromEmail.isNotBlank() }
+                                            if (open == null) name else name.clip(MaterialTheme.shapes.small)
+                                                .clickable { open(who, summary.fromEmail) }
+                                        },
                                     )
                                     // Only when the message went out through somewhere other
                                     // than the domain it claims, which is the ordinary
@@ -798,13 +809,31 @@ internal fun Message(
                                     color = MaterialTheme.colorScheme.outline,
                                 )
                                 Spacer(Modifier.width(7.dp))
-                                Text(
-                                    shown.joinToString(", ") + if (more > 0) "  +$more more" else "",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f, fill = false),
-                                )
+                                if (onPerson == null) {
+                                    Text(
+                                        shown.joinToString(", ") + if (more > 0) "  +$more more" else "",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false),
+                                    )
+                                } else {
+                                    // Each one its own click, so the right person opens.
+                                    Row(Modifier.weight(1f, fill = false), verticalAlignment = Alignment.CenterVertically) {
+                                        shown.forEachIndexed { i, address ->
+                                            if (i > 0) Text(", ", style = MaterialTheme.typography.bodySmall)
+                                            Text(
+                                                address,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.clip(MaterialTheme.shapes.small)
+                                                    .clickable { onPerson(address, address) },
+                                            )
+                                        }
+                                        if (more > 0) Text("  +$more more", style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                                    }
+                                }
                                 Spacer(Modifier.width(10.dp))
                                 DisableSelection {
                                     Text(

@@ -582,6 +582,11 @@ private fun Reader(
      * messages in it are wherever they were filed, which is the point of a tag.
      */
     var viewingTag by remember { mutableStateOf<String?>(null) }
+    // A person's history in the list pane, when one is open. See PersonHistory.kt.
+    var viewingPerson by remember { mutableStateOf<Correspondent?>(null) }
+    var personHistory by remember { mutableStateOf<PersonHistory?>(null) }
+    var personStats by remember { mutableStateOf(PersonStats()) }
+    var personNote by remember { mutableStateOf<String?>(null) }
     /** Every tag each account has, read out of its local copy. */
     var tagsSeen by remember { mutableStateOf<Map<String, Map<String, Int>>>(emptyMap()) }
     var tagColours by remember { mutableStateOf(Settings.tagColours()) }
@@ -917,7 +922,7 @@ private fun Reader(
     /** How the list collapses its rows into conversations. See [ThreadContext]. */
     fun threadContext() = ThreadContext(
         account = here?.first?.takeIf { it != ALL_ACCOUNTS },
-        collapse = !showingResults && activeSavedSearch == null && viewingTag == null,
+        collapse = !showingResults && activeSavedSearch == null && viewingTag == null && viewingPerson == null,
         leaveOut = sessions.associate { open ->
             val boxes = mailboxes[open.key].orEmpty()
             open.key to setOfNotNull(folderFor("trash", boxes)?.id, folderFor("junk", boxes)?.id)
@@ -1440,8 +1445,35 @@ private fun Reader(
         books = changed
     }
 
+    /**
+     * A person's history, first page and counts. Every account at once, each asking its own
+     * server and falling back to its copy (see [AccountSource]). The rows are stamped with
+     * their account, as the unified inbox's are, so every row action finds the right server.
+     */
+    suspend fun loadPerson(person: Correspondent) {
+        val epoch = ++listEpoch
+        loadingMore = false
+        val place = listOf("person", person.normalised)
+        if (place != emailsFrom) { emails = emptyList(); emailsFrom = place }
+        loading = true
+        filterNote = null
+        val history = PersonHistory(sessions.map { AccountSource(it.key, it.jmap, it.store, person.normalised) })
+        val first = history.next()
+        if (epoch != listEpoch || viewingPerson != person) return
+        personHistory = history
+        personStats = history.stats
+        personNote = answeredNote(
+            history.answered(),
+            sessions.associate { it.key to shortAccountName(it.account.name, it.account.email) },
+        )
+        emails = first
+        exhausted = history.exhausted
+        loading = false
+    }
+
     suspend fun reload() {
         val (openKey, mailbox) = here ?: return
+        viewingPerson?.let { loadPerson(it); return }
         val key = openKey
         val memory = books
         val canAttach = if (key == ALL_ACCOUNTS) sessions.none { it.jmap is Imap } else session(key).jmap !is Imap
@@ -1685,6 +1717,21 @@ private fun Reader(
      * view. Without it a short folder re-queries on every frame at the bottom.
      */
     fun loadMore() {
+        // A person's history pages across every account at once. See PersonHistory.kt.
+        viewingPerson?.let { person ->
+            val history = personHistory ?: return
+            if (loadingMore || exhausted || loading) return
+            loadingMore = true
+            val epoch = listEpoch
+            scope.launch {
+                val page = history.next()
+                if (epoch != listEpoch || viewingPerson != person) return@launch
+                emails = emails + page
+                exhausted = history.exhausted
+                loadingMore = false
+            }
+            return
+        }
         val (key, mailbox) = here ?: return
         if (key == ALL_ACCOUNTS || showingResults || viewingTag != null || loadingMore || exhausted || loading) return
         loadingMore = true
@@ -2269,11 +2316,42 @@ private fun Reader(
      * Across every account that has it, because a tag is one idea even when it lives in two
      * mailboxes. An account that has never seen the keyword is not asked.
      */
+    /**
+     * Opens a person's history in the list pane: the address clicked, and every other
+     * address the server's address book has on the same card, because a person who writes
+     * from work and from home is one person.
+     */
+    fun openPerson(name: String, address: String) {
+        val clicked = address.trim().lowercase()
+        if (clicked.isEmpty()) return
+        val card = contacts.map { it.first }.firstOrNull { card -> card.emails.any { it.trim().lowercase() == clicked } }
+        val person = Correspondent(
+            name = card?.label?.ifBlank { null } ?: name.ifBlank { clicked },
+            addresses = listOf(clicked) + card?.emails.orEmpty(),
+        )
+        settingsOpen = false
+        contactsOpen = false
+        dashboardOpen = false
+        calendarOpen = false
+        selected = null
+        query = ""
+        showingResults = false
+        activeSavedSearch = null
+        viewingTag = null
+        personStats = PersonStats()
+        personNote = null
+        personHistory = null
+        viewingPerson = person
+        // here has not changed, so nothing else will start the load.
+        scope.launch { reload() }
+    }
+
     fun openTag(keyword: String) {
         selected = null
         query = ""
         showingResults = false
         activeSavedSearch = null
+        viewingPerson = null
         viewingTag = keyword
         // here has not changed, so nothing else will start the load.
         scope.launch { reload() }
@@ -2290,6 +2368,7 @@ private fun Reader(
         dashboardOpen = false
         calendarOpen = false
         viewingTag = null
+        viewingPerson = null
         activeSavedSearch = search
         query = search.query
         quick = search.filters
@@ -2345,6 +2424,7 @@ private fun Reader(
             showingResults = false
             viewingTag = null
         }
+        viewingPerson = null
         reload()
     }
     // What the list needs to collapse its rows: each account's joins, and the conversation
@@ -4550,6 +4630,7 @@ private fun Reader(
             },
             showSubject = showSubject,
             onHeaderClick = onHeaderClick,
+            onPerson = { name, address -> openPerson(name, address) },
             externalScroll = externalScroll,
         )
     }
@@ -5137,6 +5218,7 @@ private fun Reader(
                         }
                     }
                 },
+                onHistory = { contact -> openPerson(contact.label, contact.emails.first()) },
                 onWrite = { address ->
                     contactsOpen = false
                     sendError = null; sendDetail = null
@@ -5738,7 +5820,8 @@ private fun Reader(
                     title = listHeading(
                         searching = showingResults,
                         query = query,
-                        folder = viewingTag?.let { tagsOf(setOf(it)).firstOrNull()?.label ?: it }
+                        folder = viewingPerson?.let { "Every message, every account" }
+                            ?: viewingTag?.let { tagsOf(setOf(it)).firstOrNull()?.label ?: it }
                             ?: here?.second?.name.orEmpty(),
                         savedSearchName = activeSavedSearch?.name,
                     ),
@@ -5767,7 +5850,28 @@ private fun Reader(
                     },
                     // Only in the merged list. Everywhere else the folder says which account it
                     // is, and repeating it on every row would be noise on most screens.
-                    accountLabels = if (unified()) {
+                    header = viewingPerson?.let { person ->
+                        {
+                            PersonHeader(
+                                person = person,
+                                stats = personStats,
+                                loading = loading,
+                                note = personNote,
+                                onWrite = { address ->
+                                    sendError = null; sendDetail = null
+                                    val account = writingAccount()
+                                    write(account, Draft(from = identities[account].orEmpty().firstOrNull()?.email.orEmpty(), to = address))
+                                },
+                                onClose = {
+                                    viewingPerson = null
+                                    personHistory = null
+                                    selected = null
+                                    scope.launch { reload() }
+                                },
+                            )
+                        }
+                    },
+                    accountLabels = if (unified() || (viewingPerson != null && sessions.size > 1)) {
                         sessions.associate { it.key to shortAccountName(it.account.name, it.account.email) }
                     } else {
                         emptyMap()
