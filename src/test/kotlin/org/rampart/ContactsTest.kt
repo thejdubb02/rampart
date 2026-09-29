@@ -187,6 +187,126 @@ class ContactPhotoTest {
     }
 
     @Test
+    fun `a photo from a JSContact media entry with a data URI is extracted`() {
+        val contact = contactOf(
+            card(
+                """
+                {
+                  "@type": "Card",
+                  "version": "1.0",
+                  "id": "c-data",
+                  "name": { "full": "Dana Reyes" },
+                  "emails": { "e1": { "address": "dana@example.test" } },
+                  "media": {
+                    "m1": {
+                      "kind": "photo",
+                      "uri": "data:image/png;base64,AAAA"
+                    }
+                  }
+                }
+                """,
+            ),
+        )
+        assertEquals("data:image/png;base64,AAAA", contact.photo)
+    }
+
+    @Test
+    fun `a photo from a JSContact media entry with a blob id is extracted`() {
+        val contact = contactOf(
+            card(
+                """
+                {
+                  "@type": "Card",
+                  "version": "1.0",
+                  "id": "c-blob",
+                  "name": { "full": "Sam Okafor" },
+                  "emails": { "e1": { "address": "sam@example.test" } },
+                  "media": {
+                    "m1": {
+                      "kind": "photo",
+                      "uri": "blob-12345"
+                    }
+                  }
+                }
+                """,
+            ),
+        )
+        assertEquals("blob-12345", contact.photo)
+    }
+
+    @Test
+    fun `a photo from a JSContact media entry with blobId property is extracted`() {
+        val contact = contactOf(
+            card(
+                """
+                {
+                  "@type": "Card",
+                  "version": "1.0",
+                  "id": "c-blob2",
+                  "name": { "full": "Alex Smith" },
+                  "emails": { "e1": { "address": "alex@example.test" } },
+                  "media": {
+                    "m1": {
+                      "kind": "photo",
+                      "blobId": "blob-67890"
+                    }
+                  }
+                }
+                """,
+            ),
+        )
+        assertEquals("blob-67890", contact.photo)
+    }
+
+    @Test
+    fun `loadSenderPhotos maps lowercase email addresses to decoded images`() {
+        // A one-pixel transparent PNG.
+        val pngDataUri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        val contacts = listOf(
+            Contact(
+                name = "Dana Reyes",
+                emails = listOf("Dana@Example.Test", "DREYES@Example.Test"),
+                photo = pngDataUri,
+            ),
+            Contact(
+                name = "Sam Okafor",
+                emails = listOf("Sam@Example.Test"),
+                photo = "blob-sam-photo",
+            ),
+            Contact(
+                name = "Remote User",
+                emails = listOf("remote@example.test"),
+                photo = "https://example.test/avatar.png",
+            ),
+        )
+        val downloaded = java.util.Base64.getDecoder().decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        )
+        val photos = loadSenderPhotos(contacts) { blobId ->
+            if (blobId == "blob-sam-photo") downloaded else null
+        }
+        assertEquals(3, photos.size)
+        assertTrue("dana@example.test" in photos)
+        assertTrue("dreyes@example.test" in photos)
+        assertTrue("sam@example.test" in photos)
+        assertTrue("remote@example.test" !in photos)
+    }
+
+    @Test
+    fun `loadSenderPhotos caps entries at 500`() {
+        val pngDataUri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        val contacts = (1..600).map { i ->
+            Contact(
+                name = "Person $i",
+                emails = listOf("person$i@example.test"),
+                photo = pngDataUri,
+            )
+        }
+        val photos = loadSenderPhotos(contacts)
+        assertEquals(500, photos.size)
+    }
+
+    @Test
     fun `a card with no photo says so rather than throwing`() {
         assertEquals("", contactOf(card("""{ "@type": "Card", "version": "1.0", "id": "c" }""")).photo)
     }

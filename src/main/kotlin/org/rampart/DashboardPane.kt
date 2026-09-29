@@ -120,7 +120,7 @@ internal fun DashboardPane(
                         .padding(vertical = 7.dp, horizontal = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Avatar(message.from, message.fromEmail, 24.dp)
+                    Avatar(message.from, message.fromEmail, 24.dp, photo = photoFor(message.fromEmail))
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
                         Text(

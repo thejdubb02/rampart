@@ -1,5 +1,6 @@
 package org.rampart
 
+import androidx.compose.ui.graphics.ImageBitmap
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.buildJsonObject
@@ -79,8 +80,31 @@ internal fun contactOf(card: JsonObject): Contact = Contact(
     organisation = valuesOf(card, "organizations", "name").firstOrNull().orEmpty(),
     note = valuesOf(card, "notes", "note").firstOrNull().orEmpty(),
     bookIds = (card["addressBookIds"] as? JsonObject)?.keys?.toList().orEmpty(),
-    photo = valuesOf(card, "photos", "uri").firstOrNull().orEmpty(),
+    photo = photoOf(card),
 )
+
+/**
+ * Extracts the photo reference from a contact card JSON object.
+ *
+ * Looks first for a JSContact media entry of kind photo, which can carry a data URI or a
+ * blob id. Falls back to the legacy photos group.
+ */
+internal fun photoOf(card: JsonObject): String {
+    val media = card["media"] as? JsonObject
+    if (media != null) {
+        for (value in media.values) {
+            val obj = value as? JsonObject ?: continue
+            val kind = obj["kind"]?.jsonPrimitive?.content?.trim()
+            if (kind.equals("photo", ignoreCase = true)) {
+                val uri = obj["uri"]?.jsonPrimitive?.content?.trim().orEmpty()
+                if (uri.isNotBlank()) return uri
+                val blobId = obj["blobId"]?.jsonPrimitive?.content?.trim().orEmpty()
+                if (blobId.isNotBlank()) return blobId
+            }
+        }
+    }
+    return valuesOf(card, "photos", "uri").firstOrNull().orEmpty()
+}
 
 private fun valuesOf(card: JsonObject, group: String, field: String): List<String> =
     (card[group] as? JsonObject)?.values.orEmpty()
@@ -157,3 +181,56 @@ internal fun matching(contacts: List<Contact>, query: String): List<Contact> {
             .contains(needle, ignoreCase = true)
     }
 }
+
+/** Decodes the raw bytes of a base64 data URI, or null if it cannot be read. */
+internal fun dataUriBytes(src: String, limit: Int = 8 * 1024 * 1024): ByteArray? = runCatching {
+    val comma = src.indexOf(',')
+    if (comma < 0 || !src.substring(0, comma).endsWith(";base64", ignoreCase = true)) return null
+    val encoded = src.substring(comma + 1)
+    if (encoded.length / 4 * 3 > limit) return null
+    java.util.Base64.getMimeDecoder().decode(encoded)
+}.getOrNull()
+
+internal const val MAX_SENDER_PHOTOS = 500
+internal const val SENDER_PHOTO_SIZE = 96
+
+/**
+ * Builds an in-memory map of decoded sender photos from the server's contacts.
+ *
+ * Each image is downscaled to 96 px. The map is capped at 500 entries to bound memory.
+ * Remote URLs are never fetched to protect sender privacy.
+ */
+internal fun loadSenderPhotos(
+    contacts: List<Contact>,
+    downloadBlob: ((String) -> ByteArray?)? = null,
+): Map<String, ImageBitmap> {
+    val result = mutableMapOf<String, ImageBitmap>()
+    for (contact in contacts) {
+        if (result.size >= MAX_SENDER_PHOTOS) break
+        val raw = contact.photo.trim()
+        if (raw.isBlank()) continue
+        val bytes = when {
+            raw.startsWith("data:", ignoreCase = true) -> dataUriBytes(raw)
+            // A URL is somebody else's server, and fetching it tells them the mail was read.
+            raw.startsWith("http://", ignoreCase = true) || raw.startsWith("https://", ignoreCase = true) -> null
+            else -> raw.removePrefix("blob:").trim().takeIf { it.isNotBlank() }
+                ?.let { id -> downloadBlob?.let { runCatching { it(id) }.getOrNull() } }
+        } ?: continue
+
+        val bitmap = scaledPreview(bytes, edge = SENDER_PHOTO_SIZE) ?: continue
+        for (email in contact.emails) {
+            val key = email.trim().lowercase()
+            if (key.isNotBlank() && key !in result) {
+                if (result.size >= MAX_SENDER_PHOTOS) break
+                result[key] = bitmap
+            }
+        }
+    }
+    return result
+}
+
+/** The sender photos in [contacts], downloading any the server holds as blobs. */
+internal fun photosFrom(jmap: MailBackend, contacts: List<Pair<Contact, JsonObject>>): Map<String, ImageBitmap> =
+    loadSenderPhotos(contacts.map { it.first }) { id ->
+        jmap.blob(Attachment(blobId = id, name = "photo", type = "image/*", size = 0))
+    }

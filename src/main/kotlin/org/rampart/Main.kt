@@ -1168,6 +1168,7 @@ private fun Reader(
     // of it and leave the properties this build does not draw alone.
     var contacts by remember { mutableStateOf<List<Pair<Contact, JsonObject>>>(emptyList()) }
     var contactBooks by remember { mutableStateOf<List<ContactBook>>(emptyList()) }
+    var senderPhotos by remember { mutableStateOf<Map<String, ImageBitmap>>(emptyMap()) }
     var quotas by remember { mutableStateOf<Map<String, List<MailQuota>>>(emptyMap()) }
     var contactsLoading by remember { mutableStateOf(false) }
     var contactsError by remember { mutableStateOf<String?>(null) }
@@ -2436,8 +2437,12 @@ private fun Reader(
             withContext(Dispatchers.IO) {
                 // Both in one trip. The books are what name and filter the list, so
                 // fetching them separately would draw the list once without them.
-                contactBooks = runCatching { session(key).jmap.addressBooks() }.getOrDefault(emptyList())
-                contacts = session(key).jmap.contacts()
+                val jmap = session(key).jmap
+                contactBooks = runCatching { jmap.addressBooks() }.getOrDefault(emptyList())
+                val fetched = jmap.contacts()
+                val photos = photosFrom(jmap, fetched)
+                contacts = fetched
+                senderPhotos = photos
             }
         } catch (e: Exception) {
             // Never fatal. The address book built from mail is the one that has to work.
@@ -4422,7 +4427,9 @@ private fun Reader(
                                             bookIds = listOfNotNull(book?.id),
                                         ),
                                     )
-                                    contacts = jmap.contacts()
+                                    val fetched = jmap.contacts()
+                                    contacts = fetched
+                                    senderPhotos = photosFrom(jmap, fetched)
                                 }
                             } catch (e: Exception) {
                                 contactsError = whyFailed(e)
@@ -5083,22 +5090,11 @@ private fun Reader(
             }
         }
         /*
-         * The pictures, decoded once rather than per row.
+         * The pictures, decoded once per account rather than per row.
          *
-         * Only the ones carried inside a contact card, which is how a vCard photo has
-         * always travelled and costs no request. A card that states a URL instead is left
-         * alone: that is somebody else's server, and fetching it on every message is the
-         * leak the image blocker exists to stop.
+         * Only the ones carried inside a contact card or stored as a blob on the server.
+         * A card that states an external URL instead is left alone to prevent tracking.
          */
-        val senderPhotos = remember(contacts) {
-            buildMap {
-                contacts.forEach { (contact, _) ->
-                    val picture = contact.photo.takeIf { it.startsWith("data:image", true) }
-                        ?.let { embeddedImage(it) } ?: return@forEach
-                    contact.emails.forEach { put(it.trim().lowercase(), picture) }
-                }
-            }
-        }
         // The mail fills whatever is left after the bars. A row at the full
         // window height would run under the update bar and cut the sidebar off.
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -5140,7 +5136,9 @@ private fun Reader(
                                         )
                                     }
                                     jmap.saveContact(wanted.copy(bookIds = books), original)
-                                    contacts = jmap.contacts()
+                                    val fetched = jmap.contacts()
+                                    contacts = fetched
+                                    senderPhotos = photosFrom(jmap, fetched)
                                 }
                             } catch (e: Exception) {
                                 contactsError = whyFailed(e)
@@ -5159,7 +5157,9 @@ private fun Reader(
                                 withContext(Dispatchers.IO) {
                                     val jmap = session(key).jmap
                                     jmap.deleteContact(gone.id)
-                                    contacts = jmap.contacts()
+                                    val fetched = jmap.contacts()
+                                    contacts = fetched
+                                    senderPhotos = photosFrom(jmap, fetched)
                                 }
                             } catch (e: Exception) {
                                 contactsError = whyFailed(e)
