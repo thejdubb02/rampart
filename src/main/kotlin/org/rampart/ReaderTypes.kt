@@ -130,6 +130,8 @@ internal data class RowActions(
     val markRead: ((Summary, read: Boolean) -> Unit)? = null,
     /** Putting it away until later. Null on an account with nowhere to put it. */
     val snooze: ((Summary, SnoozeUntil) -> Unit)? = null,
+    /** Opens the follow-up dialog for this message (FollowUpUi.kt). */
+    val followUp: ((Summary) -> Unit)? = null,
     /** A filter described from this message. Null where the row does not offer one. */
     val filter: ((Summary) -> Unit)? = null,
     /** Send a scheduled draft immediately. Shown only on a row that is scheduled. */
@@ -158,6 +160,8 @@ internal val MOVE_COVERED = setOf("archive", "junk", "trash", "drafts", "sent")
 internal data class MessageActions(
     val archive: (() -> Unit)? = null,
     val snooze: ((SnoozeUntil) -> Unit)? = null,
+    /** Opens the follow-up dialog for the message on screen (FollowUpUi.kt). */
+    val followUp: (() -> Unit)? = null,
     val trash: (() -> Unit)? = null,
     val junk: (() -> Unit)? = null,
     /** Out of Junk again. Present exactly when [junk] is not, never both and never neither. */

@@ -1199,6 +1199,7 @@ internal fun RowMenu(
             HorizontalDivider()
             SnoozeUntil.entries.forEach { until -> entry(until.label) { put(message, until) } }
         }
+        actions.followUp?.let { ask -> entry(followUpMenuLabel(message.keywords)) { ask(message) } }
         if (actions.junk != null || actions.notJunk != null || actions.trash != null) {
             HorizontalDivider()
             if (actions.isJunk?.invoke(message) == true) {

@@ -269,6 +269,7 @@ internal fun threadActions(base: RowActions, rowOf: (Summary) -> ThreadRow?): Ro
         isJunk = base.isJunk?.let { f -> { m: Summary -> f(raw(m)) } },
         trash = base.trash?.let { f -> { m: Summary -> each(m).forEach(f) } },
         snooze = base.snooze?.let { f -> { m: Summary, until: SnoozeUntil -> each(m).forEach { f(it, until) } } },
+        followUp = base.followUp?.let { f -> { m: Summary -> f(raw(m)) } },
         moveInto = base.moveInto?.let { f -> { m: Summary, into: String -> each(m).forEach { f(it, into) } } },
         folders = base.folders?.let { f -> { m: Summary -> f(raw(m)) } },
         filter = base.filter?.let { f -> { m: Summary -> f(raw(m)) } },
