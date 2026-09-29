@@ -182,6 +182,8 @@ internal fun converse(
     settings: SettingsTools? = null,
     /** Reading the calendar and putting events on cards, when the account has one. See `CalendarTools.kt`. */
     calendar: CalendarTools? = null,
+    /** Putting tasks on cards, when the account has somewhere to keep one. See `TaskFromMail.kt`. */
+    tasks: TaskTools? = null,
 ): List<Said> {
     val added = mutableListOf<Said>()
     repeat(ROUNDS) {
@@ -194,7 +196,7 @@ internal fun converse(
             return added
         }
         added += Said("call", reply.text.trim())
-        added += Said("result", carryOut(asked, shown, tools, settings, calendar))
+        added += Said("result", carryOut(asked, shown, tools, settings, calendar, tasks))
     }
     added += Said("result", "That went round in circles, so it stopped.")
     return added
@@ -212,6 +214,7 @@ private fun carryOut(
     tools: MailTools,
     settings: SettingsTools?,
     calendar: CalendarTools? = null,
+    tasks: TaskTools? = null,
 ): String {
     fun ids(): List<String> = Chat.allowed(
         (asked.args["ids"] as? kotlinx.serialization.json.JsonArray)
@@ -264,7 +267,7 @@ private fun carryOut(
             else "That reply could not be opened."
         }
         "tracking_today" -> tools.trackingToday()
-        // A settings or calendar tool never changes anything here: at most it puts a card on screen.
-        else -> settings?.run(asked) ?: calendar?.run(asked) ?: "There is no tool called ${asked.tool}."
+        // A settings, calendar or task tool never changes anything here: at most it puts a card on screen.
+        else -> settings?.run(asked) ?: calendar?.run(asked) ?: tasks?.run(asked) ?: "There is no tool called ${asked.tool}."
     }
 }
