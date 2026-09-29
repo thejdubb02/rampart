@@ -187,7 +187,7 @@ private data class ComposeSession(
     val saves: DraftSaves,
 )
 
-private data class ListRequest(
+internal data class ListRequest(
     val account: String,
     val mailbox: String,
     val query: String,
@@ -1245,6 +1245,10 @@ private fun Reader(
     // A folder operation waiting on a name, or on a yes.
     var folderAsk by remember { mutableStateOf<FolderAsk?>(null) }
     var folderError by remember { mutableStateOf<String?>(null) }
+    var savedSearches by remember { mutableStateOf(Settings.savedSearches()) }
+    var savedSearchCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+    var activeSavedSearch by remember { mutableStateOf<SavedSearch?>(null) }
+    var savedSearchAsk by remember { mutableStateOf<SavedSearchAsk?>(null) }
     /** The message whose row asked for a filter, or null while that dialog is closed. */
     var filterFor by remember { mutableStateOf<Summary?>(null) }
     var loadingMore by remember { mutableStateOf(false) }
@@ -1553,8 +1557,15 @@ private fun Reader(
             open.key to (
                 inbox?.let {
                     runCatching {
-                        if (showingResults && query.isNotBlank()) open.jmap.search(query, null, except = searchExcept(open.key))
-                        else {
+                        if (showingResults && query.isNotBlank()) {
+                            val found = open.jmap.search(query, null, except = searchExcept(open.key))
+                            if (asked.active) {
+                                val known = if (asked.knownSender) knownAddresses(open.key, memory) else emptySet()
+                                found.filter { matchesQuick(it, asked, known) }
+                            } else {
+                                found
+                            }
+                        } else {
                             val known = if (asked.knownSender) knownAddresses(open.key, memory) else emptySet()
                             quickPage(open.jmap, open.store, it.id, asked, known)
                         }
@@ -2032,7 +2043,12 @@ private fun Reader(
         } else {
             val fetched = io {
                 if (request.results && request.query.isNotBlank()) {
-                    session(key).jmap.search(request.query, null, except = searchExcept(key))
+                    val found = session(key).jmap.search(request.query, null, except = searchExcept(key))
+                    if (found != null && asked.active) {
+                        found.filter { matchesQuick(it, asked, known) }
+                    } else {
+                        found
+                    }
                 } else {
                     quickPage(session(key).jmap, session(key).store, mailbox.id, asked, known)
                 }
@@ -2042,7 +2058,11 @@ private fun Reader(
                 // The server is still the authority on search, because it can see mail we
                 // have never fetched. The local copy is the answer when it cannot be
                 // reached, which is the difference between "no results" and "no network".
-                ?: io { session(key).store?.search(request.query) }.takeIf { request.results && request.query.isNotBlank() }
+                ?: io {
+                    val storeHits = session(key).store?.search(request.query)
+                    if (asked.active && storeHits != null) storeHits.filter { matchesQuick(it, asked, known) }
+                    else storeHits
+                }.takeIf { request.results && request.query.isNotBlank() }
                 // A refresh that failed is not an empty folder. Blanking the rows
                 // that were already there is what a spinner over a loaded list did.
                 ?: if (request.results) emptyList() else emails
@@ -2487,6 +2507,7 @@ private fun Reader(
      */
     LaunchedEffect(emails, sessions) {
         val onScreen = emails.groupBy { accountOf(it) }.mapValues { (_, list) -> list.flatMap { it.keywords } }
+        val memory = books
         tagsSeen = withContext(Dispatchers.IO) {
             sessions.associate { open ->
                 // The list that is open as well as the copy on disk, so tags exist on the
@@ -2497,6 +2518,43 @@ private fun Reader(
                 // beside a tag is worth less than nothing if it is wrong.
                 val unseen = onScreen[open.key].orEmpty().filterNot { it in kept }
                 open.key to (kept + unseen.groupingBy { it }.eachCount())
+            }
+        }
+    }
+
+    // Its own effect, and after a pause, because each count is a search of the local store:
+    // a burst of arriving mail restarts the wait instead of running every search each time.
+    LaunchedEffect(emails, sessions, savedSearches) {
+        if (savedSearches.isEmpty()) return@LaunchedEffect
+        delay(2000)
+        val memory = books
+        savedSearchCounts = withContext(Dispatchers.IO) {
+            savedSearches.associate { search ->
+                val count = if (search.account == ALL_ACCOUNTS) {
+                    sessions.sumOf { session ->
+                        val store = session.store
+                        val known = knownAddresses(session.key, memory)
+                        val messages = if (search.query.isNotBlank()) {
+                            store?.search(search.query).orEmpty()
+                        } else {
+                            val inbox = folderFor("inbox", mailboxes[session.key].orEmpty())
+                            inbox?.let { store?.messages(it.id, filters = search.filters, knownSenders = known) }.orEmpty()
+                        }
+                        countUnreadSavedSearch(search, messages, known)
+                    }
+                } else {
+                    val session = sessions.firstOrNull { it.key == search.account }
+                    val store = session?.store
+                    val known = knownAddresses(search.account, memory)
+                    val messages = if (search.query.isNotBlank()) {
+                        store?.search(search.query).orEmpty()
+                    } else {
+                        val inbox = folderFor("inbox", mailboxes[search.account].orEmpty())
+                        inbox?.let { store?.messages(it.id, filters = search.filters, knownSenders = known) }.orEmpty()
+                    }
+                    countUnreadSavedSearch(search, messages, known)
+                }
+                search.id to count
             }
         }
     }
@@ -2588,17 +2646,48 @@ private fun Reader(
         selected = null
         query = ""
         showingResults = false
+        activeSavedSearch = null
         viewingTag = keyword
         // here has not changed, so nothing else will start the load.
+        scope.launch { reload() }
+    }
+
+    /**
+     * Opens a saved search query folder.
+     *
+     * Runs the query and quick filters through the search path.
+     */
+    fun openSavedSearch(search: SavedSearch) {
+        settingsOpen = false
+        contactsOpen = false
+        dashboardOpen = false
+        calendarOpen = false
+        viewingTag = null
+        activeSavedSearch = search
+        query = search.query
+        quick = search.filters
+        showingResults = true
+        selected = null
+        if (search.account == ALL_ACCOUNTS) {
+            here = ALL_ACCOUNTS to allInboxes(0)
+        } else {
+            val accountMailboxes = mailboxes[search.account].orEmpty()
+            val inbox = folderFor("inbox", accountMailboxes) ?: accountMailboxes.firstOrNull()
+            if (inbox != null) {
+                here = search.account to inbox
+            }
+        }
         scope.launch { reload() }
     }
 
     LaunchedEffect(here) {
         here ?: return@LaunchedEffect
         selected = null
-        query = ""
-        showingResults = false
-        viewingTag = null
+        if (activeSavedSearch == null) {
+            query = ""
+            showingResults = false
+            viewingTag = null
+        }
         reload()
     }
     // Whether the server holds a mute for this conversation. Its own effect, so the first
@@ -5274,6 +5363,7 @@ private fun Reader(
                             settingsOpen = false
                             contactsOpen = false
                             calendarOpen = false
+                            activeSavedSearch = null
                             showingResults = query.isNotBlank()
                             selected = null
                             scope.launch { reload() }
@@ -5286,11 +5376,17 @@ private fun Reader(
                 here = here,
                 tags = remember(tagsSeen, tagColours) { mergedTags(tagsSeen, tagColours) },
                 hereTag = viewingTag,
+                savedSearches = savedSearches,
+                selectedSavedSearchId = activeSavedSearch?.id,
+                savedSearchCounts = savedSearchCounts,
+                onSelectSavedSearch = { search -> openSavedSearch(search) },
+                onManageSavedSearch = { search, job -> savedSearchAsk = SavedSearchAsk(search, job) },
                 onSelectTag = { keyword ->
                     settingsOpen = false
                     contactsOpen = false
                     dashboardOpen = false
                     calendarOpen = false
+                    activeSavedSearch = null
                     openTag(keyword)
                 },
                 onTagColour = { keyword, colour ->
@@ -5318,6 +5414,7 @@ private fun Reader(
                     contactsOpen = false
                     dashboardOpen = false
                     calendarOpen = false
+                    activeSavedSearch = null
                     here = key to mailbox
                 },
                 onWrite = {
@@ -5328,6 +5425,62 @@ private fun Reader(
                     write(account, Draft(from = from))
                 },
             )
+            savedSearchAsk?.let { ask ->
+                SavedSearchDialog(
+                    ask = ask,
+                    onClose = { savedSearchAsk = null },
+                    onConfirm = { name, queryText ->
+                        when (ask.job) {
+                            SavedSearchJob.SaveCurrent -> {
+                                val currentAccount = here?.first ?: ALL_ACCOUNTS
+                                val newSearch = SavedSearch(
+                                    name = name,
+                                    account = currentAccount,
+                                    query = query,
+                                    filters = quick,
+                                )
+                                val updated = saveSearch(savedSearches, newSearch)
+                                Settings.setSavedSearches(updated)
+                                savedSearches = updated
+                                activeSavedSearch = newSearch
+                            }
+                            SavedSearchJob.Rename -> {
+                                val updated = renameSavedSearch(savedSearches, ask.search.id, name)
+                                Settings.setSavedSearches(updated)
+                                savedSearches = updated
+                                if (activeSavedSearch?.id == ask.search.id) {
+                                    activeSavedSearch = activeSavedSearch?.copy(name = name)
+                                }
+                            }
+                            SavedSearchJob.EditQuery -> {
+                                val updated = updateSavedSearchQuery(savedSearches, ask.search.id, queryText, ask.search.filters)
+                                Settings.setSavedSearches(updated)
+                                savedSearches = updated
+                                if (activeSavedSearch?.id == ask.search.id) {
+                                    activeSavedSearch = activeSavedSearch?.copy(query = queryText)
+                                    query = queryText
+                                    scope.launch { reload() }
+                                }
+                            }
+                            SavedSearchJob.Delete -> {
+                                val updated = deleteSavedSearch(savedSearches, ask.search.id)
+                                Settings.setSavedSearches(updated)
+                                savedSearches = updated
+                                if (activeSavedSearch?.id == ask.search.id) {
+                                    activeSavedSearch = null
+                                    showingResults = false
+                                    query = ""
+                                    val inbox = folderFor("inbox", mailboxes[ask.search.account].orEmpty())
+                                    if (inbox != null) {
+                                        here = ask.search.account to inbox
+                                    }
+                                }
+                            }
+                        }
+                        savedSearchAsk = null
+                    },
+                )
+            }
             folderAsk?.let { ask ->
                 if (ask.job == FolderJob.Export && ask.mailbox != null) {
                     val key = ask.account
@@ -5548,6 +5701,7 @@ private fun Reader(
                         query = query,
                         folder = viewingTag?.let { tagsOf(setOf(it)).firstOrNull()?.label ?: it }
                             ?: here?.second?.name.orEmpty(),
+                        savedSearchName = activeSavedSearch?.name,
                     ),
                     /*
                      * Dragging a message onto a tag in the sidebar.
@@ -5610,6 +5764,19 @@ private fun Reader(
                     loadingMore = loadingMore,
                     onNeedMore = ::loadMore,
                     searching = showingResults,
+                    onSaveSearch = if (activeSavedSearch == null && (showingResults || query.isNotBlank() || quick.active)) {
+                        {
+                            savedSearchAsk = SavedSearchAsk(
+                                SavedSearch(
+                                    name = query.ifBlank { "Saved search" },
+                                    account = here?.first ?: ALL_ACCOUNTS,
+                                    query = query,
+                                    filters = quick,
+                                ),
+                                SavedSearchJob.SaveCurrent,
+                            )
+                        }
+                    } else null,
                     onSelect = { message, ctrl, shift ->
                         val token = rowToken(message)
                         picked = pickedAfter(emails.map { rowToken(it) }, picked, anchor, token, ctrl, shift)
@@ -6192,6 +6359,12 @@ internal data class FolderAsk(val account: String, val mailbox: Mailbox?, val jo
 /** What a right-click on a folder asked for. Answered by whoever owns the sidebar. */
 internal enum class FolderJob { CreateInside, Rename, ToTop, Delete, Export }
 
+/** A saved search job waiting on an answer. */
+internal data class SavedSearchAsk(val search: SavedSearch, val job: SavedSearchJob)
+
+/** What a right-click or save action on a saved search asked for. */
+internal enum class SavedSearchJob { SaveCurrent, Rename, EditQuery, Delete }
+
 /**
  * A hover label for an icon-only button, the row of five at the bottom of the sidebar
  * being the case that actually needed one: nothing there carries a word, so what each
@@ -6238,6 +6411,11 @@ internal fun Sidebar(
     /** What a right-click on a folder can ask for. Null hides the menu entirely. */
     folderMenu: ((String, Mailbox, FolderJob) -> Unit)? = null,
     onSelect: (String, Mailbox) -> Unit,
+    savedSearches: List<SavedSearch> = emptyList(),
+    selectedSavedSearchId: String? = null,
+    savedSearchCounts: Map<String, Int> = emptyMap(),
+    onSelectSavedSearch: (SavedSearch) -> Unit = {},
+    onManageSavedSearch: ((SavedSearch, SavedSearchJob) -> Unit)? = null,
     /** Every tag on every account, merged into one list. */
     tags: List<TagRow> = emptyList(),
     /** The tag being looked at, across every account that has it. */
@@ -6296,9 +6474,35 @@ internal fun Sidebar(
                     FolderRow(
                         mailbox = allInboxes(unread),
                         collapsed = collapsed,
-                        selected = here?.first == ALL_ACCOUNTS,
+                        selected = selectedSavedSearchId == null && here?.first == ALL_ACCOUNTS,
                         onClick = { onSelect(ALL_ACCOUNTS, allInboxes(unread)) },
                     )
+                }
+                val allSavedSearches = savedSearchesForAccount(savedSearches, ALL_ACCOUNTS)
+                if (allSavedSearches.isNotEmpty()) {
+                    if (!collapsed) {
+                        item(key = "saved-searches-head-all") {
+                            GroupHeading(
+                                text = "Saved searches",
+                                open = foldSavedSearches(ALL_ACCOUNTS) !in folded,
+                                onClick = { onFold(foldSavedSearches(ALL_ACCOUNTS)) },
+                                top = 6.dp,
+                            )
+                        }
+                    }
+                    val shownAll = if (!collapsed && foldSavedSearches(ALL_ACCOUNTS) in folded) emptyList() else allSavedSearches
+                    items(shownAll, key = { "saved-search/${it.id}" }) { searchItem ->
+                        SavedSearchRow(
+                            search = searchItem,
+                            collapsed = collapsed,
+                            selected = selectedSavedSearchId == searchItem.id,
+                            unread = savedSearchCounts[searchItem.id] ?: 0,
+                            onManage = onManageSavedSearch?.let { manage -> { job -> manage(searchItem, job) } },
+                            onClick = { onSelectSavedSearch(searchItem) },
+                        )
+                    }
+                }
+                item(key = "all-inboxes-divider") {
                     HorizontalDivider(
                         color = MaterialTheme.colorScheme.outlineVariant,
                         modifier = Modifier.padding(vertical = 8.dp),
@@ -6338,11 +6542,39 @@ internal fun Sidebar(
                         collapsed = collapsed,
                         // A tag view is not in any folder, so nothing in the folder list is
                         // the thing being looked at while one is open.
-                        selected = hereTag == null && here?.first == account.key &&
+                        selected = selectedSavedSearchId == null && hereTag == null && here?.first == account.key &&
                             here.second.id == row.mailbox.id,
                         onClick = { onSelect(account.key, row.mailbox) },
                         onManage = folderMenu?.let { manage -> { what -> manage(account.key, row.mailbox, what) } },
                     )
+                }
+                val accountSearches = if (accounts.size == 1) {
+                    savedSearches.filter { it.account == account.key || it.account == ALL_ACCOUNTS }
+                } else {
+                    savedSearchesForAccount(savedSearches, account.key)
+                }
+                if (accountSearches.isNotEmpty()) {
+                    if (!collapsed) {
+                        item(key = "saved-searches-head-${account.key}") {
+                            GroupHeading(
+                                text = "Saved searches",
+                                open = foldSavedSearches(account.key) !in folded,
+                                onClick = { onFold(foldSavedSearches(account.key)) },
+                                top = 6.dp,
+                            )
+                        }
+                    }
+                    val shownAccountSearches = if (!collapsed && foldSavedSearches(account.key) in folded) emptyList() else accountSearches
+                    items(shownAccountSearches, key = { "saved-search/${it.id}" }) { searchItem ->
+                        SavedSearchRow(
+                            search = searchItem,
+                            collapsed = collapsed,
+                            selected = selectedSavedSearchId == searchItem.id,
+                            unread = savedSearchCounts[searchItem.id] ?: 0,
+                            onManage = onManageSavedSearch?.let { manage -> { job -> manage(searchItem, job) } },
+                            onClick = { onSelectSavedSearch(searchItem) },
+                        )
+                    }
                 }
             }
             /*
@@ -6646,6 +6878,80 @@ internal fun shortAccountName(name: String, email: String): String {
     val local = email.substringBefore('@')
     val host = email.substringAfter('@', "").substringBefore('.')
     return if (local.equals("admin", ignoreCase = true) && host.isNotBlank()) host else local.ifBlank { email }
+}
+
+/**
+ * Asks for whatever a saved search job needs before it runs.
+ *
+ * Creates, renames, edits query, or deletes a saved search folder.
+ */
+@Composable
+private fun SavedSearchDialog(
+    ask: SavedSearchAsk,
+    onClose: () -> Unit,
+    onConfirm: (name: String, query: String) -> Unit,
+) {
+    var name by remember(ask) { mutableStateOf(if (ask.job == SavedSearchJob.SaveCurrent) "" else ask.search.name) }
+    var queryText by remember(ask) { mutableStateOf(ask.search.query) }
+    var busy by remember(ask) { mutableStateOf(false) }
+    val title = when (ask.job) {
+        SavedSearchJob.SaveCurrent -> "Save as folder"
+        SavedSearchJob.Rename -> "Rename ${ask.search.name}"
+        SavedSearchJob.EditQuery -> "Edit query for ${ask.search.name}"
+        SavedSearchJob.Delete -> "Delete ${ask.search.name}"
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!busy) onClose() },
+        title = { Text(title) },
+        text = {
+            Column {
+                when (ask.job) {
+                    SavedSearchJob.SaveCurrent, SavedSearchJob.Rename -> {
+                        OutlinedTextField(
+                            value = name,
+                            onValueChange = { name = it },
+                            enabled = !busy,
+                            singleLine = true,
+                            label = { Text("Name") },
+                        )
+                    }
+                    SavedSearchJob.EditQuery -> {
+                        OutlinedTextField(
+                            value = queryText,
+                            onValueChange = { queryText = it },
+                            enabled = !busy,
+                            singleLine = true,
+                            label = { Text("Query") },
+                        )
+                    }
+                    SavedSearchJob.Delete -> {
+                        Text("Delete saved search '${ask.search.name}'? This removes only the saved search, never mail.")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    busy = true
+                    onConfirm(name.trim(), queryText)
+                },
+                enabled = !busy && when (ask.job) {
+                    SavedSearchJob.SaveCurrent, SavedSearchJob.Rename -> name.isNotBlank()
+                    SavedSearchJob.EditQuery -> true
+                    SavedSearchJob.Delete -> true
+                },
+            ) {
+                Text(if (ask.job == SavedSearchJob.Delete) "Delete" else "Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onClose, enabled = !busy) {
+                Text("Cancel")
+            }
+        },
+    )
 }
 
 /**
@@ -6968,6 +7274,91 @@ private fun FolderRow(
     }
 }
 
+/**
+ * One saved search row in the sidebar.
+ *
+ * Draws with a magnifier icon so it is never confused with a real folder.
+ */
+@Composable
+@OptIn(ExperimentalComposeUiApi::class)
+private fun SavedSearchRow(
+    search: SavedSearch,
+    collapsed: Boolean,
+    selected: Boolean,
+    unread: Int = 0,
+    onManage: ((SavedSearchJob) -> Unit)? = null,
+    onClick: () -> Unit,
+) {
+    val tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+    var menu by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier.fillMaxWidth().height(32.dp)
+            .clip(MaterialTheme.shapes.small)
+            .background(if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+            .rowHover(showWash = !selected)
+            .clickable(onClick = onClick)
+            .onPointerEvent(PointerEventType.Press) { event ->
+                if (event.button == PointerButton.Secondary && onManage != null) menu = true
+            }
+            .padding(start = if (collapsed) 0.dp else 10.dp)
+            .padding(end = if (collapsed) 0.dp else 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = if (collapsed) Arrangement.Center else Arrangement.Start,
+    ) {
+        onManage?.let { manage ->
+            MenuLayer(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(
+                    text = { Text("Rename") },
+                    onClick = { menu = false; manage(SavedSearchJob.Rename) },
+                )
+                DropdownMenuItem(
+                    text = { Text("Edit query") },
+                    onClick = { menu = false; manage(SavedSearchJob.EditQuery) },
+                )
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text("Delete") },
+                    onClick = { menu = false; manage(SavedSearchJob.Delete) },
+                )
+            }
+        }
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                RampartIcons.Search,
+                contentDescription = if (collapsed) search.name else null,
+                tint = tint,
+                modifier = Modifier.size(16.dp),
+            )
+            if (collapsed && unread > 0) {
+                Box(
+                    Modifier.size(7.dp).offset(x = 9.dp, y = (-8).dp)
+                        .background(MaterialTheme.colorScheme.primary, CircleShape),
+                )
+            }
+        }
+        if (!collapsed) {
+            Spacer(Modifier.width(10.dp))
+            Text(
+                search.name,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (unread > 0) {
+                Text(
+                    "$unread",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = tint,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 internal fun SearchBar(
     query: String,
@@ -7158,7 +7549,13 @@ private fun FilterChip(
 /**
  * The list title. A search replaces the folder name until the search is cleared.
  */
-internal fun listHeading(searching: Boolean, query: String, folder: String): String {
+internal fun listHeading(
+    searching: Boolean,
+    query: String,
+    folder: String,
+    savedSearchName: String? = null,
+): String {
+    if (savedSearchName != null) return savedSearchName
     val typed = query.trim()
     if (searching && typed.isNotEmpty()) return "Results for $typed"
     return folder
@@ -7211,6 +7608,8 @@ internal fun MessageList(
     onNeedMore: () -> Unit = {},
     /** A search that came back empty, rather than a folder that has no mail. */
     searching: Boolean = false,
+    /** Action to save current search as a folder. */
+    onSaveSearch: (() -> Unit)? = null,
     /**
      * Draws every row as though the pointer were over it.
      *
@@ -7232,6 +7631,16 @@ internal fun MessageList(
         ) {
             Text(title, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
             Row(verticalAlignment = Alignment.CenterVertically) {
+                if (searching && onSaveSearch != null) {
+                    TextButton(
+                        onClick = onSaveSearch,
+                        contentPadding = PaddingValues(horizontal = 8.dp),
+                        modifier = Modifier.height(26.dp),
+                    ) {
+                        Text("Save as folder", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Spacer(Modifier.width(4.dp))
+                }
                 var sorting by remember { mutableStateOf(false) }
                 Box {
                     IconButton(onClick = { sorting = true }, modifier = Modifier.size(26.dp)) {

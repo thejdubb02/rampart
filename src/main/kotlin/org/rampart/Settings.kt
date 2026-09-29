@@ -52,6 +52,19 @@ object Settings {
     }
 
     /**
+     * Saved search queries stored locally.
+     *
+     * Kept in the local settings file alongside other preferences.
+     */
+    internal fun savedSearches(): List<SavedSearch> = (read()["savedSearches"] as? JsonArray)?.mapNotNull { value ->
+        runCatching { SavedSearchJson.decode(value) }.getOrNull()
+    } ?: emptyList()
+
+    internal fun setSavedSearches(searches: List<SavedSearch>) = write {
+        put("savedSearches", JsonArray(searches.map(SavedSearchJson::encode)))
+    }
+
+    /**
      * How tightly packed the message list is: "compact", "normal", or "spacious".
      */
     fun density(): String? = read()["density"]?.jsonPrimitive?.contentOrNull
