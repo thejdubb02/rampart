@@ -87,6 +87,10 @@ server what it can do and hides what it cannot.
   the mail still arrives, a little later.
 - **Server-side settings, identities, aliases and the admin console**, which are Stalwart's
   and appear only on a Stalwart account with the rights for them.
+- **Settings that follow you between computers**, which need JMAP file storage
+  (`urn:ietf:params:jmap:filenode`) to keep one small file in the account's own Files.
+  Stalwart has it. Anywhere else the settings stay on the computer, and Settings, Accounts
+  says so. Done as you with your own sign-in. See `settings-sync.md`.
 - **Changing your password, app passwords and two-step login**, in Settings, Security. Stalwart
   over JMAP only, done as you with your own sign-in and never with an admin token. On any
   other account the page says in one sentence why it has nothing to offer. See
