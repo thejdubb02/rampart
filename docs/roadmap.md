@@ -431,6 +431,9 @@ is set). Real numbers from a scratch build on the development box, not from the 
 Folder open stays well under the 100 ms budget. Drawing each layout was not measured:
 that needs the app running, and Compose could not be built where this was written.
 
+The rest of RAM-44, round trips, the list, opening a message and memory, is measured in
+`performance.md`, with how to rerun every number.
+
 **Found on the way, and fixed:** writing a page back into the store replaced each row in
 the full-text index with its own `DELETE FROM search WHERE id = ?`, and `id` is an
 unindexed FTS column, so every row written read the whole index. A page of a hundred took
@@ -1042,6 +1045,15 @@ displacing something that is already there.
   one do not sound the same. (2026-09-17)
 - **Settings search.** Bulwark has a search box above its settings nav. Worth having once
   there are more pages than fit on a screen. (2026-09-17)
+- **A sliding window for the message list's rows.** Composition holds only the rows on
+  screen, but a folder scrolled to row 50,000 keeps all 50,000 summaries, 29 MB. Found
+  measuring RAM-44, see `performance.md`. (2026-09-29)
+- **A bounded sweep of this session's message documents.** Each opened message leaves a
+  temporary file until exit and a path in the JDK's delete-on-exit list. Found measuring
+  RAM-44. (2026-09-29)
+- **New mail in 3 requests rather than 4**, by handing the list reload the state the poll
+  has just read, and the poll asking every account's state at once. Found measuring
+  RAM-44. (2026-09-29)
 
 ---
 
