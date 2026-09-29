@@ -1349,6 +1349,7 @@ private fun Reader(
      * here. Cleared with the transcript, because a new conversation has been shown nothing.
      */
     val chatShown = remember { mutableSetOf<String>() }
+    var rookAccount by remember { mutableStateOf<String?>(null) }
     // Setting changes Rook has asked for. Only a Confirm press in the panel writes one.
     var settingCards by remember { mutableStateOf(ChangeDesk()) }
     /*
@@ -3691,6 +3692,7 @@ private fun Reader(
         // The open message's account first, so Rook in the unified inbox acts where the
         // person is looking rather than on whichever account signed in first.
         val key = selected?.let { accountOf(it) } ?: settingsAccount() ?: return
+        rookAccount = key
         val config = Assistant.config()
         Assistant.whyNot(Assistant.CHAT, config)?.let {
             said = said + Said("result", it)
@@ -3747,7 +3749,9 @@ private fun Reader(
      */
     fun confirmCard(number: Int) {
         val card = settingCards.card(number)?.takeIf { it.status == CardStatus.WAITING } ?: return
-        val key = settingsAccount()
+        // The account Rook was working in when it drafted the card, not whichever the
+        // settings page would pick, so a change meant for one account never lands on another.
+        val key = rookAccount ?: settingsAccount()
         val here = sessions.firstOrNull { it.key == key }
         val known = key?.let { identities[it] }.orEmpty()
         val signedIn = sessions.map { it.account.email }
