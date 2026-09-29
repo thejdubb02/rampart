@@ -1040,7 +1040,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         mine: Set<String>,
         days: Int = 30,
         now: java.time.Instant = java.time.Instant.now(),
-        zone: java.time.ZoneId = java.time.ZoneId.systemDefault(),
+        zone: java.time.ZoneId = Regional.zone(),
     ): MailStats {
         val since = now.minus(java.time.Duration.ofDays(days.toLong())).toString()
         val arrived = receivedAtIn(listOf(inbox) + junk, since)

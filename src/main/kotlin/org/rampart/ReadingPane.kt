@@ -70,10 +70,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.nio.file.Files
 import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-
-internal val WHEN = DateTimeFormatter.ofPattern("d MMM  HH:mm").withZone(ZoneId.systemDefault())
+import java.time.format.TextStyle
 
 internal const val TNEF_UNREADABLE = "This file could not be read, so it was saved as it is."
 
@@ -1303,8 +1300,18 @@ internal fun downloadsFolder(): java.nio.file.Path {
     return target
 }
 
+/** The short stamp on a message row: a time today, a day this week, the date after that. */
 internal fun String.asLocalTime(): String =
-    runCatching { WHEN.format(Instant.parse(this)) }.getOrDefault(this)
+    runCatching { Regional.listStamp(Instant.parse(this)) }.getOrDefault(this)
+
+/**
+ * A date and a time, for a line written into a message someone sends.
+ *
+ * The row's short stamp would turn today's mail into "On 15:45, Sam wrote", which is
+ * not a date the recipient can place. The full form keeps the day.
+ */
+internal fun String.asWrittenTime(): String =
+    runCatching { Regional.dateTime(Instant.parse(this)) }.getOrDefault(this)
 
 /**
  * The same instant written out in full, for the details panel.
@@ -1314,10 +1321,10 @@ internal fun String.asLocalTime(): String =
  * when it actually landed is how you spot one that sat somewhere for an hour.
  */
 internal fun String.asFullLocalTime(): String = runCatching {
-    java.time.format.DateTimeFormatter
-        .ofPattern("EEEE, d MMMM yyyy 'at' HH:mm:ss")
-        .withZone(java.time.ZoneId.systemDefault())
-        .format(Instant.parse(this))
+    val region = Regional.current()
+    val at = Instant.parse(this).atZone(region.zone)
+    val weekday = at.dayOfWeek.getDisplayName(TextStyle.FULL, region.locale)
+    "$weekday, ${formatFull(region, at.toLocalDate())} at ${formatTime(region, at, withSeconds = true)}"
 }.getOrDefault(this)
 
 /**
@@ -1342,17 +1349,17 @@ private fun TrackingSection(rows: List<Pair<Tracked, List<Fetch>>>) {
             Spacer(Modifier.height(8.dp))
             Text(timeline.recipient.ifBlank { "Recipient" }, fontWeight = FontWeight.SemiBold)
             val summary = buildList {
-                timeline.firstRead?.let { add("First read ${WHEN.format(it)}") }
-                timeline.lastRead?.let { add("Last read ${WHEN.format(it)}") }
+                timeline.firstRead?.let { add("First read ${Regional.dateTime(it)}") }
+                timeline.lastRead?.let { add("Last read ${Regional.dateTime(it)}") }
                 if (timeline.reads > 0) add("${timeline.reads} read${if (timeline.reads == 1) "" else "s"}")
                 if (timeline.clicked) add("Clicked")
-                timeline.repliedAt?.let { add("Replied ${WHEN.format(it)}") }
+                timeline.repliedAt?.let { add("Replied ${Regional.dateTime(it)}") }
             }.ifEmpty { listOf("No activity yet") }
             Text(summary.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
             timeline.events.forEach { event ->
                 val action = if (event.event == "click") "Clicked ${event.url}" else "Opened"
                 Text(
-                    "${WHEN.format(event.at)}  $action. ${classificationText(event)}",
+                    "${Regional.dateTime(event.at)}  $action. ${classificationText(event)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.outline,
                 )

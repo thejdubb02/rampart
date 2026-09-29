@@ -150,7 +150,7 @@ internal fun bytesOf(value: String): Long? {
 internal fun jmapFilter(
     condition: Condition?,
     except: Collection<String> = emptyList(),
-    zone: ZoneId = ZoneId.systemDefault(),
+    zone: ZoneId = Regional.zone(),
 ): JsonObject {
     val tree = normalized(condition)?.let { jmapNode(it, zone) }
     val skip = except.filter { it.isNotBlank() }.distinct()
@@ -229,7 +229,7 @@ internal sealed interface LocalQuery {
 internal fun localWhere(
     condition: Condition?,
     except: Collection<String> = emptyList(),
-    zone: ZoneId = ZoneId.systemDefault(),
+    zone: ZoneId = Regional.zone(),
 ): LocalQuery {
     val args = ArrayList<Any>()
     val parts = ArrayList<String>()

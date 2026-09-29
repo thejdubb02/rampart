@@ -3,6 +3,7 @@ package org.rampart
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
+import java.util.Locale
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -15,6 +16,18 @@ import kotlin.test.assertTrue
 class CalendarTest {
 
     private val london = ZoneId.of("Europe/London")
+
+    /** Day first, 24-hour, English: the sentences below were written that way. */
+    private val words = regionFrom(
+        language = "en",
+        listDate = "smart",
+        dateOrder = "dmy",
+        timeFormat = "24",
+        timeZone = "Europe/London",
+        weekStart = "monday",
+        systemLocale = Locale.UK,
+        systemZone = london,
+    )
 
     /**
      * Built by joining rather than as an indented literal, because a line beginning with a
@@ -52,7 +65,7 @@ class CalendarTest {
         assertEquals("NEEDS-ACTION", invitation.attendees.single().status)
         assertEquals(
             "Tuesday 22 September 2026, 14:00 to 15:00",
-            whenText(invitation.starts, invitation.ends, london),
+            whenText(invitation.starts, invitation.ends, london, words),
         )
     }
 
@@ -166,7 +179,7 @@ class CalendarTest {
         val half = invitationIn(ics("DTSTART:20260922T130000Z\nDURATION:PT30M"))!!
         assertEquals(
             "Tuesday 22 September 2026, 14:00 to 14:30",
-            whenText(half.starts, half.ends, london),
+            whenText(half.starts, half.ends, london, words),
         )
         // java.time has no idea what a week is, so PnW is expanded before it sees it.
         val week = invitationIn(ics("DTSTART:20260922T130000Z\nDURATION:P1W"))!!
@@ -179,8 +192,8 @@ class CalendarTest {
         // Converting a date is how a birthday lands on the day before for anyone west of
         // the sender.
         val invitation = invitationIn(ics("DTSTART;VALUE=DATE:20260922\nDTEND;VALUE=DATE:20260923"))!!
-        assertEquals("Tuesday 22 September 2026", whenText(invitation.starts, invitation.ends, ZoneId.of("Pacific/Auckland")))
-        assertEquals("Tuesday 22 September 2026", whenText(invitation.starts, invitation.ends, ZoneId.of("America/Los_Angeles")))
+        assertEquals("Tuesday 22 September 2026", whenText(invitation.starts, invitation.ends, ZoneId.of("Pacific/Auckland"), words))
+        assertEquals("Tuesday 22 September 2026", whenText(invitation.starts, invitation.ends, ZoneId.of("America/Los_Angeles"), words))
     }
 
     @Test
@@ -190,7 +203,7 @@ class CalendarTest {
         val invitation = invitationIn(ics("DTSTART;VALUE=DATE:20260922\nDTEND;VALUE=DATE:20260925"))!!
         assertEquals(
             "Tuesday 22 September 2026 to Thursday 24 September 2026",
-            whenText(invitation.starts, invitation.ends, london),
+            whenText(invitation.starts, invitation.ends, london, words),
         )
     }
 
@@ -199,13 +212,13 @@ class CalendarTest {
         val invitation = invitationIn(ics("DTSTART:20260922T220000Z\nDTEND:20260923T010000Z"))!!
         assertEquals(
             "Tuesday 22 September 2026, 23:00 to Wednesday 23 September 2026, 02:00",
-            whenText(invitation.starts, invitation.ends, london),
+            whenText(invitation.starts, invitation.ends, london, words),
         )
     }
 
     @Test
     fun `recurrence becomes a sentence`() {
-        fun repeats(rule: String) = invitationIn(ics("RRULE:$rule"))!!.repeats
+        fun repeats(rule: String) = invitationIn(ics("RRULE:$rule"), words)!!.repeats
 
         assertEquals("Repeats every day", repeats("FREQ=DAILY"))
         assertEquals("Repeats every 2 weeks on Tuesday and Thursday", repeats("FREQ=WEEKLY;INTERVAL=2;BYDAY=TU,TH"))

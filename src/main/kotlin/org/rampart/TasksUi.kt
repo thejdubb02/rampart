@@ -97,7 +97,7 @@ internal fun taskLinkOf(summary: Summary, body: Body?): TaskLink = TaskLink(
 
 /** Rook's task tool for one turn, answering with the reason on an account without tasks. */
 internal fun taskToolsFor(backend: MailBackend?, accountName: String, openLink: TaskLink?): TaskTools =
-    TaskTools(noTasksBecause(backend, accountName), ZoneId.systemDefault(), openLink)
+    TaskTools(noTasksBecause(backend, accountName), Regional.zone(), openLink)
 
 /**
  * "Make a task", under an open message.
@@ -114,7 +114,7 @@ internal fun MakeTask(context: MailCalendar, summary: Summary, body: Body?) {
     val text = remember(summary.id, body) { rookTextOf(body) }
     val link = remember(summary.id, body) { taskLinkOf(summary, body) }
     val scope = rememberCoroutineScope()
-    val zone = remember { ZoneId.systemDefault() }
+    val zone = Regional.zone()
     var running by remember(summary.id) { mutableStateOf(false) }
     var fault by remember(summary.id) { mutableStateOf<Pair<String, String?>?>(null) }
     var form by remember(summary.id) { mutableStateOf<TaskForm?>(null) }
@@ -424,7 +424,7 @@ internal fun TasksFollow(backends: List<MailBackend>) {
 @Composable
 internal fun TasksPanel(backend: MailBackend?, accountName: String) {
     val store = remember(backend) { taskBackendFor(backend) }
-    val zone = remember { ZoneId.systemDefault() }
+    val zone = Regional.zone()
     var reload by remember { mutableIntStateOf(0) }
     var shown by remember(store) { mutableStateOf<List<TaskItem>?>(null) }
     var loading by remember(store) { mutableStateOf(false) }

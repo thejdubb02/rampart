@@ -8,6 +8,7 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
+import java.util.Locale
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -21,6 +22,18 @@ import kotlin.test.assertTrue
  */
 class FreeSlotsTest {
     private val london = ZoneId.of("Europe/London")
+
+    /** Day first and 24-hour, so nine o'clock keeps its leading zero. */
+    private val words = regionFrom(
+        language = "en",
+        listDate = "smart",
+        dateOrder = "dmy",
+        timeFormat = "24",
+        timeZone = "Europe/London",
+        weekStart = "monday",
+        systemLocale = Locale.UK,
+        systemZone = london,
+    )
 
     /** Tuesday 29 September 2026, 08:00 in London. Early enough that nothing tomorrow has passed. */
     private val now: Instant = LocalDateTime.of(2026, 9, 29, 8, 0).atZone(london).toInstant()
@@ -189,13 +202,13 @@ class FreeSlotsTest {
     fun `the times are written as plain lines with the zone on each`() {
         val picked = spread(slots(emptyList(), "2026-10-05", "2026-10-16"))
         assertEquals(
-            "Monday 5 October, 9:00 to 9:30 BST\n" +
+            "Monday 5 October, 09:00 to 09:30 BST\n" +
                 "Tuesday 6 October, 13:00 to 13:30 BST\n" +
-                "Wednesday 7 October, 9:00 to 9:30 BST",
-            slotLines(picked),
+                "Wednesday 7 October, 09:00 to 09:30 BST",
+            slotLines(picked, words),
         )
         val afterChange = spread(slots(emptyList(), "2026-10-26"))
-        assertTrue(slotLines(afterChange).startsWith("Monday 26 October, 9:00 to 9:30 GMT"))
+        assertTrue(slotLines(afterChange, words).startsWith("Monday 26 October, 09:00 to 09:30 GMT"))
     }
 
     private fun occurrence(json: String, from: String, until: String) =

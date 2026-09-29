@@ -582,7 +582,11 @@ internal data class SimpleRepeat(
 }
 
 /** The rule as a sentence, for the details dialog and for a rule the picker cannot edit. */
-internal fun repeatSentence(rules: List<RecurrenceRule>, start: LocalDateTime): String {
+internal fun repeatSentence(
+    rules: List<RecurrenceRule>,
+    start: LocalDateTime,
+    region: Region = Regional.current(),
+): String {
     if (rules.isEmpty()) return ""
     val rule = rules.first()
     if (!rule.exact) return "Repeats by a rule Rampart cannot draw yet, so only its first date is shown"
@@ -591,14 +595,14 @@ internal fun repeatSentence(rules: List<RecurrenceRule>, start: LocalDateTime): 
         Frequency.WEEKLY -> {
             val base = if (rule.interval == 1) "Every week" else "Every ${rule.interval} weeks"
             val days = rule.byDay.map { it.day }.ifEmpty { listOf(start.dayOfWeek) }.sorted()
-            "$base on " + joinWords(days.map { it.getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.UK) })
+            "$base on " + joinWords(days.map { it.getDisplayName(java.time.format.TextStyle.FULL, region.locale) })
         }
         Frequency.MONTHLY -> if (rule.interval == 1) "Every month" else "Every ${rule.interval} months"
         Frequency.YEARLY -> if (rule.interval == 1) "Every year" else "Every ${rule.interval} years"
     }
     val end = when {
         rule.count != null -> ", ${rule.count} times"
-        rule.until != null -> ", until " + rule.until.format(DateTimeFormatter.ofPattern("d MMMM yyyy", java.util.Locale.UK))
+        rule.until != null -> ", until " + formatFull(region, rule.until.toLocalDate())
         else -> ""
     }
     return every + end + if (rules.size > 1) ", and by other rules as well" else ""
@@ -621,8 +625,8 @@ internal data class EventDraft(
     val description: String = "",
     /** Null keeps the event's existing rules untouched, for a rule the picker cannot show. */
     val repeat: SimpleRepeat? = SimpleRepeat(),
-    /** The zone a timed event is written in. The reader's own, for anything made here. */
-    val timeZone: ZoneId = ZoneId.systemDefault(),
+    /** The zone a timed event is written in. The zone mail and calendars are shown in. */
+    val timeZone: ZoneId = Regional.zone(),
 )
 
 /** Why a draft cannot be saved, in one sentence, or null when it can. */
@@ -768,7 +772,7 @@ internal fun draftFrom(occurrence: Occurrence, calendars: List<CalendarInfo>): E
         description = occurrence.description,
         repeat = SimpleRepeat.of(event.rules),
         // Timed events are shown in the reader's zone, so an edit is written back in it.
-        timeZone = ZoneId.systemDefault(),
+        timeZone = Regional.zone(),
     )
 }
 

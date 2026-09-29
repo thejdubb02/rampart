@@ -1,5 +1,6 @@
 package org.rampart
 
+import java.util.Locale
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -11,9 +12,7 @@ import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
-import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
-import java.util.Locale
 
 /*
  * "Help me schedule": three free times from the person's own calendar, written into a reply.
@@ -174,17 +173,18 @@ internal fun busyFrom(occurrences: List<Occurrence>, zone: ZoneId): List<Busy> =
         }
     }
 
-private val SLOT_DAY: DateTimeFormatter = DateTimeFormatter.ofPattern("EEEE d MMMM", Locale.UK)
-private val SLOT_CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("H:mm", Locale.UK)
-private val SLOT_ZONE: DateTimeFormatter = DateTimeFormatter.ofPattern("zzz", Locale.UK)
-
 /**
  * The times as lines of plain text, one per time, in the words a person would type them:
- * "Tuesday 6 October, 9:00 to 9:30 BST". The zone is on every line because the reader of
+ * "Tuesday 6 October, 09:00 to 09:30 BST". The zone is on every line because the reader of
  * the reply may not be in it, and a time without one is a meeting an hour out.
+ *
+ * The clock is the slot's own. It was already placed in a zone, and moving it into the
+ * display zone a second time would name the wrong hour next to the abbreviation.
  */
-internal fun slotLines(slots: List<Slot>): String = slots.joinToString("\n") { s ->
-    "${s.start.format(SLOT_DAY)}, ${s.start.format(SLOT_CLOCK)} to ${s.end.format(SLOT_CLOCK)} ${s.start.format(SLOT_ZONE)}"
+internal fun slotLines(slots: List<Slot>, region: Region = Regional.current()): String = slots.joinToString("\n") { s ->
+    val day = s.start.dayOfWeek.getDisplayName(TextStyle.FULL, region.locale)
+    val date = formatMonthDay(region, s.start.toLocalDate())
+    "$day $date, ${formatTime(region, s.start)} to ${formatTime(region, s.end)} ${formatZone(region, s.start)}"
 }
 
 /**
@@ -306,8 +306,8 @@ internal fun scheduleAskOf(answer: String, today: LocalDate): ScheduleAsk {
  */
 internal fun slotsNote(found: Int, ask: ScheduleAsk): String? = when {
     found == 0 -> "There is no free ${ask.minutes} minute time between 9:00 and 17:00 on a weekday from " +
-        "${ask.from.format(SLOT_DAY)} to ${ask.through.format(SLOT_DAY)}."
+        "${Regional.dayTitle(ask.from)} to ${Regional.dayTitle(ask.through)}."
     found < SLOTS_OFFERED -> "Only $found free ${ask.minutes} minute " + (if (found == 1) "time" else "times") +
-        " between 9:00 and 17:00 on a weekday from ${ask.from.format(SLOT_DAY)} to ${ask.through.format(SLOT_DAY)}."
+        " between 9:00 and 17:00 on a weekday from ${Regional.dayTitle(ask.from)} to ${Regional.dayTitle(ask.through)}."
     else -> null
 }

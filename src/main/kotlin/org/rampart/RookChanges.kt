@@ -281,7 +281,7 @@ internal class SettingsTools(
  * Today's date is in it because "until Friday" is a date the model has to work out, and a
  * model that does not know what day it is will guess.
  */
-internal fun settingsPrompt(today: LocalDate = LocalDate.now()): String = """
+internal fun settingsPrompt(today: LocalDate = LocalDate.now(Regional.zone())): String = """
     Settings. You can find, read and propose changes to every setting in Rampart, in this mailbox on the server, and on the Stalwart server when an admin sign-in is saved.
     {"tool":"list_settings","args":{"search":"dark mode"}}
       Finds settings by what they are about. Answers with ids, names and, where it is quick, the value now.

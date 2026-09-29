@@ -79,7 +79,7 @@ internal fun NewMailNotifySettings(accounts: List<AccountMailboxes>, enabled: Bo
                 enabled = enabled,
                 modifier = Modifier.width(110.dp),
             )
-            if (parsed != null && parsed.covers(LocalTime.now())) {
+            if (parsed != null && parsed.covers(LocalTime.now(Regional.zone()))) {
                 Text("Quiet now.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
             }
         }

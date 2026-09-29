@@ -219,7 +219,7 @@ internal fun recurrenceKey(at: EventTime, event: CalendarEvent): LocalDateTime? 
 }
 
 /** The day the calendar page should open on for this meeting, in the reader's zone. */
-internal fun jumpDate(invitation: Invitation, match: CalendarMatch, viewer: ZoneId = ZoneId.systemDefault()): LocalDate? {
+internal fun jumpDate(invitation: Invitation, match: CalendarMatch, viewer: ZoneId = Regional.zone()): LocalDate? {
     val at = invitation.recurrenceId ?: invitation.starts
     val instant = at?.instant
     if (instant != null) {

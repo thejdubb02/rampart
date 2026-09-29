@@ -4,6 +4,7 @@ import java.time.DayOfWeek
 import java.time.Instant
 import java.time.ZoneId
 import java.time.ZonedDateTime
+import java.util.Locale
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -13,6 +14,18 @@ import kotlin.test.assertTrue
 class SnoozeTest {
 
     private val london = ZoneId.of("Europe/London")
+
+    /** Day first and 24-hour, so "17:30" stays "17:30" rather than following this computer. */
+    private val words = regionFrom(
+        language = "en",
+        listDate = "smart",
+        dateOrder = "dmy",
+        timeFormat = "24",
+        timeZone = "Europe/London",
+        weekStart = "monday",
+        systemLocale = Locale.UK,
+        systemZone = london,
+    )
 
     /** A Wednesday, mid-afternoon. */
     private val wednesday = ZonedDateTime.of(2026, 9, 16, 14, 30, 0, 0, london)
@@ -84,7 +97,7 @@ class SnoozeTest {
 
     @Test
     fun `next week is Monday morning`() {
-        val due = SnoozeUntil.NEXT_WEEK.dueAt(wednesday)
+        val due = SnoozeUntil.NEXT_WEEK.dueAt(wednesday, weekStart = DayOfWeek.MONDAY)
         assertEquals(DayOfWeek.MONDAY, due.dayOfWeek)
         assertEquals(9, due.hour)
         assertTrue(due.isAfter(wednesday))
@@ -93,12 +106,12 @@ class SnoozeTest {
     @Test
     fun `what it says on the row changes with how far off it is`() {
         val zone = wednesday.zone
-        fun text(at: ZonedDateTime) = snoozeText(at.toInstant(), wednesday)
+        fun text(at: ZonedDateTime) = snoozeText(at.toInstant(), wednesday, words)
 
         assertEquals("back at 17:30", text(wednesday.plusHours(3)))
         assertEquals("back tomorrow at 09:00", text(wednesday.plusDays(1).withHour(9).withMinute(0)))
         assertEquals("back Monday at 09:00", text(wednesday.with(DayOfWeek.MONDAY).plusWeeks(1).withHour(9).withMinute(0)))
-        assertEquals("back on 30 September", text(wednesday.withDayOfMonth(30).withHour(9)))
+        assertEquals("back on 30 September 2026", text(wednesday.withDayOfMonth(30).withHour(9)))
         assertEquals(zone, london)
     }
 

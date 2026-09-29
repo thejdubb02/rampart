@@ -6,7 +6,6 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.temporal.TemporalAdjusters
-import java.util.Locale
 
 /*
  * The calendar's arithmetic that is about drawing rather than about events: which days a
@@ -22,16 +21,20 @@ internal const val AGENDA_DAYS = 30L
 /**
  * The days a view draws, from the first up to but not including the second.
  *
- * Weeks start on Monday, which is the ISO week and what most of the world's calendars
- * use. A month is always six whole weeks, so the grid does not change height as you page.
+ * A week starts on [weekStart], the day chosen in Language, Region and Time. A month is
+ * always six whole weeks, so the grid does not change height as you page.
  */
-internal fun visibleRange(view: CalendarView, anchor: LocalDate): Pair<LocalDate, LocalDate> = when (view) {
+internal fun visibleRange(
+    view: CalendarView,
+    anchor: LocalDate,
+    weekStart: DayOfWeek = Regional.firstDayOfWeek(),
+): Pair<LocalDate, LocalDate> = when (view) {
     CalendarView.MONTH -> {
-        val first = anchor.withDayOfMonth(1).with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+        val first = anchor.withDayOfMonth(1).with(TemporalAdjusters.previousOrSame(weekStart))
         first to first.plusDays(42)
     }
     CalendarView.WEEK -> {
-        val first = anchor.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+        val first = anchor.with(TemporalAdjusters.previousOrSame(weekStart))
         first to first.plusDays(7)
     }
     CalendarView.DAY -> anchor to anchor.plusDays(1)
@@ -49,36 +52,39 @@ internal fun stepped(view: CalendarView, anchor: LocalDate, forward: Boolean): L
     }
 }
 
-internal val MONTH_TITLE = DateTimeFormatter.ofPattern("MMMM yyyy", Locale.UK)
-internal val DAY_TITLE = DateTimeFormatter.ofPattern("EEEE d MMMM yyyy", Locale.UK)
-internal val SHORT_DAY = DateTimeFormatter.ofPattern("d MMM", Locale.UK)
-internal val CALENDAR_CLOCK = DateTimeFormatter.ofPattern("HH:mm", Locale.UK)
+/** What the event editor types and parses. Not a display format: the field has to round-trip. */
+internal val CALENDAR_CLOCK = DateTimeFormatter.ofPattern("HH:mm")
 internal val DATE_FIELD = DateTimeFormatter.ofPattern("yyyy-MM-dd")
 
 /** The header over the grid, in words. */
-internal fun rangeTitle(view: CalendarView, anchor: LocalDate): String {
-    val (first, until) = visibleRange(view, anchor)
+internal fun rangeTitle(
+    view: CalendarView,
+    anchor: LocalDate,
+    weekStart: DayOfWeek = Regional.firstDayOfWeek(),
+    region: Region = Regional.current(),
+): String {
+    val (first, until) = visibleRange(view, anchor, weekStart)
     val last = until.minusDays(1)
     return when (view) {
-        CalendarView.MONTH -> anchor.format(MONTH_TITLE)
-        CalendarView.DAY -> anchor.format(DAY_TITLE)
+        CalendarView.MONTH -> formatMonthTitle(region, anchor)
+        CalendarView.DAY -> formatDayTitle(region, anchor)
         else -> if (first.year == last.year) {
-            "${first.format(SHORT_DAY)} to ${last.format(SHORT_DAY)} ${last.year}"
+            "${formatShort(region, first)} to ${formatShort(region, last)} ${last.year}"
         } else {
-            "${first.format(SHORT_DAY)} ${first.year} to ${last.format(SHORT_DAY)} ${last.year}"
+            "${formatShort(region, first)} ${first.year} to ${formatShort(region, last)} ${last.year}"
         }
     }
 }
 
 /** An occurrence's time as a person reads it on a list. */
-internal fun timeText(o: Occurrence): String = when {
+internal fun timeText(o: Occurrence, region: Region = Regional.current()): String = when {
     o.allDay -> {
         val last = o.end.toLocalDate().minusDays(1)
-        if (!last.isAfter(o.start.toLocalDate())) "All day" else "All day, to ${last.format(SHORT_DAY)}"
+        if (!last.isAfter(o.start.toLocalDate())) "All day" else "All day, to ${formatShort(region, last)}"
     }
     o.start.toLocalDate() == o.end.toLocalDate() || o.end == o.start.toLocalDate().plusDays(1).atStartOfDay() ->
-        "${o.start.format(CALENDAR_CLOCK)} to ${o.end.format(CALENDAR_CLOCK)}"
-    else -> "${o.start.format(CALENDAR_CLOCK)} to ${o.end.format(SHORT_DAY)} ${o.end.format(CALENDAR_CLOCK)}"
+        "${formatTime(region, o.start)} to ${formatTime(region, o.end)}"
+    else -> "${formatTime(region, o.start)} to ${formatShort(region, o.end.toLocalDate())} ${formatTime(region, o.end)}"
 }
 
 /**

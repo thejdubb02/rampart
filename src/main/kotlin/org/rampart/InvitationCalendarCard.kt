@@ -118,7 +118,7 @@ internal fun InvitationCalendarLine(invitation: Invitation, context: InvitationC
     fun act(action: CalendarAction) {
         val found = match ?: return
         if (action == CalendarAction.SHOW) {
-            CalendarJump.target = CalendarJumpTarget(context.account, found.eventId, jumpDate(invitation, found) ?: LocalDate.now())
+            CalendarJump.target = CalendarJumpTarget(context.account, found.eventId, jumpDate(invitation, found) ?: LocalDate.now(Regional.zone()))
             return
         }
         busy = true
