@@ -58,7 +58,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -84,8 +83,27 @@ import javax.swing.JFileChooser
 internal object FilesPage {
     var open by mutableStateOf(false)
 
-    /** True when at least one account has file storage. The sidebar button hides otherwise. */
+    /** True when at least one account has file storage. The app bar's Files button hides otherwise. */
     var offered by mutableStateOf(false)
+
+    /** The folder the page opens on, or null for the top. See [openAt]. */
+    var startAt by mutableStateOf<String?>(null)
+        private set
+
+    /**
+     * Counts every [openAt], so asking for the same folder twice still moves the page there
+     * after somebody has wandered off it. The folder alone would not change and nothing
+     * would happen, which reads as the click not landing.
+     */
+    var asked by mutableStateOf(0)
+        private set
+
+    /** Opens the page on [folder], which is how the panel beside the mail hands over to it. */
+    fun openAt(folder: String?) {
+        startAt = folder
+        asked++
+        open = true
+    }
 }
 
 /**
@@ -123,7 +141,7 @@ internal fun FilesFollows(
 }
 
 /** A sheet with its corner turned down, on the same 18 unit grid and 1.4 stroke as Icons.kt. */
-private val FilesGlyph: ImageVector = ImageVector.Builder(
+internal val FilesGlyph: ImageVector = ImageVector.Builder(
     name = "Files",
     defaultWidth = 18.dp,
     defaultHeight = 18.dp,
@@ -141,22 +159,6 @@ private val FilesGlyph: ImageVector = ImageVector.Builder(
         strokeLineJoin = StrokeJoin.Round,
     )
 }.build()
-
-/** The sidebar footer's Files button. Nothing at all when no account has file storage. */
-@Composable
-internal fun FilesSidebarButton(size: Dp) {
-    if (!FilesPage.offered) return
-    SidebarTooltip("Files") {
-        IconButton(onClick = { FilesPage.open = !FilesPage.open }, modifier = Modifier.size(size)) {
-            Icon(
-                FilesGlyph,
-                contentDescription = "Files",
-                tint = if (FilesPage.open) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
-                modifier = Modifier.size(16.dp),
-            )
-        }
-    }
-}
 
 /** Why [session] has no Files page, in one sentence, or null when it has one. */
 internal fun filesUnavailable(session: Session?): String? = when {
@@ -188,7 +190,7 @@ internal fun FilesPane(session: Session?) {
     val store = remember(session) { filesOf(session?.jmap) }
     val scope = rememberCoroutineScope()
     var tree by remember(store) { mutableStateOf<FileTree?>(null) }
-    var here by remember(store) { mutableStateOf<String?>(null) }
+    var here by remember(store, FilesPage.asked) { mutableStateOf(FilesPage.startAt) }
     var loading by remember(store) { mutableStateOf(false) }
     var fault by remember(store) { mutableStateOf<Fault?>(null) }
     var busy by remember(store) { mutableStateOf<String?>(null) }
@@ -491,7 +493,7 @@ private fun FolderColumn(tree: FileTree, here: String?, onPick: (String?) -> Uni
 }
 
 @Composable
-private fun FolderLine(name: String, depth: Int, selected: Boolean, onClick: () -> Unit) {
+internal fun FolderLine(name: String, depth: Int, selected: Boolean, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp))
             .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)

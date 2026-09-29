@@ -942,23 +942,3 @@ private fun RepeatPicker(
         OutlinedTextField(count, onCount, label = { Text("Times") }, singleLine = true, modifier = Modifier.width(120.dp))
     }
 }
-
-/**
- * The sidebar footer's calendar button, in either width.
- *
- * Kept here rather than in Main.kt's sidebar so that adding the calendar there is two lines,
- * and so the button and the page it opens are read together.
- */
-@Composable
-internal fun CalendarSidebarButton(open: Boolean, onClick: () -> Unit, size: androidx.compose.ui.unit.Dp) {
-    SidebarTooltip("Calendar") {
-        IconButton(onClick = onClick, modifier = Modifier.size(size)) {
-            Icon(
-                RampartIcons.Calendar,
-                contentDescription = "Calendar",
-                tint = if (open) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
-                modifier = Modifier.size(16.dp),
-            )
-        }
-    }
-}

@@ -463,6 +463,21 @@ object Settings {
     fun setComposeHeight(value: Float) = write { put("composeHeight", JsonPrimitive(value)) }
 
     /**
+     * How wide each of the app bar's panels was last dragged, keyed by [SideTool.key].
+     *
+     * Per tool, because the calendar's agenda and Rook's conversation want different widths
+     * and dragging one should not move the other. A tool missing here opens at its default.
+     */
+    internal fun sidePanelWidths(): Map<String, Float> =
+        (read()["sidePanelWidths"] as? JsonObject)?.mapNotNull { (key, value) ->
+            (value as? JsonPrimitive)?.floatOrNull?.let { key to it }
+        }?.toMap() ?: emptyMap()
+
+    internal fun setSidePanelWidths(value: Map<String, Float>) = write {
+        put("sidePanelWidths", buildJsonObject { value.forEach { (key, width) -> put(key, width) } })
+    }
+
+    /**
      * The version the changelog dialog last showed, or empty before it ever has.
      *
      * Empty is also what an install made before this feature existed carries, and that is

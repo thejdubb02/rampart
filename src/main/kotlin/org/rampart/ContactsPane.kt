@@ -65,6 +65,9 @@ internal fun ContactsPane(
     var query by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf<Contact?>(null) }
     var confirmDelete by remember { mutableStateOf<Contact?>(null) }
+    // Both of those are dialogs, and beside the mail the message is a native view that would
+    // paint over them. On the full page there is no message, and this costs nothing.
+    CoverBody(editing != null || confirmDelete != null)
     // One book is not a choice, so the filter and the picker are simply absent then.
     val several = books.size > 1
     var book by remember { mutableStateOf<String?>(null) }

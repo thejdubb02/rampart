@@ -79,11 +79,19 @@ internal val COMMANDS: List<Command> = listOf(
     Command("Go to drafts", null, "go-drafts"),
     Command("Show only unread", "U", "unread-only"),
     Command("Contacts", null, "contacts"),
+    // The full page. Its sidebar button went to the app bar, which opens the agenda beside
+    // the mail, so this is the direct way to the month and week views.
+    Command("Calendar", null, "calendar"),
+    // The app bar's panels, which open beside the message rather than in place of it. The
+    // full pages above stay, for when the list is the thing being worked on.
+    Command("Calendar beside the mail", "Ctrl+2", "side-calendar"),
+    Command("Contacts beside the mail", "Ctrl+3", "side-contacts"),
+    Command("Files beside the mail", "Ctrl+4", "side-files"),
     Command("How your mail is going", null, "dashboard"),
     Command("New folder", null, "new-folder"),
     // Both of these act on what is open, like Reply does, and both were reachable only by
     // finding the right button.
-    Command("Ask Rook", null, "assistant"),
+    Command("Ask Rook", "Ctrl+1", "assistant"),
     Command("Mute this conversation", null, "mute"),
     Command("Settings", "Ctrl+,", "settings"),
     Command("Keyboard shortcuts", "?", "shortcuts"),
