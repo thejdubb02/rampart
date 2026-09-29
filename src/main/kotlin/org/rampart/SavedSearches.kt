@@ -148,3 +148,15 @@ internal fun countUnreadSavedSearch(
 ): Int = messages.count { summary ->
     !summary.seen && matchesQuick(summary, search.filters, knownSenders)
 }
+
+/** Counts unread saved search matches directly in the local store. */
+internal fun countUnreadSavedSearch(
+    search: SavedSearch,
+    store: Store,
+    mailboxId: String,
+    knownSenders: Set<String> = emptySet(),
+): Int = if (search.query.isNotBlank()) {
+    store.countUnreadSearch(search.query, search.filters, knownSenders)
+} else {
+    store.countUnread(mailboxId, search.filters, knownSenders)
+}

@@ -162,13 +162,22 @@ internal class Store(private val connection: Connection) : AutoCloseable {
                 preview TEXT NOT NULL DEFAULT '',
                 seen INTEGER NOT NULL DEFAULT 0,
                 flagged INTEGER NOT NULL DEFAULT 0,
-                keywords TEXT NOT NULL DEFAULT ''
+                keywords TEXT NOT NULL DEFAULT '',
+                keywordsIndexed INTEGER NOT NULL DEFAULT 1
             )
             """,
             "CREATE INDEX IF NOT EXISTS message_mailbox ON message (mailbox, receivedAt DESC)",
+            "CREATE INDEX IF NOT EXISTS message_seen_received ON message (seen, receivedAt DESC)",
+            "CREATE INDEX IF NOT EXISTS message_flagged_received ON message (flagged, receivedAt DESC)",
+            "CREATE INDEX IF NOT EXISTS message_sender_email ON message (lower(senderEmail), receivedAt DESC)",
             "CREATE TABLE IF NOT EXISTS mailbox_message (message_id TEXT NOT NULL, mailbox_id TEXT NOT NULL, " +
                 "PRIMARY KEY (message_id, mailbox_id))",
             "CREATE INDEX IF NOT EXISTS mailbox_message_mailbox ON mailbox_message (mailbox_id, message_id)",
+            "CREATE TABLE IF NOT EXISTS message_keyword (" +
+                "message_id TEXT NOT NULL, keyword TEXT NOT NULL, visible INTEGER NOT NULL, " +
+                "PRIMARY KEY (message_id, keyword))",
+            "CREATE INDEX IF NOT EXISTS message_keyword_keyword ON message_keyword (keyword COLLATE NOCASE, message_id)",
+            "CREATE INDEX IF NOT EXISTS message_keyword_visible ON message_keyword (message_id) WHERE visible = 1",
             // The bodies are separate: a list needs none of them, and keeping them out of
             // the row the list reads is the difference between a fast query and a slow one.
             "CREATE TABLE IF NOT EXISTS body (id TEXT PRIMARY KEY, html TEXT, text TEXT)",
@@ -228,6 +237,10 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         if ("messageId" !in messageColumns) connection.createStatement().use {
             it.execute("ALTER TABLE message ADD COLUMN messageId TEXT NOT NULL DEFAULT ''")
         }
+        if ("keywordsIndexed" !in messageColumns) connection.createStatement().use {
+            it.execute("ALTER TABLE message ADD COLUMN keywordsIndexed INTEGER NOT NULL DEFAULT 0")
+        }
+        indexExistingKeywords()
         // A cache file from before the cap has no used column. CREATE does not add
         // one to a table that already exists, and without it there is no order to
         // evict in. The bytes are disposable, so a missing column is just added.
@@ -491,6 +504,44 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         connection.createStatement().use { s -> statements.forEach { s.execute(it.trimIndent()) } }
     }
 
+    /** Populates the normalized keyword table once for rows written by older versions. */
+    private fun indexExistingKeywords() {
+        val pending = connection.prepareStatement(
+            "SELECT id, keywords FROM message WHERE keywordsIndexed = 0",
+        ).use { s ->
+            s.executeQuery().use { rows ->
+                buildList { while (rows.next()) add(rows.getString(1) to rows.getString(2)) }
+            }
+        }
+        if (pending.isEmpty()) return
+        val was = connection.autoCommit
+        connection.autoCommit = false
+        try {
+            connection.prepareStatement(
+                "INSERT OR REPLACE INTO message_keyword (message_id, keyword, visible) VALUES (?, ?, ?)",
+            ).use { insert ->
+                pending.forEach { (id, encoded) ->
+                    val keywords = encoded.split(' ').filter { it.isNotBlank() }
+                    val visible = tagsOf(keywords).mapTo(HashSet()) { it.keyword.lowercase() }
+                    keywords.forEach { keyword ->
+                        insert.setString(1, id)
+                        insert.setString(2, keyword)
+                        insert.setInt(3, if (keyword.lowercase() in visible) 1 else 0)
+                        insert.addBatch()
+                    }
+                }
+                insert.executeBatch()
+            }
+            connection.createStatement().use { it.executeUpdate("UPDATE message SET keywordsIndexed = 1 WHERE keywordsIndexed = 0") }
+            connection.commit()
+        } catch (e: Exception) {
+            connection.rollback()
+            throw e
+        } finally {
+            connection.autoCommit = was
+        }
+    }
+
     /**
      * Writes a page of summaries.
      *
@@ -498,13 +549,31 @@ internal class Store(private val connection: Connection) : AutoCloseable {
      * difference between a refresh you do not notice and one you do.
      */
     @Synchronized fun put(mailbox: String, messages: List<Summary>) {
+        put(mapOf(mailbox to messages))
+    }
+
+    /** Writes summaries for several folders in one transaction. */
+    @Synchronized fun put(mailboxes: Map<String, List<Summary>>) {
+        val located = LinkedHashMap<String, Pair<String, Summary>>()
+        mailboxes.forEach { (mailbox, summaries) -> summaries.forEach { located[it.id] = mailbox to it } }
+        val messages = located.values.map { it.second }
         if (messages.isEmpty()) return
-        val indexedBodies = messages.associate { message ->
-            message.id to connection.prepareStatement("SELECT html, text FROM body WHERE id = ?").use { s ->
-                s.setString(1, message.id)
-                s.executeQuery().use { rows ->
-                    if (!rows.next()) null else rows.getString("text").orEmpty() + " " +
-                        rows.getString("html")?.let { org.jsoup.Jsoup.parse(it).text() }.orEmpty()
+        val ids = messages.map { it.id }
+        val indexedBodies = buildMap {
+            ids.chunked(10_000).forEach { part ->
+                connection.prepareStatement(
+                    "SELECT id, html, text FROM body WHERE id IN (${holders(part.size)})",
+                ).use { s ->
+                    part.forEachIndexed { index, id -> s.setString(index + 1, id) }
+                    s.executeQuery().use { rows ->
+                        while (rows.next()) {
+                            put(
+                                rows.getString("id"),
+                                rows.getString("text").orEmpty() + " " +
+                                    rows.getString("html")?.let { org.jsoup.Jsoup.parse(it).text() }.orEmpty(),
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -514,37 +583,58 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             connection.prepareStatement(
                 """
                 INSERT INTO message (id, mailbox, thread, threadSize, sender, senderEmail,
-                    subject, receivedAt, preview, seen, flagged, keywords, messageId)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    subject, receivedAt, preview, seen, flagged, keywords, messageId, keywordsIndexed)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1)
                 ON CONFLICT(id) DO UPDATE SET
                     mailbox=excluded.mailbox, thread=excluded.thread, threadSize=excluded.threadSize,
                     sender=excluded.sender, senderEmail=excluded.senderEmail, subject=excluded.subject,
                     receivedAt=excluded.receivedAt, preview=excluded.preview, seen=excluded.seen,
-                    flagged=excluded.flagged, keywords=excluded.keywords, messageId=excluded.messageId
+                    flagged=excluded.flagged, keywords=excluded.keywords, messageId=excluded.messageId,
+                    keywordsIndexed=1
                 """.trimIndent(),
             ).use { s ->
-                messages.forEach { m ->
-                    s.setString(1, m.id)
-                    s.setString(2, mailbox)
-                    s.setString(3, m.threadId)
-                    s.setInt(4, m.threadSize)
-                    s.setString(5, m.from)
-                    s.setString(6, m.fromEmail)
-                    s.setString(7, m.subject)
-                    s.setString(8, m.receivedAt)
-                    s.setString(9, m.preview)
-                    s.setInt(10, if (m.seen) 1 else 0)
-                    s.setInt(11, if (m.flagged) 1 else 0)
-                    s.setString(12, m.keywords.joinToString(" "))
-                    s.setString(13, m.messageId)
-                    s.addBatch()
+                located.values.forEach { (mailbox, m) ->
+                        s.setString(1, m.id)
+                        s.setString(2, mailbox)
+                        s.setString(3, m.threadId)
+                        s.setInt(4, m.threadSize)
+                        s.setString(5, m.from)
+                        s.setString(6, m.fromEmail)
+                        s.setString(7, m.subject)
+                        s.setString(8, m.receivedAt)
+                        s.setString(9, m.preview)
+                        s.setInt(10, if (m.seen) 1 else 0)
+                        s.setInt(11, if (m.flagged) 1 else 0)
+                        s.setString(12, m.keywords.joinToString(" "))
+                        s.setString(13, m.messageId)
+                        s.addBatch()
                 }
                 s.executeBatch()
             }
-            // Replaced rather than updated: FTS5 has no upsert, and a message re-indexed
-            // twice would come back twice from one search.
-            connection.prepareStatement("DELETE FROM search WHERE id = ?").use { s ->
-                messages.forEach { s.setString(1, it.id); s.addBatch() }
+            ids.chunked(10_000).forEach { part ->
+                connection.prepareStatement("DELETE FROM search WHERE id IN (${holders(part.size)})").use { s ->
+                    part.forEachIndexed { index, id -> s.setString(index + 1, id) }
+                    s.executeUpdate()
+                }
+            }
+            ids.chunked(10_000).forEach { part ->
+                connection.prepareStatement("DELETE FROM message_keyword WHERE message_id IN (${holders(part.size)})").use { s ->
+                    part.forEachIndexed { index, id -> s.setString(index + 1, id) }
+                    s.executeUpdate()
+                }
+            }
+            connection.prepareStatement(
+                "INSERT INTO message_keyword (message_id, keyword, visible) VALUES (?, ?, ?)",
+            ).use { s ->
+                messages.forEach { message ->
+                    val visible = tagsOf(message.keywords).mapTo(HashSet()) { it.keyword.lowercase() }
+                    message.keywords.forEach { keyword ->
+                        s.setString(1, message.id)
+                        s.setString(2, keyword)
+                        s.setInt(3, if (keyword.lowercase() in visible) 1 else 0)
+                        s.addBatch()
+                    }
+                }
                 s.executeBatch()
             }
             connection.prepareStatement("INSERT INTO search (id, sender, subject, body) VALUES (?,?,?,?)").use { s ->
@@ -560,10 +650,12 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             connection.prepareStatement(
                 "INSERT OR IGNORE INTO mailbox_message (message_id, mailbox_id) VALUES (?,?)",
             ).use { s ->
-                messages.forEach { m ->
-                    s.setString(1, m.id)
-                    s.setString(2, mailbox)
-                    s.addBatch()
+                mailboxes.forEach { (mailbox, summaries) ->
+                    summaries.forEach { message ->
+                        s.setString(1, message.id)
+                        s.setString(2, mailbox)
+                        s.addBatch()
+                    }
                 }
                 s.executeBatch()
             }
@@ -583,10 +675,8 @@ internal class Store(private val connection: Connection) : AutoCloseable {
      * the unread toggle, so there is still one path through [matchesQuick].
      *
      * Unread, starred and known sender are ordinary columns, so they are part of the
-     * WHERE and the LIMIT applies after them. Tagged is not a column: it is "any
-     * keyword [tagsOf] would show", including the snooze prefix that is not a fixed
-     * word, so those rows are kept with [matchesQuick] and only then paged. Doing the
-     * LIMIT first would make tagged mean "tagged among this page".
+     * WHERE and the LIMIT applies after them. Visible keywords have their own normalized
+     * table, so tagged filtering and paging also stay in SQL.
      *
      * Attachment has no column and is not given one here. A caller that still asks
      * gets nothing back, which is wrong in a way that is obvious, rather than the
@@ -608,29 +698,28 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         if (filters.unread) where += "seen = 0"
         if (filters.starred) where += "flagged = 1"
         if (filters.knownSender) where += "lower(senderEmail) IN (${holders(known.size)})"
+        if (filters.tagged) {
+            where += "EXISTS (SELECT 1 FROM message_keyword mk WHERE mk.message_id = message.id AND mk.visible = 1)"
+        }
         val sql = buildString {
             append("SELECT * FROM message WHERE ")
             append(where.joinToString(" AND "))
             append(" ORDER BY receivedAt DESC")
-            // Tagged is applied after the read, so the page is cut there instead.
-            if (!filters.tagged) append(" LIMIT ? OFFSET ?")
+            append(" LIMIT ? OFFSET ?")
         }
         val rows = connection.prepareStatement(sql).use { s ->
             var at = 1
             s.setString(at++, mailbox)
             if (filters.knownSender) known.forEach { s.setString(at++, it) }
-            if (!filters.tagged) {
-                s.setInt(at++, limit)
-                s.setInt(at, from)
-            }
+            s.setInt(at++, limit)
+            s.setInt(at, from)
             s.executeQuery().use { found ->
                 buildList {
                     while (found.next()) add(summaryOf(found))
                 }
             }
         }
-        if (!filters.tagged) return rows
-        return rows.filter { matchesQuick(it, filters, known.toSet()) }.drop(from).take(limit)
+        return rows
     }
 
     /**
@@ -663,6 +752,63 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         }
     }
 
+    /** Counts unread rows in one folder without constructing summaries. */
+    @Synchronized fun countUnread(
+        mailbox: String,
+        filters: QuickFilters = QuickFilters(),
+        knownSenders: Collection<String> = emptyList(),
+    ): Int {
+        val known = knownSenders.map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct()
+        if (filters.attachment || filters.knownSender && known.isEmpty()) return 0
+        val where = quickCountWhere(filters, known)
+        return connection.prepareStatement(
+            "SELECT COUNT(*) FROM message WHERE seen = 0 AND " +
+                "id IN (SELECT message_id FROM mailbox_message WHERE mailbox_id = ?)" + where.first,
+        ).use { s ->
+            var at = 1
+            s.setString(at++, mailbox)
+            where.second.forEach { s.setString(at++, it) }
+            s.executeQuery().use { rows -> rows.next(); rows.getInt(1) }
+        }
+    }
+
+    /** Counts unread full text matches without constructing summaries. */
+    @Synchronized fun countUnreadSearch(
+        text: String,
+        filters: QuickFilters = QuickFilters(),
+        knownSenders: Collection<String> = emptyList(),
+    ): Int {
+        val phrase = searchPhrase(text) ?: return 0
+        val known = knownSenders.map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct()
+        if (filters.attachment || filters.knownSender && known.isEmpty()) return 0
+        val where = quickCountWhere(filters, known)
+        return connection.prepareStatement(
+            "SELECT COUNT(*) FROM search JOIN message ON message.id = search.id " +
+                "WHERE search MATCH ? AND message.seen = 0" + where.first,
+        ).use { s ->
+            var at = 1
+            s.setString(at++, phrase)
+            where.second.forEach { s.setString(at++, it) }
+            s.executeQuery().use { rows -> rows.next(); rows.getInt(1) }
+        }
+    }
+
+    private fun quickCountWhere(filters: QuickFilters, known: List<String>): Pair<String, List<String>> {
+        val clauses = ArrayList<String>()
+        if (filters.starred) clauses += "flagged = 1"
+        if (filters.knownSender) clauses += "lower(senderEmail) IN (${holders(known.size)})"
+        if (filters.tagged) {
+            clauses += "EXISTS (SELECT 1 FROM message_keyword mk WHERE mk.message_id = message.id AND mk.visible = 1)"
+        }
+        val sql = if (clauses.isEmpty()) "" else " AND " + clauses.joinToString(" AND ")
+        return sql to if (filters.knownSender) known else emptyList()
+    }
+
+    private fun searchPhrase(text: String): String? = bareSubject(text).split(Regex("\\s+"))
+        .filter { it.isNotBlank() }
+        .joinToString(" ") { "\"" + it.replace("\"", "") + "\"" }
+        .takeIf { it.isNotBlank() }
+
     /**
      * Every tag anywhere in this account's local copy.
      *
@@ -685,18 +831,25 @@ internal class Store(private val connection: Connection) : AutoCloseable {
      * `Invoices` is one tag with two spellings, not two tags with half the mail each.
      */
     @Synchronized fun keywordCounts(): Map<String, Int> = connection.prepareStatement(
-        "SELECT keywords FROM message WHERE keywords <> ''",
+        "SELECT keyword, COUNT(*) FROM message_keyword GROUP BY keyword COLLATE NOCASE",
     ).use { s ->
         s.executeQuery().use { rows ->
             val found = java.util.TreeMap<String, Int>(String.CASE_INSENSITIVE_ORDER)
             while (rows.next()) {
-                rows.getString(1).split(' ').forEach { keyword ->
-                    if (keyword.isNotBlank()) found.merge(keyword, 1, Int::plus)
-                }
+                found[rows.getString(1)] = rows.getInt(2)
             }
             found
         }
     }
+
+    /** Returns SQLite's plan for a query so performance tests can catch table scans. */
+    @Synchronized fun explain(sql: String, vararg parameters: Any): List<String> =
+        connection.prepareStatement("EXPLAIN QUERY PLAN $sql").use { statement ->
+            parameters.forEachIndexed { index, value -> statement.setObject(index + 1, value) }
+            statement.executeQuery().use { rows ->
+                buildList { while (rows.next()) add(rows.getString("detail")) }
+            }
+        }
 
     /**
      * The local copy of every message carrying [keyword], newest first.
@@ -1109,6 +1262,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         val marks = ids.joinToString(",") { "?" }
         listOf(
             "DELETE FROM mailbox_message WHERE message_id IN ($marks)",
+            "DELETE FROM message_keyword WHERE message_id IN ($marks)",
             "DELETE FROM message WHERE id IN ($marks)",
             "DELETE FROM body WHERE id IN ($marks)",
             "DELETE FROM search WHERE id IN ($marks)",

@@ -106,6 +106,7 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+    System.getProperty("rampart.bench")?.let { systemProperty("rampart.bench", it) }
 }
 
 /*

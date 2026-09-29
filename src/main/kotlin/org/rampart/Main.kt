@@ -2543,25 +2543,19 @@ private fun Reader(
                     sessions.sumOf { session ->
                         val store = session.store
                         val known = knownAddresses(session.key, memory)
-                        val messages = if (search.query.isNotBlank()) {
-                            store?.search(search.query).orEmpty()
-                        } else {
-                            val inbox = folderFor("inbox", mailboxes[session.key].orEmpty())
-                            inbox?.let { store?.messages(it.id, filters = search.filters, knownSenders = known) }.orEmpty()
+                        val inbox = folderFor("inbox", mailboxes[session.key].orEmpty())
+                        if (store == null || inbox == null) 0 else {
+                            countUnreadSavedSearch(search, store, inbox.id, known)
                         }
-                        countUnreadSavedSearch(search, messages, known)
                     }
                 } else {
                     val session = sessions.firstOrNull { it.key == search.account }
                     val store = session?.store
                     val known = knownAddresses(search.account, memory)
-                    val messages = if (search.query.isNotBlank()) {
-                        store?.search(search.query).orEmpty()
-                    } else {
-                        val inbox = folderFor("inbox", mailboxes[search.account].orEmpty())
-                        inbox?.let { store?.messages(it.id, filters = search.filters, knownSenders = known) }.orEmpty()
+                    val inbox = folderFor("inbox", mailboxes[search.account].orEmpty())
+                    if (store == null || inbox == null) 0 else {
+                        countUnreadSavedSearch(search, store, inbox.id, known)
                     }
-                    countUnreadSavedSearch(search, messages, known)
                 }
                 search.id to count
             }

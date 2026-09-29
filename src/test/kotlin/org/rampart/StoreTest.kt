@@ -114,6 +114,46 @@ class StoreTest {
         assertEquals(listOf("c"), store.messages("inbox", limit = 1, from = 1).map { it.id })
     }
 
+    @Test
+    fun `tag filtering pages after filtering in SQL`() = withStore { store ->
+        val many = List(220) { number ->
+            mail("tag-$number", "Sender", "Subject $number", "2026-09-17T11:${number % 60}:00Z")
+                .copy(keywords = if (number % 2 == 0) setOf("work") else emptySet())
+        }
+        store.put("inbox", many)
+
+        val secondPage = store.messages("inbox", limit = 10, from = 100, filters = QuickFilters(tagged = true))
+
+        assertEquals(10, secondPage.size)
+        assertTrue(secondPage.all { "work" in it.keywords })
+    }
+
+    @Test
+    fun `keyword counts use normalized rows without changing their totals`() = withStore { store ->
+        store.put(
+            "inbox",
+            listOf(
+                messages[0].copy(keywords = setOf("Work", "receipts")),
+                messages[1].copy(keywords = setOf("work")),
+            ),
+        )
+
+        assertEquals(mapOf("receipts" to 1, "Work" to 2), store.keywordCounts())
+        store.forget(listOf("a"))
+        assertEquals(mapOf("work" to 1), store.keywordCounts())
+    }
+
+    @Test
+    fun `saved search counts run across every matching row`() = withStore { store ->
+        val many = List(150) { number ->
+            mail("count-$number", "Sender", "Project $number", "2026-09-17T11:${number % 60}:00Z", seen = false)
+        }
+        store.put("inbox", many)
+
+        assertEquals(150, store.countUnreadSearch("project"))
+        assertEquals(150, store.countUnread("inbox"))
+    }
+
     // --- search -----------------------------------------------------------------------
 
     @Test
