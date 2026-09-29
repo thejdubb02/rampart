@@ -38,7 +38,7 @@ internal const val MOST = 25
 internal data class Said(val role: String, val text: String)
 
 /** A tool the model asked for, already checked against what exists. */
-internal data class Asked(val tool: String, val args: JsonObject)
+internal data class Asked(val tool: String, val args: JsonObject, val lead: String = "")
 
 internal object Chat {
     /**
@@ -104,11 +104,27 @@ internal object Chat {
     /**
      * The tool the model asked for, or null when it answered in words.
      *
-     * Strict on purpose: an answer that is a sentence with a JSON object buried in it is
-     * treated as a sentence. A model that half-decided is not one to act on.
+     * Either the whole answer is the JSON object, or the object stands alone on the last
+     * line after a sentence, which is how several models announce a step ("Let me check
+     * your settings." then the call). That sentence comes back as [Asked.lead] so it is
+     * shown, and the call itself is not. A JSON object buried in the middle of a sentence
+     * is still a sentence: a model that half-decided is not one to act on.
      */
     fun asked(answer: String): Asked? {
-        val text = answer.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        val text = unfenced(answer)
+        whole(text)?.let { return it }
+        val lines = text.lines()
+        val last = lines.indexOfLast { it.isNotBlank() }
+        if (last <= 0) return null
+        val call = whole(lines[last].trim()) ?: return null
+        val lead = unfenced(lines.subList(0, last).joinToString("\n"))
+        return call.copy(lead = lead)
+    }
+
+    private fun unfenced(text: String): String =
+        text.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+
+    private fun whole(text: String): Asked? {
         if (!text.startsWith("{") || !text.endsWith("}")) return null
         val json = runCatching { lenient.parseToJsonElement(text).jsonObject }.getOrNull() ?: return null
         val tool = json["tool"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return null
@@ -195,6 +211,7 @@ internal fun converse(
             added += Said("assistant", reply.text.trim())
             return added
         }
+        if (asked.lead.isNotBlank()) added += Said("assistant", asked.lead)
         added += Said("call", reply.text.trim())
         added += Said("result", carryOut(asked, shown, tools, settings, calendar, tasks))
     }

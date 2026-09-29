@@ -4740,17 +4740,19 @@ private fun Reader(
         // Ctrl and a digit opens a panel from the app bar. Also above the typing guard: no
         // text field does anything with it, and a panel is often wanted mid-sentence.
         if (AppBar.key(event)) return true
-        // Shift is what makes it a question mark on most layouts, so the search key has to
-        // say it does not want one or Shift+/ lands in the search box instead of the list.
+        // Below the typing guard: in a text field Shift+/ is a question mark, and taking it
+        // there made "?" impossible to type in Rook or a search. Shift is what makes it a
+        // question mark on most layouts, so the search key below has to say it does not
+        // want one or Shift+/ lands in the search box instead of the list.
+        if (typing) return false
         if (event.key == Key.Slash && event.isShiftPressed) {
             showShortcuts = true
             return true
         }
-        if (event.key == Key.Slash && !typing && !event.isCtrlPressed && !event.isAltPressed) {
+        if (event.key == Key.Slash && !event.isCtrlPressed && !event.isAltPressed) {
             searchField.requestFocus()
             return true
         }
-        if (typing) return false
         // Everything below is a bare key. The same key held with a modifier belongs to
         // whatever the modifier means, and taking Ctrl+C to open a composer, or Ctrl+A and
         // Ctrl+F from select-all and find, is how a keyboard stops being trustworthy. One
