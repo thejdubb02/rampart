@@ -32,7 +32,7 @@ services:
       # Loopback only. Put nginx, Caddy or your own proxy in front to terminate TLS.
       # Never expose this port straight to the internet: it would be served over plain
       # HTTP, and a tracking pixel fetched over HTTP is one a network can read.
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${RAMPART_PORT:-8080}:8080"
     healthcheck:
       # Never gate /health behind anything. A gate answers a machine caller with a 302
       # that reads as success, so the check passes while the service is unreachable.
