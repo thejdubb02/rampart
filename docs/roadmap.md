@@ -758,6 +758,57 @@ Non-negotiable, and taken straight from the spec's privacy contract:
 - **Never auto-send. Never silently file.** Everything has a preview and an undo.
 - **Cost visible, and a ceiling the user sets** that stops rather than warns.
 
+### 4.1 Rook, measured against Gemini in Gmail
+
+Gemini in Gmail (late 2026) is the reference for what an assistant inside a mail client is
+expected to do. Rook does it with the person's own key (BYOK), every call a button press,
+under the rules above. Gemini's four jobs, and where Rook stands on each:
+
+**Read for you.**
+- Thread summary at the top of a conversation. *Built* ("Summarise this thread").
+- Action items: who owes what, with dates. *Cloud session, claude/ask-inbox.*
+- Briefing: unread mail turned into "needs a reply", "deadlines and bills" and topic
+  groups, each linked to its message. Gemini's "AI Inbox". *Cloud session, claude/ask-inbox.*
+- "Catch me up on mail from X this week" in the side panel. *Works through search and read
+  today; the briefing makes it one click.*
+
+**Write for you.**
+- Help me write: a short instruction becomes a draft, with the thread as context.
+  *Cloud session, claude/writing-help.*
+- Polish, Formalize, Shorten, Elaborate, and "change it how?". *Cloud session.*
+- Proofread, as inline suggestions accepted one at a time. *Cloud session.*
+- Suggested replies: up to three full drafts on request. *Cloud session.*
+- Matching the person's own tone from their Sent mail. *Not started. Needs a small style
+  sample sent with the prompt, shown in the packet viewer like everything else.*
+
+**Find for you.**
+- A question typed in the search box answered in two or three sentences, with links to
+  the source messages, and "I could not find that" rather than a guess. *Cloud session,
+  claude/ask-inbox.*
+- Comparisons across mail ("compare the contractor quotes"). *Works in the side panel
+  today through search and read.*
+- Voice (Gmail Live). *Not planned. A desktop client is typed at.*
+
+**Act for you.**
+- Archive, trash, mark read, tag, draft a reply. *Built, confirm and undo on every action.*
+- Change Rampart and Stalwart settings, each change a card the person confirms. *Built
+  (RAM-97).*
+- Knows which message is open, so "this email" means the one on screen. *Built.*
+- Add to calendar from a message that mentions a date. *Cloud session,
+  claude/calendar-from-mail.*
+- Help me schedule: three free slots from the Stalwart calendar inserted into a reply.
+  *Cloud session.*
+- Tasks from mail: a to-do inferred from a message, written as a Stalwart task (JMAP
+  Tasks, or a VTODO over CalDAV) so it shows on the phone too. *Not started.*
+- Pull a file from Stalwart Files into a draft or an answer, Gemini's `@file`. *Not
+  started. Files exists (RAM-46), so this is a Rook tool over it.*
+- Saved prompts, Gemini's "Gems": a named instruction the person reuses ("reply to a
+  lead", "decline politely"). *Not started. Small: stored as a server-side setting.*
+
+What Rook will not copy: Gemini runs whenever mail arrives. Rook does not, because an open
+mail client that spends money nobody pressed a button for is the failure the ceiling
+exists to prevent.
+
 ---
 
 ## Tier 5, the applications next door
