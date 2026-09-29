@@ -403,12 +403,13 @@ internal object OfflineAttachments {
      * to open or save it, or null when there is none. Marks it as used, which is what keeps
      * it ahead of its siblings when the folder is full.
      */
-    fun restore(account: String, mailKey: String?, attachment: Attachment, into: Path): Path? {
-        if (mailKey == null) return null
+    fun restore(account: String, mailKey: () -> String?, attachment: Attachment, into: Path): Path? {
         val dir = offlineDir(account)
+        // The folder first: nothing kept means no reason to ask the keychain for anything.
         if (!Files.exists(dir)) return null
+        val key = keyFor(account, mailKey) ?: return null
         return synchronized(lock(account)) {
-            val vault = OfflineVault(dir, mailKey)
+            val vault = OfflineVault(dir, key)
             val index = vault.readIndex()
             val entry = index.firstOrNull { it.blobId == attachment.blobId } ?: return@synchronized null
             val bytes = vault.read(entry.file, entry.blobId) ?: return@synchronized null
@@ -418,6 +419,19 @@ internal object OfflineAttachments {
             vault.writeIndex(index.map { if (it.blobId == entry.blobId) it.copy(lastUsed = now) else it })
             dest
         }
+    }
+
+    /** The account's store key, asked of the keychain once and then remembered for the run. */
+    private fun keyFor(account: String, mailKey: () -> String?): String? =
+        keys[account] ?: runCatching { mailKey() }.getOrNull()?.also { keys[account] = it }
+
+    /**
+     * Finds out whether [account] can keep files at all, for the setting, before any pass
+     * has run. Off the UI thread: it may ask the operating system's keychain.
+     */
+    fun noteKey(account: String, mailKey: () -> String?) {
+        val key = keyFor(account, mailKey)
+        publish(account) { copy(available = key != null) }
     }
 
     /**
@@ -466,7 +480,7 @@ internal object OfflineAttachments {
     }
 
     private suspend fun pass(account: OfflineAccount) {
-        val key = keys[account.key] ?: withContext(Dispatchers.IO) { account.mailKey() }?.also { keys[account.key] = it }
+        val key = keyFor(account.key, account.mailKey)
         publish(account.key) { copy(available = key != null) }
         if (key == null) return
         val prefs = prefs(account.key)
