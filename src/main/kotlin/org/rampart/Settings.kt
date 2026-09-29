@@ -233,6 +233,12 @@ object Settings {
 
     fun setTintRowsByTag(value: Boolean) = write { put("tintRowsByTag", JsonPrimitive(value)) }
 
+    /** The buttons a row shows under the pointer, as [HoverAction] keys. Null when never chosen. */
+    fun hoverActions(): List<String>? =
+        (read()["hoverActions"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+
+    fun setHoverActions(keys: List<String>) = write { put("hoverActions", JsonArray(keys.map(::JsonPrimitive))) }
+
     /**
      * Where the companion server is, or empty when there is not one.
      *

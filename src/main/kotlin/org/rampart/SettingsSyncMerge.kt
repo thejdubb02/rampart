@@ -99,6 +99,7 @@ internal val SYNCED_SETTINGS: Map<String, SyncShape> = mapOf(
     "density" to SyncShape.TEXT,
     "tintRowsByTag" to SyncShape.TEXT,
     "tagColours" to SyncShape.MAP_OF_TEXT,
+    "hoverActions" to SyncShape.LIST_OF_TEXT,
     "savedSearches" to SyncShape.LIST_OF_OBJECTS,
     "order" to SyncShape.TEXT,
     "markReadDelay" to SyncShape.TEXT,

@@ -35,7 +35,8 @@ An explicit allowlist, `SYNCED_SETTINGS` and `SYNCED_ASSISTANT` in `SettingsSync
 `Settings.kt` from now on until somebody adds it to the list on purpose.
 
 Synced, from `settings.json`: `theme`, `customThemes`, `iconPack`, `loader`, `density`,
-`tintRowsByTag`, `tagColours`, `savedSearches`, `order`, `markReadDelay`, `archiveBy`,
+`tintRowsByTag`, `tagColours`, `hoverActions`, `savedSearches`, `order`, `markReadDelay`,
+`archiveBy`,
 `messageMode`, `messageScale`, `undoSeconds`, `undoBarSeconds`, `signatureAboveQuote`,
 `confirmBeforeSend`, `defaultReplyAll`, `exactIdentitiesOnly`, `subAddressDelimiter`,
 `attachmentPosition`, `attachmentClickBehavior`, `trackedDomains`, `changelogSuppressed`.
@@ -151,7 +152,8 @@ dragging a slider is one write), and every thirty minutes for changes made elsew
 background thread, one account at a time. With more than one account, a sync that brought
 something in from the second account's file runs once more so the first account's file gets
 it too. What another computer changed is redrawn at once for the settings the window holds
-in memory (theme, icons, loader, density, tag colours and tinting, undo strip, sort order,
+in memory (theme, icons, loader, density, tag colours and tinting, hover buttons, undo
+strip, sort order,
 message page and size, saved searches).
 
 ## The settings page

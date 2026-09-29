@@ -2492,6 +2492,7 @@ private fun Reader(
         if ("settings.density" in changed) density = Density.of(Settings.density())
         if ("settings.tintRowsByTag" in changed) tintRows = Settings.tintRowsByTag()
         if ("settings.tagColours" in changed) tagColours = Settings.tagColours()
+        if ("settings.hoverActions" in changed) HoverChoice.reload()
         if ("settings.undoBarSeconds" in changed) undoBarSeconds = Settings.undoBarSeconds()
         if ("settings.order" in changed) order = Settings.order()
         if ("settings.messageMode" in changed) messageMode = Settings.messageMode()
@@ -4374,6 +4375,18 @@ private fun Reader(
         filter = { message -> filterFor = message },
         sendScheduled = ::sendScheduledNow,
         cancelScheduled = ::cancelScheduled,
+        // The Move hover button, the same move and the same folders as the reader's Move.
+        moveInto = { message, into ->
+            accountOf(message)?.let { key ->
+                val from = sourceFolder(key)
+                scope.launch { carryOut(key, message, into, from, "Moved") }
+            }
+        },
+        folders = { message ->
+            accountOf(message)?.let { key ->
+                mailboxes[key].orEmpty().filter { it.id != sourceFolder(key) && it.role !in MOVE_COVERED }
+            }.orEmpty()
+        },
     )
 
     /**
@@ -8077,7 +8090,8 @@ private fun MessageRow(
 ) {
     var menu by remember { mutableStateOf(false) }
     var pointerOver by remember { mutableStateOf(false) }
-    val hovered = pointerOver || showHover
+    // Still hovered while one of its hover menus is open, or the menu would go with the buttons.
+    val hovered = pointerOver || showHover || HoverChoice.menuOpenOn(rowToken(message))
     // Where this row sits, so the pointer offsets a drag reports (which are relative to
     // the row) can be turned into a position in the window.
     var origin by remember { mutableStateOf(Offset.Zero) }
@@ -8241,20 +8255,7 @@ private fun MessageRow(
                     contentAlignment = Alignment.CenterEnd,
                 ) {
                     if (hovered) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            actions.markRead?.let { mark ->
-                                RowButton(
-                                    if (message.seen) RampartIcons.Unread else RampartIcons.Read,
-                                    if (message.seen) "Mark unread" else "Mark read",
-                                ) { mark(message, !message.seen) }
-                            }
-                            actions.archive?.let { archive ->
-                                RowButton(RampartIcons.Archive, "Archive") { archive(message) }
-                            }
-                            actions.trash?.let { trash ->
-                                RowButton(RampartIcons.Trash, "Delete") { trash(message) }
-                            }
-                        }
+                        HoverButtons(message, actions)
                     } else {
                         Text(
                             message.receivedAt.asLocalTime(),
@@ -8330,20 +8331,7 @@ private fun MessageRow(
                         contentAlignment = Alignment.CenterEnd,
                     ) {
                         if (hovered) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                actions.markRead?.let { mark ->
-                                    RowButton(
-                                        if (message.seen) RampartIcons.Unread else RampartIcons.Read,
-                                        if (message.seen) "Mark unread" else "Mark read",
-                                    ) { mark(message, !message.seen) }
-                                }
-                                actions.archive?.let { archive ->
-                                    RowButton(RampartIcons.Archive, "Archive") { archive(message) }
-                                }
-                                actions.trash?.let { trash ->
-                                    RowButton(RampartIcons.Trash, "Delete") { trash(message) }
-                                }
-                            }
+                            HoverButtons(message, actions)
                         } else {
                             Text(
                                 message.receivedAt.asLocalTime(),
@@ -8498,9 +8486,9 @@ private fun Paper(on: Boolean, content: @Composable () -> Unit) {
     }
 }
 
-/** One of the small buttons that appear on a row under the pointer. */
+/** One of the small buttons that appear on a row under the pointer. See [HoverButtons]. */
 @Composable
-private fun RowButton(icon: ImageVector, what: String, onClick: () -> Unit) {
+internal fun RowButton(icon: ImageVector, what: String, onClick: () -> Unit) {
     // 18dp rather than Material's default, so three of them fit the slot the date leaves
     // and the row is the same height whether the pointer is over it or not.
     IconButton(onClick = onClick, modifier = Modifier.size(18.dp)) {
@@ -8516,8 +8504,8 @@ private fun RowButton(icon: ImageVector, what: String, onClick: () -> Unit) {
 /**
  * The width kept for the date, and for the buttons that replace it.
  *
- * Wide enough for the longest date this list shows and for three buttons, so neither state
- * is cramped and neither is what decides the width.
+ * Wide enough for the longest date this list shows and for up to four buttons (see
+ * [HOVER_ACTIONS_MAX]), so neither state is cramped and neither is what decides the width.
  */
 private val HOVER_SLOT = 78.dp
 
@@ -8613,6 +8601,10 @@ internal data class RowActions(
     val sendScheduled: ((Summary) -> Unit)? = null,
     /** Leave the draft in Drafts and forget the time. */
     val cancelScheduled: ((Summary) -> Unit)? = null,
+    /** Filing it into a folder by id, for the Move hover button. See [HoverButtons]. */
+    val moveInto: ((Summary, String) -> Unit)? = null,
+    /** The folders Move offers for this row. */
+    val folders: ((Summary) -> List<Mailbox>)? = null,
 )
 
 /**
