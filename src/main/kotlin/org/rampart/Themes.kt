@@ -372,7 +372,7 @@ val THEMES: List<Theme> = listOf(
 
 /** The stored theme, or the one that matches what the operating system is set to. */
 fun themeFor(key: String?, systemDark: Boolean): Theme =
-    THEMES.firstOrNull { it.key == key }
+    (THEMES + Settings.customThemes()).firstOrNull { it.key == key }
         ?: THEMES.first { it.dark == systemDark }
 
 /**

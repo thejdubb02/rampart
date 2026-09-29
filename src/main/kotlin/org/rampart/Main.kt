@@ -3759,7 +3759,8 @@ private fun Reader(
             // are read again here, as the Settings pages' own callbacks would have.
             for (line in card.lines) {
                 when (line.id) {
-                    "rampart.theme" -> THEMES.firstOrNull { it.key == Settings.theme() }?.let(onTheme)
+                    "rampart.theme" -> (THEMES + Settings.customThemes())
+                        .firstOrNull { it.key == Settings.theme() }?.let(onTheme)
                     "rampart.icons" -> onIcons(iconPack(Settings.iconPack()))
                     "rampart.loader" -> loader = Loader.of(Settings.loader())
                     "rampart.density" -> density = Density.of(Settings.density())

@@ -272,21 +272,96 @@ private fun ThemesPage(
     onDensity: (Density) -> Unit = {},
 ) {
     val current = LocalRampartTheme.current
+    var customThemes by remember { mutableStateOf(Settings.customThemes()) }
+    var editing by remember { mutableStateOf<Theme?>(null) }
+    var editingExisting by remember { mutableStateOf(false) }
+    var restoreAfterEditing by remember { mutableStateOf<Theme?>(null) }
+    var themeMessage by remember { mutableStateOf<String?>(null) }
+
+    editing?.let { starting ->
+        ThemeEditor(
+            starting = starting,
+            existing = editingExisting,
+            onPreview = onTheme,
+            onSave = { saved ->
+                customThemes = (customThemes.filterNot {
+                    it.key == starting.key || it.key == saved.key
+                } + saved).sortedBy { it.label.lowercase() }
+                Settings.setCustomThemes(customThemes)
+                editing = null
+                onTheme(saved)
+            },
+            onDelete = {
+                customThemes = customThemes.filterNot { it.key == starting.key }
+                Settings.setCustomThemes(customThemes)
+                editing = null
+                val fallback = restoreAfterEditing?.takeIf { it.key != starting.key } ?: THEMES.first()
+                onTheme(fallback)
+            },
+            onCancel = {
+                editing = null
+                restoreAfterEditing?.let(onTheme)
+            },
+        )
+        return
+    }
+
     Section("Theme", "Ported from Clique, so the ones you already picked there are here.")
     // Not lazy in any useful sense: there are eighteen of these and the column above
     // already scrolls. The grid is here for the wrapping, so the height has to be given,
     // and a fixed row height times the number of rows is it.
     val columns = 3
-    val rows = (THEMES.size + columns - 1) / columns
+    val shownThemes = THEMES + customThemes
+    val rows = (shownThemes.size + columns - 1) / columns
     LazyVerticalGrid(
         columns = GridCells.Fixed(columns),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier.fillMaxWidth().height((rows * 104).dp),
     ) {
-        items(THEMES, key = { it.key }) { theme ->
+        items(shownThemes, key = { it.key }) { theme ->
             ThemeCard(theme, selected = theme.key == current.key) { onTheme(theme) }
         }
+    }
+
+    themeMessage?.let {
+        Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = {
+            restoreAfterEditing = current
+            val builtIn = THEMES.firstOrNull { it.key == current.key } ?: THEMES.first()
+            editingExisting = false
+            editing = builtIn.copy(key = customThemeKey("My theme"), label = "My theme", art = null)
+        }) { Text("Make a theme") }
+        val selectedCustom = customThemes.firstOrNull { it.key == current.key }
+        if (selectedCustom != null) {
+            OutlinedButton(onClick = {
+                restoreAfterEditing = current
+                editingExisting = true
+                editing = selectedCustom
+            }) { Text("Edit") }
+            OutlinedButton(onClick = {
+                restoreAfterEditing = current
+                editingExisting = false
+                val name = selectedCustom.label + " copy"
+                editing = selectedCustom.copy(key = customThemeKey(name), label = name)
+                onTheme(selectedCustom.copy(key = customThemeKey(name), label = name))
+            }) { Text("Duplicate") }
+        }
+        OutlinedButton(onClick = {
+            runCatching { importTheme() }
+                .onSuccess { imported ->
+                    if (imported != null) {
+                        customThemes = (customThemes.filterNot { it.key == imported.key } + imported)
+                            .sortedBy { it.label.lowercase() }
+                        Settings.setCustomThemes(customThemes)
+                        onTheme(imported)
+                        themeMessage = null
+                    }
+                }
+                .onFailure { themeMessage = it.message ?: "The theme could not be imported." }
+        }) { Text("Import") }
     }
 
     Spacer(Modifier.height(22.dp))

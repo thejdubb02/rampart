@@ -39,6 +39,19 @@ object Settings {
     fun setTheme(key: String) = write { put("theme", JsonPrimitive(key)) }
 
     /**
+     * Custom themes stay in the local settings file beside the chosen theme. JMAP and
+     * Stalwart expose no per-user store for arbitrary client appearance preferences, so
+     * there is no server-side home that another mail client could safely share.
+     */
+    fun customThemes(): List<Theme> = (read()["customThemes"] as? JsonArray)?.mapNotNull { value ->
+        runCatching { ThemeJson.decode(value.toString()) }.getOrNull()
+    } ?: emptyList()
+
+    fun setCustomThemes(themes: List<Theme>) = write {
+        put("customThemes", JsonArray(themes.map(ThemeJson::objectOf)))
+    }
+
+    /**
      * How tightly packed the message list is: "compact", "normal", or "spacious".
      */
     fun density(): String? = read()["density"]?.jsonPrimitive?.contentOrNull

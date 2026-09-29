@@ -20,8 +20,8 @@ import kotlinx.serialization.json.JsonObject
 internal fun liveSettingsMap(session: Session?, identities: List<Identity>, accounts: List<String>): SettingsMap {
     val computer = ComputerPlace(
         ComputerChoices(
-            themes = THEMES.map { SettingOption(it.key, it.label) },
-            darkThemes = THEMES.filter { it.dark }.map { it.key }.toSet(),
+            themes = (THEMES + Settings.customThemes()).map { SettingOption(it.key, it.label) },
+            darkThemes = (THEMES + Settings.customThemes()).filter { it.dark }.map { it.key }.toSet(),
             iconPacks = ICON_PACKS.map { SettingOption(it.key, it.label) },
             loaders = Loader.entries.map { SettingOption(it.name, it.label) },
             assistant = {
