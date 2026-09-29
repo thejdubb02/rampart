@@ -18,6 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -53,11 +54,20 @@ internal fun DashboardPane(
      */
     unavailable: String = "",
     onOpen: (Summary) -> Unit,
+    /**
+     * Opens the Today view, Rook's briefing of the unread mail. Null hides the button. It
+     * sits above the figures rather than among them because it is the one thing on this
+     * screen made by a model rather than counted, and it works without a local copy.
+     */
+    onToday: (() -> Unit)? = null,
 ) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 28.dp, vertical = 24.dp),
     ) {
-        Text("How your mail is going", style = MaterialTheme.typography.headlineSmall)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("How your mail is going", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+            onToday?.let { OutlinedButton(onClick = it) { Text("Today, from Rook") } }
+        }
         Spacer(Modifier.height(4.dp))
         Text(
             when {

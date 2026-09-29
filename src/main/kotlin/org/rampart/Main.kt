@@ -1368,6 +1368,11 @@ private fun Reader(
     var summariseFor by remember { mutableStateOf<String?>(null) }
     // Read once rather than on every recomposition, for the same reason as chatAgreed.
     var summariseAgreed by remember { mutableStateOf(Assistant.agreed(Assistant.SUMMARISE)) }
+    // Ask Rook from the search box, the Today view, and action items. See AskInboxUi.kt
+    // and BriefingPane.kt: each is a button press, never a timer.
+    val askJob = remember { RookJob<InboxAnswer>() }
+    val today = remember { TodayView() }
+    val actionJob = remember { RookJob<List<ActionItem>>() }
     /**
      * Messages shown their remote pictures for this session alone, on top of whatever
      * [allowedSenders] remembers permanently.
@@ -3593,6 +3598,10 @@ private fun Reader(
         accountOf(message)?.let { setSeen(it, setOf(message.id), read) }
     }
 
+    /** What Ask Rook and the Today view may read on [key]. Read only: see [inboxReader]. */
+    fun readerFor(key: String): InboxReader =
+        inboxReader(session(key).jmap, mailboxes[key].orEmpty(), key) { plainTextOf(restoredBody(key, it)) }
+
     /**
      * Everything the assistant panel is able to reach.
      *
@@ -4240,6 +4249,12 @@ private fun Reader(
                 { summarise(message, key, config, viewFirst = true) }
             } else {
                 null
+            },
+            // The same text leaves as for a summary, so the same reasons refuse it.
+            actionItems = ActionItemsActions(actionJob, message.threadId.ifBlank { message.id }, why) {
+                startActionItems(actionJob, scope, why, message.threadId.ifBlank { message.id }, message.subject) {
+                    summariseTurns(key, message)
+                }
             },
         )
     }
@@ -5243,6 +5258,15 @@ private fun Reader(
                             scope.launch { reload() }
                         },
                     )
+                    AskRookOffer(
+                        query = query,
+                        job = askJob,
+                        onAsk = { settingsAccount()?.let { key -> askRook(askJob, scope, query, readerFor(key)) } },
+                        onOpen = { message ->
+                            settingsOpen = false; contactsOpen = false; dashboardOpen = false; calendarOpen = false
+                            selected = message
+                        },
+                    )
                 },
                 accounts = sessions.map {
                     AccountMailboxes(it.key, it.account.name, it.account.email, mailboxes[it.key].orEmpty())
@@ -5269,7 +5293,7 @@ private fun Reader(
                 dragAt = dragAt,
                 onTagBounds = { keyword, bounds -> tagBounds[keyword] = bounds },
                 onSettings = { settingsOpen = !settingsOpen; if (settingsOpen) { contactsOpen = false; dashboardOpen = false; calendarOpen = false } },
-                onDashboard = { dashboardOpen = !dashboardOpen; if (dashboardOpen) { contactsOpen = false; settingsOpen = false; calendarOpen = false } },
+                onDashboard = { dashboardOpen = !dashboardOpen; today.open = false; if (dashboardOpen) { contactsOpen = false; settingsOpen = false; calendarOpen = false } },
                 inDashboard = dashboardOpen,
                 inSettings = settingsOpen,
                 onAddAccount = onAddAccount,
@@ -5331,8 +5355,25 @@ private fun Reader(
                 val key = CalendarJump.target?.account ?: (here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key)
                 val open = sessions.firstOrNull { it.key == key }
                 CalendarPane(open?.jmap, open?.let { shortAccountName(it.account.name, it.account.email) }.orEmpty())
+            } else if (dashboardOpen && today.open) {
+                val key = settingsAccount()
+                BriefingPane(
+                    view = today,
+                    account = key.orEmpty(),
+                    accountName = sessions.firstOrNull { it.key == key }
+                        ?.let { shortAccountName(it.account.name, it.account.email) }.orEmpty(),
+                    onLoad = { refresh ->
+                        key?.let { k ->
+                            val inbox = folderFor("inbox", mailboxes[k].orEmpty())?.name
+                            openBriefing(today, scope, k, readerFor(k), inbox, { Secrets.mailKey(session(k).account) }, refresh)
+                        }
+                    },
+                    onOpen = { message -> dashboardOpen = false; today.open = false; selected = message },
+                    onBack = { today.open = false },
+                )
             } else if (dashboardOpen) {
                 DashboardPane(
+                    onToday = if (Assistant.config().mode == AssistantMode.OFF) null else ({ today.open = true }),
                     stats = stats,
                     unavailable = if (sessions.any { it.store != null }) "" else
                         "There is no local copy of this mailbox on this machine, and every " +
@@ -7914,6 +7955,8 @@ internal data class SummariseActions(
     val onSummarise: () -> Unit,
     /** Looking at the exact packet without it gating the button. Null while disabled. */
     val onViewPacket: (() -> Unit)?,
+    /** The Action items button beside Summarise. See `BriefingPane.kt`. */
+    val actionItems: ActionItemsActions? = null,
 )
 
 @Composable
@@ -9035,6 +9078,10 @@ private fun SummaryCard(summarise: SummariseActions) {
                     },
                 )
             }
+            summarise.actionItems?.let {
+                Spacer(Modifier.width(8.dp))
+                ActionItemsButton(it)
+            }
             summarise.onViewPacket?.let { view ->
                 Spacer(Modifier.width(8.dp))
                 TextButton(onClick = view) {
@@ -9045,6 +9092,7 @@ private fun SummaryCard(summarise: SummariseActions) {
                 }
             }
         }
+        summarise.actionItems?.let { ActionItemsList(it) }
     }
     Spacer(Modifier.height(14.dp))
 }
