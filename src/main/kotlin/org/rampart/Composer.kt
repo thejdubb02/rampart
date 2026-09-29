@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
@@ -24,6 +25,8 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.foundation.clickable
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.draw.clip
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -712,6 +715,8 @@ internal fun Composer(
                 Text(
                     if (draft.replying) "Reply" else "New message",
                     style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    modifier = Modifier.padding(end = 16.dp),
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (saveState.isNotEmpty()) {
@@ -733,105 +738,8 @@ internal fun Composer(
                             }
                         }
                     }
-                    if (onAttach != null) {
-                        TextButton(
-                            onClick = {
-                                val chosen = pickFiles()
-                                if (chosen.isNotEmpty()) {
-                                    scope.launch {
-                                        attaching = true
-                                        attachError = null
-                                        attachDetail = null
-                                        try {
-                                            val added = onAttach(chosen)
-                                            previews = previews + withContext(Dispatchers.IO) {
-                                                pickedPreviews(chosen, added)
-                                            }
-                                            draft = draft.copy(attachments = draft.attachments + added)
-                                        } catch (e: Exception) {
-                                            attachError = "That file could not be attached."
-                                            attachDetail = faultDetail(e, "That file could not be attached.")
-                                        } finally {
-                                            attaching = false
-                                        }
-                                    }
-                                }
-                            },
-                            enabled = !sending && !attaching,
-                        ) { Text(if (attaching) "Attaching" else "Attach", maxLines = 1) }
-                    }
-                    AttachFromFilesButton(fromFiles, enabled = !sending && !attaching) { added ->
-                        draft = draft.copy(attachments = draft.attachments + added)
-                    }
-                    TextButton(onClick = { draft = draft.copy(receipt = !draft.receipt) }) {
-                        Text(if (draft.receipt) "Receipt on" else "Receipt", maxLines = 1)
-                    }
-                    // Shown on a draft that already asks for it even when this server cannot,
-                    // so the condition can be seen and turned off rather than refusing to send
-                    // for a reason nobody can find on screen.
-                    if (REQUIRETLS in sendExtensions || draft.requireTls) {
-                        TextButton(onClick = { draft = draft.copy(requireTls = !draft.requireTls) }) {
-                            Text(
-                                if (draft.requireTls) "Secure delivery required" else "Require secure delivery",
-                                maxLines = 1,
-                                color = if (draft.requireTls) MaterialTheme.colorScheme.primary else Color.Unspecified,
-                            )
-                        }
-                    }
-                    if (DSN in sendExtensions) {
-                        TextButton(onClick = { draft = draft.copy(confirmDelivery = !draft.confirmDelivery) }) {
-                            Text(if (draft.confirmDelivery) "Confirm delivery on" else "Confirm delivery", maxLines = 1)
-                        }
-                    }
-                    /*
-                     * Always here, and off where no server has been set up, rather than
-                     * missing. A toggle that silently does nothing would mean every message
-                     * going out believing it was tracked, and a toggle that is simply absent
-                     * reads as a feature Rampart does not have rather than one that needs a
-                     * server. So the unconfigured case is a button that says why when it is
-                     * pressed, which is also why this is not a disabled button: a disabled
-                     * button cannot be asked anything.
-                     */
-                    TextButton(
-                        onClick = {
-                            if (trackingReady) {
-                                chosen = true
-                                draft = draft.copy(tracked = !draft.tracked)
-                            } else {
-                                needsTracker = !needsTracker
-                            }
-                        },
-                    ) {
-                        Text(
-                            if (draft.tracked && trackingReady) "Tracking on" else "Track",
-                            maxLines = 1,
-                            color = when {
-                                draft.tracked && trackingReady -> MaterialTheme.colorScheme.primary
-                                trackingReady -> MaterialTheme.colorScheme.onSurfaceVariant
-                                // Muted further than an ordinary button, so it reads as
-                                // unavailable before it is pressed rather than after.
-                                else -> MaterialTheme.colorScheme.outline
-                            },
-                        )
-                    }
-                    TextButton(
-                        onClick = {
-                            if (trackingReady) draft = draft.copy(clickTracked = !draft.clickTracked)
-                            else needsTracker = !needsTracker
-                        },
-                    ) {
-                        Text(
-                            if (draft.clickTracked && trackingReady) "Clicks on" else "Track clicks",
-                            maxLines = 1,
-                            color = when {
-                                draft.clickTracked && trackingReady -> MaterialTheme.colorScheme.primary
-                                trackingReady -> MaterialTheme.colorScheme.onSurfaceVariant
-                                else -> MaterialTheme.colorScheme.outline
-                            },
-                        )
-                    }
-                    // Next to Discard rather than in the corner, because at panel width
-                    // a title bar of its own would cost a line of the message.
+                    // In the title bar, beside Discard and Send, so the three that end or resize
+                    // the message never wrap away from each other at a narrow panel width.
                     TextButton(onClick = { onFull(!full) }) {
                         Text(if (full) "Shrink" else "Full screen", maxLines = 1)
                     }
@@ -869,6 +777,115 @@ internal fun Composer(
                             }
                         }
                     }
+                }
+            }
+            /*
+             * The options for this message on their own line under the title bar. They used
+             * to share the title bar with Send and Discard, and at a panel width there was
+             * not room for all of them, so Discard was cut off at the edge of the window.
+             */
+            FlowRow(
+                Modifier.fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                    .padding(horizontal = 12.dp),
+                verticalArrangement = Arrangement.Center,
+            ) {
+                if (onAttach != null) {
+                    TextButton(
+                        onClick = {
+                            val chosen = pickFiles()
+                            if (chosen.isNotEmpty()) {
+                                scope.launch {
+                                    attaching = true
+                                    attachError = null
+                                    attachDetail = null
+                                    try {
+                                        val added = onAttach(chosen)
+                                        previews = previews + withContext(Dispatchers.IO) {
+                                            pickedPreviews(chosen, added)
+                                        }
+                                        draft = draft.copy(attachments = draft.attachments + added)
+                                    } catch (e: Exception) {
+                                        attachError = "That file could not be attached."
+                                        attachDetail = faultDetail(e, "That file could not be attached.")
+                                    } finally {
+                                        attaching = false
+                                    }
+                                }
+                            }
+                        },
+                        enabled = !sending && !attaching,
+                    ) { Text(if (attaching) "Attaching" else "Attach", maxLines = 1) }
+                }
+                AttachFromFilesButton(fromFiles, enabled = !sending && !attaching) { added ->
+                    draft = draft.copy(attachments = draft.attachments + added)
+                }
+                TextButton(onClick = { draft = draft.copy(receipt = !draft.receipt) }) {
+                    Text(if (draft.receipt) "Receipt on" else "Receipt", maxLines = 1)
+                }
+                // Shown on a draft that already asks for it even when this server cannot,
+                // so the condition can be seen and turned off rather than refusing to send
+                // for a reason nobody can find on screen.
+                if (REQUIRETLS in sendExtensions || draft.requireTls) {
+                    TextButton(onClick = { draft = draft.copy(requireTls = !draft.requireTls) }) {
+                        Text(
+                            if (draft.requireTls) "Secure delivery required" else "Require secure delivery",
+                            maxLines = 1,
+                            color = if (draft.requireTls) MaterialTheme.colorScheme.primary else Color.Unspecified,
+                        )
+                    }
+                }
+                if (DSN in sendExtensions) {
+                    TextButton(onClick = { draft = draft.copy(confirmDelivery = !draft.confirmDelivery) }) {
+                        Text(if (draft.confirmDelivery) "Confirm delivery on" else "Confirm delivery", maxLines = 1)
+                    }
+                }
+                /*
+                 * Always here, and off where no server has been set up, rather than
+                 * missing. A toggle that silently does nothing would mean every message
+                 * going out believing it was tracked, and a toggle that is simply absent
+                 * reads as a feature Rampart does not have rather than one that needs a
+                 * server. So the unconfigured case is a button that says why when it is
+                 * pressed, which is also why this is not a disabled button: a disabled
+                 * button cannot be asked anything.
+                 */
+                TextButton(
+                    onClick = {
+                        if (trackingReady) {
+                            chosen = true
+                            draft = draft.copy(tracked = !draft.tracked)
+                        } else {
+                            needsTracker = !needsTracker
+                        }
+                    },
+                ) {
+                    Text(
+                        if (draft.tracked && trackingReady) "Tracking on" else "Track",
+                        maxLines = 1,
+                        color = when {
+                            draft.tracked && trackingReady -> MaterialTheme.colorScheme.primary
+                            trackingReady -> MaterialTheme.colorScheme.onSurfaceVariant
+                            // Muted further than an ordinary button, so it reads as
+                            // unavailable before it is pressed rather than after.
+                            else -> MaterialTheme.colorScheme.outline
+                        },
+                    )
+                }
+                TextButton(
+                    onClick = {
+                        if (trackingReady) draft = draft.copy(clickTracked = !draft.clickTracked)
+                        else needsTracker = !needsTracker
+                    },
+                ) {
+                    Text(
+                        if (draft.clickTracked && trackingReady) "Clicks on" else "Track clicks",
+                        maxLines = 1,
+                        color = when {
+                            draft.clickTracked && trackingReady -> MaterialTheme.colorScheme.primary
+                            trackingReady -> MaterialTheme.colorScheme.onSurfaceVariant
+                            else -> MaterialTheme.colorScheme.outline
+                        },
+                    )
                 }
             }
             /*
@@ -1351,14 +1368,21 @@ private fun ToolbarButton(
     enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
-    IconButton(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = Modifier.size(30.dp)
+    // A plain clickable box rather than an IconButton: IconButton draws its hover as a
+    // circle, which sat inside the square of the active state and looked like two buttons.
+    Box(
+        Modifier.size(30.dp)
             .clip(MaterialTheme.shapes.small)
-            .background(if (active) MaterialTheme.colorScheme.primaryContainer else Color.Transparent),
+            .background(if (active) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+            .clickable(enabled = enabled, role = Role.Button, onClickLabel = label, onClick = onClick),
+        contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = label, modifier = Modifier.size(16.dp))
+        Icon(
+            icon,
+            contentDescription = label,
+            modifier = Modifier.size(16.dp),
+            tint = if (enabled) LocalContentColor.current else LocalContentColor.current.copy(alpha = 0.38f),
+        )
     }
 }
 
