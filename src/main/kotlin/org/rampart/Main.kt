@@ -623,11 +623,16 @@ private fun App(
     // works is not an error worth a dialog: that account simply is not signed in, and the
     // sign-in screen is already the answer.
     LaunchedEffect(Unit) {
+        // Every account at once rather than each waiting for the one before: signing in is
+        // a session request and often a redirect, so three accounts one after another was
+        // six round trips of waiting before the window could show anything.
         sessions = withContext(Dispatchers.IO) {
-            Accounts.read().mapNotNull { account ->
-                val password = Secrets.load(account) ?: return@mapNotNull null
-                runCatching { Session(account, openSaved(account, password)) }.getOrNull()
-            }
+            Accounts.read().map { account ->
+                async {
+                    val password = Secrets.load(account) ?: return@async null
+                    runCatching { Session(account, openSaved(account, password)) }.getOrNull()
+                }
+            }.awaitAll().filterNotNull()
         }
         restoring = false
     }
@@ -1541,30 +1546,36 @@ private fun Reader(
         return foldersToSkip(role, folderFor("junk", boxes)?.id, folderFor("trash", boxes)?.id)
     }
 
-    /** The inbox of every signed in account, as one list. */
+    /**
+     * The inbox of every signed in account, as one list.
+     *
+     * Every account at once. They are separate servers with nothing to wait on between
+     * them, and asked in turn the merged inbox took as long as all of them added up.
+     */
     suspend fun everyInbox(memory: Map<String, List<Person>>, asked: QuickFilters): List<Summary> = merged(
-        sessions.associate { open ->
-            val inbox = folderFor("inbox", mailboxes[open.key].orEmpty())
-            open.key to (
-                inbox?.let {
-                    runCatching {
-                        if (showingResults && query.isNotBlank()) {
-                            val found = open.jmap.search(query, null, except = searchExcept(open.key))
-                            if (asked.active) {
-                                val known = if (asked.knownSender) knownAddresses(open.key, memory) else emptySet()
-                                found.filter { matchesQuick(it, asked, known) }
-                            } else {
-                                found
-                            }
-                        } else {
-                            val known = if (asked.knownSender) knownAddresses(open.key, memory) else emptySet()
-                            quickPage(open.jmap, open.store, it.id, asked, known)
-                        }
-                    }.getOrDefault(emptyList())
-                } ?: emptyList()
-                )
-        },
+        coroutineScope {
+            sessions.map { open -> async(Dispatchers.IO) { open.key to inboxOf(open, memory, asked) } }.awaitAll()
+        }.toMap(),
     )
+
+    /** One account's share of [everyInbox]. A failure is an empty share, so the others still show. */
+    fun inboxOf(open: Session, memory: Map<String, List<Person>>, asked: QuickFilters): List<Summary> {
+        val inbox = folderFor("inbox", mailboxes[open.key].orEmpty()) ?: return emptyList()
+        return runCatching {
+            if (showingResults && query.isNotBlank()) {
+                val found = open.jmap.search(query, null, except = searchExcept(open.key))
+                if (asked.active) {
+                    val known = if (asked.knownSender) knownAddresses(open.key, memory) else emptySet()
+                    found.filter { matchesQuick(it, asked, known) }
+                } else {
+                    found
+                }
+            } else {
+                val known = if (asked.knownSender) knownAddresses(open.key, memory) else emptySet()
+                quickPage(open.jmap, open.store, inbox.id, asked, known)
+            }
+        }.getOrDefault(emptyList())
+    }
 
     suspend fun <T> io(block: () -> T): T? = try {
         report("")
@@ -1639,16 +1650,18 @@ private fun Reader(
      * a reason to fetch the body or build the page again.
      */
     suspend fun cacheStillGood(key: String, id: String, kept: Kept): Boolean {
-        val state = withContext(Dispatchers.IO) { runCatching { session(key).jmap.mailState() }.getOrNull() }
-            ?: return false
+        // One request for both answers. They used to be asked one after the other, which was
+        // a second round trip on every open after anything at all had changed in the account.
+        val (state, stamp) = withContext(Dispatchers.IO) {
+            runCatching { session(key).jmap.stateAndStamp(id) }.getOrNull()
+        } ?: return false
+        state ?: return false
         if (kept.mailState != null && state == kept.mailState) return true
         val folder = sourceFolder(key)
         val cursor = folder?.let { withContext(Dispatchers.IO) { session(key).store?.cursor(it) } }
         if (cursor != null && state == cursor) return true
         val blobId = kept.emailBlobId ?: return false
-        val stamp = withContext(Dispatchers.IO) {
-            runCatching { session(key).jmap.contentStamp(id) }.getOrNull()
-        } ?: return false
+        stamp ?: return false
         if (stamp.blobId != blobId || stamp.size != kept.body.size) return false
         withContext(Dispatchers.IO) { runCatching { session(key).store?.setKeptState(id, state) } }
         return true
@@ -1746,7 +1759,9 @@ private fun Reader(
                 )
             }
             if (!live()) return@time
-            val state = withContext(Dispatchers.IO) { runCatching { session(key).jmap.mailState() }.getOrNull() }
+            // JMAP hands the state back with the message itself. Asking again afterwards was a
+            // round trip on the path to the message appearing, spent on a stamp for the copy.
+            val state = fresh.state ?: withContext(Dispatchers.IO) { runCatching { session(key).jmap.mailState() }.getOrNull() }
             if (!live()) return@time
             withContext(Dispatchers.IO) {
                 runCatching {
@@ -1867,13 +1882,18 @@ private fun Reader(
     }
 
     LaunchedEffect(sessions.size) {
-        sessions.filter { it.key !in mailboxes }.forEach { open ->
-            val found = io { open.jmap.mailboxes() } ?: emptyList()
+        // Asked of every new account at once, each as one request (see MailBackend.startup),
+        // then applied in the accounts' own order so the first inbox shown is the same one.
+        val waiting = sessions.filter { it.key !in mailboxes }
+        val started = coroutineScope {
+            waiting.map { open -> async { io { open.jmap.startup() } } }.awaitAll()
+        }
+        waiting.zip(started).forEach { (open, start) ->
+            val found = start?.mailboxes ?: emptyList()
             mailboxes = mailboxes + (open.key to found)
             // An account with no identity can still read; it just cannot send, and that is
             // reported when someone tries rather than as an error on the way in.
-            withContext(Dispatchers.IO) { runCatching { open.jmap.identities() }.getOrNull() }
-                ?.let { identities = identities + (open.key to it) }
+            start?.identities?.let { identities = identities + (open.key to it) }
             if (here == null) {
                 val inbox = folderFor("inbox", found) ?: found.firstOrNull()
                 if (inbox != null) here = open.key to inbox
@@ -2265,7 +2285,9 @@ private fun Reader(
                         val pictures = cidBytes(session(key).jmap, opened.body, opened.attachments)
                         store.putKept(
                             row.id, opened.body, opened.attachments, pictures,
-                            opened.emailBlobId, null, opened.calendar,
+                            // Stamped with the state the open came back with, so the first
+                            // click on a read-ahead message can trust it without the stamp check.
+                            opened.emailBlobId, opened.state, opened.calendar,
                         )
                     }
                 }
@@ -2343,11 +2365,18 @@ private fun Reader(
         while (true) {
             for (open in sessions) {
                 val inbox = folderFor("inbox", mailboxes[open.key].orEmpty()) ?: continue
+                // The page and the folder counts come back together: one request once the
+                // state has moved, where it used to be two.
+                var counts: List<Mailbox>? = null
                 val found = withContext(Dispatchers.IO) {
                     runCatching {
                         val state = open.jmap.mailState() ?: return@runCatching null
                         if (state == states[open.key]) null
-                        else arrivals(state, open.jmap.emails(inbox.id, limit = 30), seen[open.key])
+                        else {
+                            val (page, boxes) = open.jmap.pageAndFolders(inbox.id, 30)
+                            counts = boxes
+                            arrivals(state, page, seen[open.key])
+                        }
                     }.getOrNull()
                 } ?: continue
 
@@ -2356,8 +2385,7 @@ private fun Reader(
                 // The unread counts in the sidebar move when mail arrives and when it is
                 // read in another client, so they are refreshed on any change, not just on
                 // an arrival.
-                withContext(Dispatchers.IO) { runCatching { open.jmap.mailboxes() }.getOrNull() }
-                    ?.let { mailboxes = mailboxes + (open.key to it) }
+                counts?.let { mailboxes = mailboxes + (open.key to it) }
                 // Anything this account changed can be in the folder on screen, not only in
                 // its inbox: mail read or filed in another client moves the open folder too.
                 // A state we just produced ourselves, with nothing new in the inbox, is
@@ -2520,8 +2548,8 @@ private fun Reader(
                 // Both in one trip. The books are what name and filter the list, so
                 // fetching them separately would draw the list once without them.
                 val jmap = session(key).jmap
-                contactBooks = runCatching { jmap.addressBooks() }.getOrDefault(emptyList())
-                val fetched = jmap.contacts()
+                val (books, fetched) = jmap.booksAndContacts()
+                contactBooks = books
                 val photos = photosFrom(jmap, fetched)
                 contacts = fetched
                 senderPhotos = photos
@@ -2829,7 +2857,9 @@ private fun Reader(
             // A stored copy that still matches the server opens with no further fetch.
             // loadCard is what decides, and it builds the page before the card is shown.
             loadCard(key, message.id, force = true)
-            cardFor(message).body?.let { opened ->
+            // Off the path to the conversation appearing: it is a store write and, for a
+            // tracked message, a call to the companion, and nothing on screen waits for it.
+            cardFor(message).body?.let { opened -> scope.launch {
                 val answered = opened.inReplyTo + opened.references
                 if (answered.isNotEmpty()) {
                     val ids = withContext(Dispatchers.IO) {
@@ -2843,7 +2873,7 @@ private fun Reader(
                         }
                     }
                 }
-            }
+            } }
 
             /*
              * The meeting, when the open did not already bring it back.
