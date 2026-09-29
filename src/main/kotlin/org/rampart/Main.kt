@@ -2418,6 +2418,9 @@ private fun Reader(
         othersOpen = settingsOpen || contactsOpen || dashboardOpen || calendarOpen,
         place = listOf(here?.first, here?.second?.id, viewingTag, showingResults),
     ) { settingsOpen = false; contactsOpen = false; dashboardOpen = false; calendarOpen = false }
+    CalendarJumpFollows(calendarOpen) {
+        calendarOpen = true; settingsOpen = false; contactsOpen = false; dashboardOpen = false
+    }
 
     LaunchedEffect(contactsOpen, sessions.size) {
         val key = writingAccount() ?: return@LaunchedEffect
@@ -2520,8 +2523,17 @@ private fun Reader(
         val boxes = mailboxes[key].orEmpty()
         val drafts = folderFor("drafts", boxes) ?: return
         answering = answer
+        val addresses = identities[key].orEmpty().map { it.email } + identity.email
+        val calendarBlob = calendarPartIn(cardFor(message).attachments)?.blobId
         scope.launch {
-            val sent = withContext(Dispatchers.IO) {
+            // Through the account's calendar first, where its server keeps one, and by email
+            // whenever the server did not send the reply itself. InvitationCalendar.kt decides.
+            val onServer = withContext(Dispatchers.IO) {
+                runCatching {
+                    answerInCalendar(calendarClientFor(session(key).jmap), meeting, answer, addresses, calendarBlob)
+                }.getOrElse { CalendarAnswer(false, "Your calendar could not be reached, so the answer went by email.", whyFailed(it)) }
+            }
+            val sent: Result<String?> = if (onServer.replySent) Result.success(null) else withContext(Dispatchers.IO) {
                 runCatching {
                     val ics = rsvpCalendar(meeting, answer, identity.email, identity.name)
                     val file = Files.createTempFile("rampart-rsvp", ".ics")
@@ -2539,6 +2551,7 @@ private fun Reader(
             answering = null
             if (sent.isSuccess) {
                 sent.getOrNull()?.let { if (error.isBlank()) report(it) }
+                onServer.note?.let { report(it, onServer.detail) }
                 // Shown as answered straight away. The organiser's copy is what counts and
                 // it has gone; re-reading our own part would say nothing new.
                 invitation = meeting.copy(
@@ -4312,6 +4325,11 @@ private fun Reader(
             },
             answering = if (isPrimary) answering else null,
             onAnswer = ::answerInvitation,
+            invitationContext = if (isPrimary && key != null) {
+                InvitationContext(sessions.firstOrNull { it.key == key }?.jmap, key, calendarPartIn(card.attachments), ours.toList())
+            } else {
+                null
+            },
             me = writingIdentity(card.body),
             showRemote = showRemoteFor(cardSummary),
             unsubscribed = card.unsubscribed,
@@ -5123,7 +5141,7 @@ private fun Reader(
             if (FilesPage.open) {
                 FilesPane(writingAccount()?.let { session(it) })
             } else if (calendarOpen) {
-                val key = (here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key)
+                val key = CalendarJump.target?.account ?: (here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key)
                 val open = sessions.firstOrNull { it.key == key }
                 CalendarPane(open?.jmap, open?.let { shortAccountName(it.account.name, it.account.email) }.orEmpty())
             } else if (dashboardOpen) {
@@ -7877,6 +7895,8 @@ internal fun Message(
     /** The answer currently being sent, so the buttons say so and cannot be pressed twice. */
     answering: Rsvp? = null,
     onAnswer: (Rsvp) -> Unit = {},
+    /** How the invitation card reaches this account's calendar, when it has one. */
+    invitationContext: InvitationContext? = null,
     /**
      * The address this copy was addressed to, which is the one on the guest list.
      *
@@ -8532,6 +8552,7 @@ internal fun Message(
                             // the guest list and the one the answer goes out as.
                             me = me,
                             onAnswer = if (answering == null) onAnswer else null,
+                            context = invitationContext,
                         )
                     }
 

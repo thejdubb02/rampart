@@ -164,6 +164,24 @@ internal fun CalendarPane(backend: MailBackend?, accountName: String) {
         expandAll(events.filter { e -> e.calendarIds.isEmpty() || e.calendarIds.any { it !in hidden } }, range.first, range.second, viewer)
     }
 
+    // Opened from an invitation's "Show in calendar": go to the meeting's day, then open the
+    // meeting itself once the events for that day have loaded. Marked as opened so a reload
+    // after an edit does not open it a second time.
+    val jump = CalendarJump.target
+    LaunchedEffect(jump?.eventId, jump?.date) {
+        val to = jump ?: return@LaunchedEffect
+        if (!to.opened) anchor = to.date
+    }
+    LaunchedEffect(shown, jump) {
+        val to = jump ?: return@LaunchedEffect
+        if (to.opened) return@LaunchedEffect
+        val hit = shown.firstOrNull { it.event.id == to.eventId && to.date in it.days() }
+            ?: shown.firstOrNull { it.event.id == to.eventId }
+            ?: return@LaunchedEffect
+        details = hit
+        CalendarJump.target = to.copy(opened = true)
+    }
+
     /**
      * Runs a write off the window's thread and shows its failure in words. Reloads only on
      * success: the reload clears [fault], which used to wipe a failed write's banner at once.
