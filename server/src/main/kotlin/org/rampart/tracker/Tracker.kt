@@ -3,6 +3,11 @@ package org.rampart.tracker
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.time.Duration
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.concurrent.Executors
@@ -49,14 +54,19 @@ fun main() {
     val log = Log(System.getenv("RAMPART_TRACKER_DB") ?: "/data/tracker.db")
     val keepDays = System.getenv("RAMPART_TRACKER_KEEP_DAYS")?.toIntOrNull() ?: 400
     log.forgetOlderThan(keepDays)
+    val ntfy = System.getenv("RAMPART_NTFY_URL")?.trim()?.takeIf { it.isNotEmpty() }?.let {
+        NtfyClient(it, System.getenv("RAMPART_NTFY_TOKEN").orEmpty().takeIf(String::isNotBlank))
+    }
+    val pushes = Executors.newFixedThreadPool(2)
 
     val server = HttpServer.create(InetSocketAddress("0.0.0.0", port), 0)
     // A small pool, because every handler is a single SQLite statement. The default is a
     // single thread, which would let one slow client hold up somebody's image loading.
     server.executor = Executors.newFixedThreadPool(8)
 
-    server.createContext("/o/") { exchange -> pixel(exchange, log) }
+    server.createContext("/o/") { exchange -> pixel(exchange, log, ntfy, pushes) }
     server.createContext("/opens") { exchange -> opens(exchange, log, token) }
+    server.createContext("/labels") { exchange -> labels(exchange, log, token) }
     server.createContext("/diag") { exchange -> diag(exchange, log, token, diagToken) }
     /*
      * Never behind anything. A health check that answers 200 from a login page says the
@@ -75,18 +85,32 @@ fun main() {
  * broken-image icon in the middle of somebody's message. An id we have never seen is
  * simply recorded, because it costs nothing and the alternative leaks.
  */
-private fun pixel(exchange: HttpExchange, log: Log) {
+private fun pixel(exchange: HttpExchange, log: Log, ntfy: NtfyClient?, pushes: java.util.concurrent.Executor) {
     val id = exchange.requestURI.path.removePrefix("/o/").removeSuffix(".gif")
     if (id.isNotBlank() && id.length <= 64 && id.all { it.isLetterOrDigit() || it == '-' || it == '_' }) {
         runCatching {
-            log.record(
-                Fetch(
+            val fetch = synchronized(log) {
+                val previous = log.fetchesFor(id)
+                val candidate = Fetch(
                     id = id,
                     at = System.currentTimeMillis(),
                     userAgent = exchange.requestHeaders.getFirst("User-Agent").orEmpty(),
                     network = network(callerAddress(exchange)),
-                ),
-            )
+                )
+                candidate.copy(
+                    classification = classifyOpen(
+                        OpenSignals(candidate.userAgent, candidate.network, candidate.at, previous),
+                    ),
+                ).also(log::record)
+            }
+            if (fetch.classification == OpenClassification.PERSON && ntfy != null) {
+                val count = log.fetchesFor(id).count { it.classification == OpenClassification.PERSON }
+                val label = log.labelFor(id)
+                pushes.execute {
+                    runCatching { ntfy.send(openNotification(label, count)) }
+                        .onFailure { System.err.println("ntfy notification failed: ${it.message ?: it::class.simpleName}") }
+                }
+            }
         }
     }
     // no-store rather than no-cache: a second open is the interesting one, and a proxy
@@ -122,11 +146,79 @@ private fun opens(exchange: HttpExchange, log: Log, token: String) {
             append(""""at":""").append(fetch.at).append(',')
             append(""""userAgent":""").append(quoted(fetch.userAgent)).append(',')
             append(""""network":""").append(quoted(fetch.network))
+            append(',').append(""""classification":""").append(quoted(fetch.classification.wireName))
             append("}")
         }
         append("]}")
     }
     reply(exchange, 200, body.toByteArray(), "application/json")
+}
+
+private fun labels(exchange: HttpExchange, log: Log, token: String) {
+    if (exchange.requestMethod != "POST") {
+        reply(exchange, 405, """{"error":"use POST"}""".toByteArray(), "application/json")
+        return
+    }
+    val given = exchange.requestHeaders.getFirst("Authorization").orEmpty().removePrefix("Bearer ").trim()
+    if (!labelAuthorised(given, token)) {
+        reply(exchange, 401, """{"error":"unauthorised"}""".toByteArray(), "application/json")
+        return
+    }
+    val raw = exchange.requestBody.use { it.readNBytes(4097) }
+    if (raw.size > 4096) {
+        reply(exchange, 413, """{"error":"too large"}""".toByteArray(), "application/json")
+        return
+    }
+    val body = parseJson(String(raw, Charsets.UTF_8)) as? Map<*, *>
+    val id = (body?.get("id") as? String)?.takeIf(::validTrackingId)
+    val label = (body?.get("label") as? String)?.trim()?.takeIf { it.isNotEmpty() && it.length <= 120 }
+    if (id == null || label == null) {
+        reply(exchange, 400, """{"error":"invalid label"}""".toByteArray(), "application/json")
+        return
+    }
+    log.setLabel(TrackingLabel(id, label, System.currentTimeMillis()))
+    reply(exchange, 200, """{"stored":true}""".toByteArray(), "application/json")
+}
+
+internal fun labelAuthorised(given: String, token: String): Boolean = sameToken(given, token)
+
+private fun validTrackingId(id: String): Boolean =
+    id.isNotBlank() && id.length <= 64 && id.all { it.isLetterOrDigit() || it == '-' || it == '_' }
+
+internal data class NtfyNotification(val message: String, val click: String? = null)
+
+internal fun openNotification(label: String?, count: Int): NtfyNotification {
+    val times = when (count) {
+        2 -> "2nd time"
+        3 -> "3rd time"
+        else -> "${count}th time"
+    }
+    return NtfyNotification(
+        when {
+            label.isNullOrBlank() -> if (count == 1) "A tracked email was opened" else "A tracked email was opened ($times)"
+            count == 1 -> "$label opened it"
+            else -> "$label opened it ($times)"
+        },
+    )
+}
+
+internal class NtfyClient(
+    private val topicUrl: String,
+    private val token: String?,
+    private val http: HttpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build(),
+) {
+    fun send(notification: NtfyNotification) {
+        val builder = HttpRequest.newBuilder(URI.create(topicUrl))
+            .timeout(Duration.ofSeconds(4))
+            .header("Title", "Email opened")
+            .header("Tags", "envelope")
+            .header("Priority", "default")
+            .POST(HttpRequest.BodyPublishers.ofString(notification.message))
+        token?.let { builder.header("Authorization", "Bearer $it") }
+        notification.click?.let { builder.header("Click", it) }
+        val response = http.send(builder.build(), HttpResponse.BodyHandlers.discarding())
+        if (response.statusCode() !in 200..299) error("ntfy returned HTTP ${response.statusCode()}")
+    }
 }
 
 /**

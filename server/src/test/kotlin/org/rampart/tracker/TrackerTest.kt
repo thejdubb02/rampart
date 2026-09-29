@@ -1,6 +1,9 @@
 package org.rampart.tracker
 
 import java.nio.file.Files
+import com.sun.net.httpserver.HttpServer
+import java.net.InetSocketAddress
+import java.util.concurrent.ArrayBlockingQueue
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -46,6 +49,34 @@ class TrackerTest {
             log.record(Fetch("aaa", 1000, "Mozilla", "203.0.113.0/24"))
             log.record(Fetch("aaa", 9000, "Mozilla", "203.0.113.0/24"))
             assertEquals(2, log.since(0).size)
+        }
+    }
+
+    @Test
+    fun `classification follows the signal table`() {
+        val first = Fetch("id", 1_000, "Mozilla/5.0 Chrome/120", "", OpenClassification.PERSON)
+        val cases = listOf(
+            Triple("Apple-Mail/3696.100.31", emptyList(), OpenClassification.APPLE_PRIVACY),
+            Triple("Mozilla/5.0 GoogleImageProxy", emptyList(), OpenClassification.GMAIL_PROXY),
+            Triple("Proofpoint URL Defense", emptyList(), OpenClassification.SECURITY_SCANNER),
+            Triple("python-requests/2.31", emptyList(), OpenClassification.SECURITY_SCANNER),
+            Triple("mail-fetcher", listOf(first), OpenClassification.SECURITY_SCANNER),
+            Triple("Mozilla/5.0 Chrome/120", listOf(first), OpenClassification.REPEAT),
+            Triple("Mozilla/5.0 Firefox/130", emptyList(), OpenClassification.PERSON),
+        )
+        cases.forEach { (userAgent, previous, expected) ->
+            val at = if (previous.isEmpty()) 30_000L else 10_000L
+            assertEquals(expected, classifyOpen(OpenSignals(userAgent, "", at, previous)), userAgent)
+        }
+    }
+
+    @Test
+    fun `classification and labels survive a database round trip`() {
+        log().use { log ->
+            log.record(Fetch("aaa", 1000, "Apple-Mail", "", OpenClassification.APPLE_PRIVACY))
+            log.setLabel(TrackingLabel("aaa", "Susan, site audit", 900))
+            assertEquals(OpenClassification.APPLE_PRIVACY, log.since(0).single().classification)
+            assertEquals("Susan, site audit", log.labelFor("aaa"))
         }
     }
 
@@ -96,6 +127,50 @@ class TrackerTest {
         assertFalse(diagAuthorised("someone-elses-guess", "main-token-value", "public-token-value"))
         // No public token configured: only the main one is accepted, same as before.
         assertFalse(diagAuthorised("public-token-value", "main-token-value", null))
+    }
+
+    @Test
+    fun `the label route accepts only the tracking token`() {
+        assertTrue(labelAuthorised("main-token-value", "main-token-value"))
+        assertFalse(labelAuthorised("diag-token-value", "main-token-value"))
+        assertFalse(labelAuthorised("", "main-token-value"))
+    }
+
+    @Test
+    fun `ntfy request carries the native headers token and body`() {
+        val received = ArrayBlockingQueue<Map<String, String>>(1)
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/topic") { exchange ->
+            received.put(
+                mapOf(
+                    "title" to exchange.requestHeaders.getFirst("Title"),
+                    "tags" to exchange.requestHeaders.getFirst("Tags"),
+                    "priority" to exchange.requestHeaders.getFirst("Priority"),
+                    "authorization" to exchange.requestHeaders.getFirst("Authorization"),
+                    "body" to exchange.requestBody.bufferedReader().readText(),
+                ),
+            )
+            exchange.sendResponseHeaders(200, 0)
+            exchange.responseBody.close()
+        }
+        server.start()
+        try {
+            NtfyClient("http://127.0.0.1:${server.address.port}/topic", "secret").send(
+                openNotification("Susan, site audit", 2),
+            )
+            assertEquals(
+                mapOf(
+                    "title" to "Email opened",
+                    "tags" to "envelope",
+                    "priority" to "default",
+                    "authorization" to "Bearer secret",
+                    "body" to "Susan, site audit opened it (2nd time)",
+                ),
+                received.take(),
+            )
+        } finally {
+            server.stop(0)
+        }
     }
 
     @Test

@@ -19,7 +19,19 @@ data class Fetch(
     val userAgent: String,
     /** The requesting network, never the address. See [network]. */
     val network: String,
+    /** Why this fetch is or is not evidence that a person read the message. */
+    val classification: OpenClassification = OpenClassification.PERSON,
 )
+
+enum class OpenClassification(val wireName: String) {
+    PERSON("person"),
+    APPLE_PRIVACY("apple_privacy"),
+    GMAIL_PROXY("gmail_proxy"),
+    SECURITY_SCANNER("security_scanner"),
+    REPEAT("repeat"),
+}
+
+data class TrackingLabel(val id: String, val label: String, val createdAt: Long)
 
 /**
  * One line of Rampart's own diagnostics: how a named metric went, aggregated by the
@@ -65,6 +77,16 @@ class Log(path: String) : AutoCloseable {
             )
             // The only query there is: everything since a time, in order.
             s.execute("CREATE INDEX IF NOT EXISTS fetch_at ON fetch(at)")
+            val columns = s.executeQuery("PRAGMA table_info(fetch)").use { rows ->
+                buildSet { while (rows.next()) add(rows.getString("name")) }
+            }
+            if ("classification" !in columns) {
+                s.execute("ALTER TABLE fetch ADD COLUMN classification TEXT NOT NULL DEFAULT 'person'")
+            }
+            s.execute(
+                "CREATE TABLE IF NOT EXISTS tracking_label (" +
+                    "id TEXT PRIMARY KEY, label TEXT NOT NULL, createdAt INTEGER NOT NULL)",
+            )
             // Diagnostics, in the same database rather than a second file: this is still
             // one companion doing more than one job, not two companions.
             s.execute(
@@ -76,12 +98,16 @@ class Log(path: String) : AutoCloseable {
         }
     }
 
+    @Synchronized
     fun record(fetch: Fetch) {
-        connection.prepareStatement("INSERT INTO fetch (id, at, userAgent, network) VALUES (?, ?, ?, ?)").use { s ->
+        connection.prepareStatement(
+            "INSERT INTO fetch (id, at, userAgent, network, classification) VALUES (?, ?, ?, ?, ?)",
+        ).use { s ->
             s.setString(1, fetch.id)
             s.setLong(2, fetch.at)
             s.setString(3, fetch.userAgent.take(400))
             s.setString(4, fetch.network)
+            s.setString(5, fetch.classification.wireName)
             s.executeUpdate()
         }
     }
@@ -95,17 +121,64 @@ class Log(path: String) : AutoCloseable {
      */
     fun since(since: Long, limit: Int = 1000): List<Fetch> =
         connection.prepareStatement(
-            "SELECT id, at, userAgent, network FROM fetch WHERE at > ? ORDER BY at ASC LIMIT ?",
+            "SELECT id, at, userAgent, network, classification FROM fetch WHERE at > ? ORDER BY at ASC LIMIT ?",
         ).use { s ->
             s.setLong(1, since)
             s.setInt(2, limit)
             s.executeQuery().use { rows ->
                 buildList {
                     while (rows.next()) {
-                        add(Fetch(rows.getString(1), rows.getLong(2), rows.getString(3), rows.getString(4)))
+                        add(
+                            Fetch(
+                                rows.getString(1), rows.getLong(2), rows.getString(3), rows.getString(4),
+                                OpenClassification.entries.firstOrNull { it.wireName == rows.getString(5) }
+                                    ?: OpenClassification.PERSON,
+                            ),
+                        )
                     }
                 }
             }
+        }
+
+    @Synchronized
+    fun fetchesFor(id: String): List<Fetch> =
+        connection.prepareStatement(
+            "SELECT id, at, userAgent, network, classification FROM fetch WHERE id = ? ORDER BY at ASC",
+        ).use { s ->
+            s.setString(1, id)
+            s.executeQuery().use { rows ->
+                buildList {
+                    while (rows.next()) {
+                        add(
+                            Fetch(
+                                rows.getString(1), rows.getLong(2), rows.getString(3), rows.getString(4),
+                                OpenClassification.entries.firstOrNull { it.wireName == rows.getString(5) }
+                                    ?: OpenClassification.PERSON,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+
+    @Synchronized
+    fun setLabel(label: TrackingLabel) {
+        connection.prepareStatement(
+            "INSERT INTO tracking_label (id, label, createdAt) VALUES (?, ?, ?) " +
+                "ON CONFLICT(id) DO UPDATE SET label = excluded.label, createdAt = excluded.createdAt",
+        ).use { s ->
+            s.setString(1, label.id)
+            s.setString(2, label.label.take(120))
+            s.setLong(3, label.createdAt)
+            s.executeUpdate()
+        }
+    }
+
+    @Synchronized
+    fun labelFor(id: String): String? =
+        connection.prepareStatement("SELECT label FROM tracking_label WHERE id = ?").use { s ->
+            s.setString(1, id)
+            s.executeQuery().use { rows -> if (rows.next()) rows.getString(1) else null }
         }
 
     /**
@@ -177,7 +250,11 @@ class Log(path: String) : AutoCloseable {
             s.setLong(1, cutoff)
             s.executeUpdate()
         }
-        return fetches + diagnostics
+        val labels = connection.prepareStatement("DELETE FROM tracking_label WHERE createdAt < ?").use { s ->
+            s.setLong(1, cutoff)
+            s.executeUpdate()
+        }
+        return fetches + diagnostics + labels
     }
 
     override fun close() = connection.close()

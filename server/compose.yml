@@ -16,6 +16,10 @@ services:
       # baking RAMPART_TRACKER_TOKEN into a build that ships to more than one person: see
       # README.md's "Why there are two tokens".
       RAMPART_DIAG_TOKEN: ${RAMPART_DIAG_TOKEN:-}
+      # Optional. Set this to a full ntfy topic URL to alert only on person opens.
+      # RAMPART_NTFY_URL: https://ntfy.example.org/rampart-opens
+      # Optional. Set this when the ntfy topic requires a Bearer access token.
+      # RAMPART_NTFY_TOKEN: put-the-ntfy-token-in-.env
       # How long the server keeps a fetch before throwing it away. The client keeps its own
       # copy of everything it has read, so this is a handover buffer, not the record.
       RAMPART_TRACKER_KEEP_DAYS: ${RAMPART_TRACKER_KEEP_DAYS:-400}

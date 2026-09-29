@@ -75,6 +75,8 @@ Three things worth getting right:
 |---|---|---|
 | `RAMPART_TRACKER_TOKEN` | none, required | The shared secret on `/opens` and `/diag`. Give the same one to Rampart |
 | `RAMPART_DIAG_TOKEN` | none, optional | A second secret, valid on `/diag` only, never `/opens`. See below |
+| `RAMPART_NTFY_URL` | none, optional | A full ntfy topic URL. Real person opens are posted here when set |
+| `RAMPART_NTFY_TOKEN` | none, optional | The Bearer access token for a protected ntfy topic |
 | `RAMPART_TRACKER_KEEP_DAYS` | `400` | How long a fetch or a diagnostics batch is kept before it is thrown away. One knob for both |
 | `RAMPART_TRACKER_DB` | `/data/tracker.db` | Where the database lives |
 | `PORT` | `8080` | The port inside the container |
@@ -97,12 +99,29 @@ alone still works on `/diag` the same as it always did.
 |---|---|---|
 | `GET /o/<id>.gif` | none, by necessity | A 1x1 transparent GIF, 42 bytes, `no-store`. Records the fetch |
 | `GET /opens?since=<ms>` | `Authorization: Bearer <token>` | Everything fetched since that moment, oldest first |
+| `POST /labels` | `Authorization: Bearer <token>` | Registers an optional short label for a tracking id |
 | `POST /diag` | `Authorization: Bearer <token>` or `<diag-token>` | Aggregated diagnostics, a batch at a time. See below |
 | `GET /health` | none, and never gate it | `ok` |
 
 `/o/` always answers 200 with an image, whatever the id. A 404 for an unknown id would tell
 anyone who asked which ids exist, and a mail client that gets an error draws a broken image
 in the middle of somebody's message.
+
+Each fetch returned by `/opens` includes a `classification`: `person`, `apple_privacy`,
+`gmail_proxy`, `security_scanner` or `repeat`. Only `person` fetches produce ntfy alerts.
+Apple privacy downloads, Gmail's image proxy, named security products, cloud scanner user
+agents, suspicious immediate non-browser fetches and repeats within 60 seconds are kept in
+the log without buzzing a phone. Gmail can only establish that its proxy fetched the image,
+so the client describes it as a first open only.
+
+`/labels` accepts `{"id":"...","label":"Susan, site audit"}`. Rampart calls it only
+after the user opts in to named phone alerts. Without that opt-in, the companion still knows
+only the random id and request metadata. Labels expire under `RAMPART_TRACKER_KEEP_DAYS`
+with the tracking records they describe.
+
+When `RAMPART_NTFY_URL` is set, a person open is posted away from the pixel request with a
+short timeout. The native ntfy request uses the title `Email opened`, the `envelope` tag and
+default priority. Failures are logged and the pixel remains a successful image response.
 
 `/diag` takes a small JSON body: `{"items":[{"metric":"...", "category":"...", "count":N,
 "sum":N, "min":N, "max":N}, ...]}`, `category`, `sum`, `min` and `max` all optional. Each
