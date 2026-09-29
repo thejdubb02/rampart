@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -41,29 +42,32 @@ internal fun MessageDetails(
     body: Body?,
     spamScore: Double?,
 ) {
-    val recipients = (body?.to.orEmpty() + body?.cc.orEmpty()).filter { it.isNotBlank() }
-    Column(
-        Modifier.fillMaxWidth()
-            .clip(MaterialTheme.shapes.small)
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-    ) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(28.dp)) {
-            Column(Modifier.weight(1f)) {
-                Heading("Recipients and routing")
-                val (who, address) = displaySender(summary.from, summary.fromEmail)
-                Line("From", listOfNotNull(who.takeIf { it != "(no sender)" }, address?.let { "<$it>" }).joinToString(" "))
-                // Ordinary rather than alarming, which is why it lives here and not in a
-                // banner: every mailing list and every ticketing system sets one. It is
-                // still the address that would receive an answer, so it is worth being able
-                // to look it up.
-                body?.replyTo.orEmpty().filter { it.isNotBlank() }
-                    .forEachIndexed { at, who -> Line(if (at == 0) "Reply to" else "", who) }
-                recipients.forEachIndexed { at, who -> Line(if (at == 0) "To" else "", who) }
-                // Both written out the same way, or the gap between them is not a
-                // comparison, it is two different formats side by side.
-                handling(body?.sentAt?.asFullLocalTime(), summary.receivedAt.asFullLocalTime())
-                    .forEach { Line(it.label, it.value) }
+    SelectionContainer {
+        Column(
+            Modifier.fillMaxWidth()
+                .clip(MaterialTheme.shapes.small)
+                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Heading("Recipients and routing")
+                    val (who, address) = displaySender(summary.from, summary.fromEmail)
+                    Line("From", listOfNotNull(who.takeIf { it != "(no sender)" }, address?.let { "<$it>" }).joinToString(" "))
+                    // Ordinary rather than alarming, which is why it lives here and not in a
+                    // banner: every mailing list and every ticketing system sets one. It is
+                    // still the address that would receive an answer, so it is worth being able
+                    // to look it up.
+                    body?.replyTo.orEmpty().filter { it.isNotBlank() }
+                        .forEachIndexed { at, who -> Line(if (at == 0) "Reply to" else "", who) }
+                    body?.to.orEmpty().filter { it.isNotBlank() }
+                        .forEachIndexed { at, who -> Line(if (at == 0) "To" else "", who) }
+                    body?.cc.orEmpty().filter { it.isNotBlank() }
+                        .forEachIndexed { at, who -> Line(if (at == 0) "Cc" else "", who) }
+                    // Both written out the same way, or the gap between them is not a
+                    // comparison, it is two different formats side by side.
+                    handling(body?.sentAt?.asFullLocalTime(), summary.receivedAt.asFullLocalTime())
+                        .forEach { Line(it.label, it.value) }
 
                 Spacer(Modifier.height(14.dp))
                 Heading("Identifiers and threading")
@@ -100,6 +104,7 @@ internal fun MessageDetails(
                 Line("Size", humanBytes(body?.size ?: 0L))
             }
         }
+    }
     }
 }
 

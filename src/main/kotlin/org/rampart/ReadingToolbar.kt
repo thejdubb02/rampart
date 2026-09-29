@@ -28,6 +28,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -283,6 +285,7 @@ private fun MoreMenu(
     onPrint: () -> Unit,
     onUnsubscribe: (Unsubscribe) -> Unit,
 ) {
+    val clipboard = LocalClipboardManager.current
     var more by remember(summary.id) { mutableStateOf(false) }
     Box {
         ToolIcon(RampartIcons.More, "More") { more = true }
@@ -360,6 +363,10 @@ private fun MoreMenu(
                     more = false
                     onAddContact(summary)
                 }
+            }
+            MenuItem("Copy subject") {
+                more = false
+                clipboard.setText(AnnotatedString(summary.subject))
             }
             unsubscribeFrom(body?.listUnsubscribe, body?.listUnsubscribePost)?.let { off ->
                 MenuItem(if (off.oneClick) "Unsubscribe" else "Unsubscribe...") {

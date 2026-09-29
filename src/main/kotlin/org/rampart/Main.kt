@@ -58,6 +58,7 @@ import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -8532,6 +8533,10 @@ internal fun RowMenu(
         }
         actions.star?.let { entry(if (message.flagged) "Remove star" else "Star") { it(message) } }
         actions.archive?.let { entry("Archive") { it(message) } }
+        val clipboard = LocalClipboardManager.current
+        if (message.fromEmail.isNotBlank()) {
+            entry("Copy address") { clipboard.setText(AnnotatedString(message.fromEmail)) }
+        }
         actions.filter?.let { offer ->
             HorizontalDivider()
             entry("AI Filter") { offer(message) }
@@ -9016,11 +9021,13 @@ internal fun Message(
             // scroll it left with the body when a card was brought into view, and it
             // moved when the body below it finished loading.
             if (showSubject) {
-                Text(
-                    summary.subject.ifBlank { "(no subject)" },
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 8.dp),
-                )
+                SelectionContainer {
+                    Text(
+                        summary.subject.ifBlank { "(no subject)" },
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 8.dp),
+                    )
+                }
             }
 
             // Hoisted above the source branch as well as the body below it, because both
@@ -9155,80 +9162,88 @@ internal fun Message(
 
                     suggest?.let { SuggestRepliesCard(it) }
 
-                    Row(
-                        Modifier.fillMaxWidth()
-                            .let { row -> onHeaderClick?.let { row.clickable(onClick = it) } ?: row }
-                            .padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        val (who, address) = displaySender(summary.from, summary.fromEmail)
-                        val off = unsubscribeFrom(body?.listUnsubscribe, body?.listUnsubscribePost)
-                        Avatar(
-                            who,
-                            summary.fromEmail.ifBlank { who },
-                            34.dp,
-                            photo = photoFor(summary.fromEmail),
-                        )
-                        Spacer(Modifier.width(11.dp))
-                        Column(Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
+                    SelectionContainer {
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .let { row -> onHeaderClick?.let { row.clickable(onClick = it) } ?: row }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            val (who, address) = displaySender(summary.from, summary.fromEmail)
+                            val off = unsubscribeFrom(body?.listUnsubscribe, body?.listUnsubscribePost)
+                            DisableSelection {
+                                Avatar(
                                     who,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f, fill = false),
+                                    summary.fromEmail.ifBlank { who },
+                                    34.dp,
+                                    photo = photoFor(summary.fromEmail),
                                 )
-                                // Only when the message went out through somewhere other
-                                // than the domain it claims, which is the ordinary
-                                // explanation for mail that looks odd and is not.
-                                sentVia(summary.fromEmail, body?.authenticationResults?.joinToString("\n"))
-                                    ?.let { host ->
-                                        Spacer(Modifier.width(8.dp))
-                                        Text(
-                                            "via $host",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.outline,
-                                            modifier = Modifier.clip(MaterialTheme.shapes.small)
-                                                .background(MaterialTheme.colorScheme.surfaceVariant)
-                                                .padding(horizontal = 7.dp, vertical = 2.dp),
-                                        )
-                                    }
-                                if (address == null && off != null) {
-                                    Spacer(Modifier.width(8.dp))
-                                    UnsubscribeLink(off, unsubscribed, onUnsubscribe)
-                                }
                             }
-                            if (address != null) {
+                            Spacer(Modifier.width(11.dp))
+                            Column(Modifier.weight(1f)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
-                                        address,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.outline,
+                                        who,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f, fill = false),
                                     )
-                                    if (off != null) {
+                                    // Only when the message went out through somewhere other
+                                    // than the domain it claims, which is the ordinary
+                                    // explanation for mail that looks odd and is not.
+                                    sentVia(summary.fromEmail, body?.authenticationResults?.joinToString("\n"))
+                                        ?.let { host ->
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(
+                                                "via $host",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.outline,
+                                                modifier = Modifier.clip(MaterialTheme.shapes.small)
+                                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                                    .padding(horizontal = 7.dp, vertical = 2.dp),
+                                            )
+                                        }
+                                    if (address == null && off != null) {
                                         Spacer(Modifier.width(8.dp))
-                                        UnsubscribeLink(off, unsubscribed, onUnsubscribe)
+                                        DisableSelection {
+                                            UnsubscribeLink(off, unsubscribed, onUnsubscribe)
+                                        }
+                                    }
+                                }
+                                if (address != null) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            address,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.outline,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f, fill = false),
+                                        )
+                                        if (off != null) {
+                                            Spacer(Modifier.width(8.dp))
+                                            DisableSelection {
+                                                UnsubscribeLink(off, unsubscribed, onUnsubscribe)
+                                            }
+                                        }
                                     }
                                 }
                             }
-                        }
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text(
-                                summary.receivedAt.asLocalTime(),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.outline,
-                            )
-                            humanBytes(body?.size ?: 0L).takeIf { it.isNotBlank() }?.let {
+                            Column(horizontalAlignment = Alignment.End) {
                                 Text(
-                                    it,
-                                    style = MaterialTheme.typography.labelSmall,
+                                    summary.receivedAt.asLocalTime(),
+                                    style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.outline,
                                 )
+                                humanBytes(body?.size ?: 0L).takeIf { it.isNotBlank() }?.let {
+                                    Text(
+                                        it,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.outline,
+                                    )
+                                }
                             }
                         }
                     }
@@ -9255,29 +9270,33 @@ internal fun Message(
                     if (everyone.isNotEmpty()) {
                         val (shown, more) = shownRecipients(everyone)
                         Spacer(Modifier.height(6.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                "To",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.outline,
-                            )
-                            Spacer(Modifier.width(7.dp))
-                            Text(
-                                shown.joinToString(", ") + if (more > 0) "  +$more more" else "",
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f, fill = false),
-                            )
-                            Spacer(Modifier.width(10.dp))
-                            Text(
-                                if (details) "Hide details" else "Show details",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.clip(MaterialTheme.shapes.small)
-                                    .clickable { details = !details }
-                                    .padding(horizontal = 6.dp, vertical = 2.dp),
-                            )
+                        SelectionContainer {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "To",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.outline,
+                                )
+                                Spacer(Modifier.width(7.dp))
+                                Text(
+                                    shown.joinToString(", ") + if (more > 0) "  +$more more" else "",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                DisableSelection {
+                                    Text(
+                                        if (details) "Hide details" else "Show details",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.clip(MaterialTheme.shapes.small)
+                                            .clickable { details = !details }
+                                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                                    )
+                                }
+                            }
                         }
                     }
                     if (details) {
