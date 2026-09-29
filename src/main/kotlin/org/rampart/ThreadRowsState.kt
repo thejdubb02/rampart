@@ -55,7 +55,7 @@ internal object ThreadGists {
     var version by mutableIntStateOf(0)
         private set
 
-    private val known = HashMap<Pair<String, String>, ThreadGist>()
+    private val known = java.util.concurrent.ConcurrentHashMap<Pair<String, String>, ThreadGist>()
 
     /** Said once rather than on every refresh, since a failure here is not something to fix. */
     private var told = false
