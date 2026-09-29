@@ -117,6 +117,7 @@ internal val SYNCED_SETTINGS: Map<String, SyncShape> = mapOf(
     "attachmentClickBehavior" to SyncShape.TEXT,
     "trackedDomains" to SyncShape.LIST_OF_TEXT,
     "changelogSuppressed" to SyncShape.TEXT,
+    "quietHours" to SyncShape.TEXT,
 )
 
 /**

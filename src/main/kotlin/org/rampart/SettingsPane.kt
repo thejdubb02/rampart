@@ -190,7 +190,7 @@ internal fun SettingsPane(
                             "encryption" -> EncryptionPage(security, identities, accounts, account, onAccount)
                             "phone" -> PhonePage(security, accounts, account, onAccount)
                             "notifications" -> NotificationsPage(
-                                notifyOnArrival, onNotifyOnArrival, notifyOnOpen, onNotifyOnOpen,
+                                notifyOnArrival, onNotifyOnArrival, notifyOnOpen, onNotifyOnOpen, accounts,
                             )
                             "reading" -> ReadingPage(onUndoBarSeconds, onMessageMode, onMessageScale)
                             "filters" -> FiltersPage(
@@ -1019,6 +1019,7 @@ private fun NotificationsPage(
     onNotifyOnArrival: (Boolean) -> Unit,
     notifyOnOpen: Boolean,
     onNotifyOnOpen: (Boolean) -> Unit,
+    accounts: List<AccountMailboxes> = emptyList(),
 ) {
     val scope = rememberCoroutineScope()
     Section("Notifications", "Rampart checks for new mail every minute while it is open.")
@@ -1029,7 +1030,7 @@ private fun NotificationsPage(
         Column(Modifier.weight(1f)) {
             Text("Tell me when mail arrives", style = MaterialTheme.typography.bodyMedium)
             Text(
-                if (isTraySupported) "One notification per batch, not one per message."
+                if (isTraySupported) "One notification per burst, not one per message. Click it to open the mail."
                 // Worth saying rather than leaving a switch that does nothing.
                 else "This desktop has no notification area, so nothing will appear.",
                 style = MaterialTheme.typography.bodySmall,
@@ -1038,6 +1039,7 @@ private fun NotificationsPage(
         }
         Switch(checked = notifyOnArrival, onCheckedChange = onNotifyOnArrival, enabled = isTraySupported)
     }
+    NewMailNotifySettings(accounts, enabled = isTraySupported && notifyOnArrival)
     Row(
         Modifier.fillMaxWidth().clickable { onNotifyOnOpen(!notifyOnOpen) }.padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
