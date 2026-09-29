@@ -2011,8 +2011,11 @@ private fun Reader(
             val holders = accountsWith(tagsSeen, tagging).ifEmpty { listOf(key) }
             withContext(Dispatchers.IO) {
                 holders.flatMap { account ->
-                    runCatching { session(account).jmap.withKeyword(tagging) }.getOrNull()
-                        ?: runCatching { session(account).store?.withKeyword(tagging) }.getOrNull().orEmpty()
+                    // Stamped with its account, as the unified inbox does: ids can repeat
+                    // across accounts, so an unstamped row opens or files the wrong message.
+                    (runCatching { session(account).jmap.withKeyword(tagging) }.getOrNull()
+                        ?: runCatching { session(account).store?.withKeyword(tagging) }.getOrNull().orEmpty())
+                        .map { it.copy(account = account) }
                 }
             }.sortedByDescending { it.receivedAt }
         } else if (key == ALL_ACCOUNTS) {
@@ -3685,7 +3688,9 @@ private fun Reader(
      */
     fun ask(question: String) {
         if (question.isBlank() || chatThinking) return
-        val key = settingsAccount() ?: return
+        // The open message's account first, so Rook in the unified inbox acts where the
+        // person is looking rather than on whichever account signed in first.
+        val key = selected?.let { accountOf(it) } ?: settingsAccount() ?: return
         val config = Assistant.config()
         Assistant.whyNot(Assistant.CHAT, config)?.let {
             said = said + Said("result", it)
@@ -4188,7 +4193,7 @@ private fun Reader(
             },
             // Everything except where it already is, and except the three that have a
             // button of their own: offering Archive twice is how a menu stops being read.
-            folders = boxes.filter { it.id != here?.second?.id && it.role !in MOVE_COVERED },
+            folders = boxes.filter { it.id != accountOf(message)?.let(::sourceFolder) && it.role !in MOVE_COVERED },
             // Only where there is a conversation to act on. One message is not one.
             conversation = thread.takeIf { it.size > 1 }?.let { all ->
                 ConversationActions(
