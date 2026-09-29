@@ -866,6 +866,12 @@ internal class Imap private constructor(
             // RFC822.SIZE comes with the envelope fetch, so this costs nothing extra.
             size = runCatching { message.size.toLong() }.getOrNull()?.coerceAtLeast(0L) ?: 0L,
             listId = listIdOf(runCatching { message.getHeader("List-Id")?.firstOrNull() }.getOrNull()),
+            // To and Cc ride in the ENVELOPE already fetched, so this is not another request.
+            recipients = runCatching {
+                listOf(Message.RecipientType.TO, Message.RecipientType.CC).flatMap { type ->
+                    message.getRecipients(type).orEmpty().mapNotNull { (it as? InternetAddress)?.address }
+                }.map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct()
+            }.getOrDefault(emptyList()),
         )
     }
 

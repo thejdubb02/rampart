@@ -350,6 +350,8 @@ internal fun MessageList(
     density: Density = LocalListDensity.current,
     /** How rows stand for conversations. See [threadRowsFor]; the default changes nothing. */
     threads: ThreadContext = ThreadContext(),
+    /** Drawn above the list's own heading, at the list's width. A person's history uses it. */
+    header: (@Composable () -> Unit)? = null,
     onSelect: (Summary, ctrl: Boolean, shift: Boolean) -> Unit,
 ) {
     // Table and Cards are drawn in ListLayoutsUi.kt. Normal is the path below, unchanged.
@@ -367,6 +369,7 @@ internal fun MessageList(
     Column(
         Modifier.width(listPaneWidth(layout)).fillMaxHeight().background(MaterialTheme.colorScheme.surface),
     ) {
+        header?.invoke()
         Row(
             Modifier.fillMaxWidth().height(38.dp).padding(horizontal = 14.dp),
             horizontalArrangement = Arrangement.SpaceBetween,

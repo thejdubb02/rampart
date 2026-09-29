@@ -159,6 +159,14 @@ data class Summary(
     val size: Long = 0L,
     /** The List-Id identifier, see [listIdOf]. Empty for mail that did not come from a list. */
     val listId: String = "",
+    /**
+     * Every address in To and Cc, lowercased.
+     *
+     * Kept so the local copy can say who a message went to, which is what lets a person's
+     * history (PersonHistory.kt) be answered from this computer when the server cannot be.
+     * Empty where a backend did not say, which is not the same as nobody.
+     */
+    val recipients: List<String> = emptyList(),
 )
 
 /**
@@ -2031,6 +2039,69 @@ internal class Jmap private constructor(
      * Search builds its filter from one line of text. A saved search with conditions builds
      * a tree of them in `SearchConditions.kt`, and this is the same request for either.
      */
+    /**
+     * A person's history, in one request.
+     *
+     * The page is an Email/query over the whole account with every folder in it, Sent
+     * included, and no thread collapsing, because every message counts. With the first page
+     * come the two counts, each a query asked only for its total, and the oldest message's
+     * date, a query sorted the other way asked for one id. Five method calls and one round
+     * trip, rather than four round trips for a header.
+     */
+    override fun personPage(addresses: List<String>, position: Int, limit: Int, withStats: Boolean): PersonPage {
+        val newestFirst = buildJsonObject { put("property", "receivedAt"); put("isAscending", false) }
+        val calls = buildList {
+            add(
+                invoke("Email/query", "q") {
+                    put("filter", personFilter(addresses))
+                    putJsonArray("sort") { add(newestFirst) }
+                    put("position", position)
+                    put("limit", limit)
+                },
+            )
+            add(
+                invoke("Email/get", "g") {
+                    putJsonObject("#ids") { put("resultOf", "q"); put("name", "Email/query"); put("path", "/ids") }
+                    // Bcc as well as the list's own properties: a message you sent them blind
+                    // is found by the filter and has to be recognised as theirs below.
+                    putJsonArray("properties") { (emailGetProperties + "bcc").forEach { add(it) } }
+                },
+            )
+            if (withStats) {
+                // A limit of one rather than zero: zero is legal and not every server takes it.
+                add(invoke("Email/query", "from") { put("filter", fromFilter(addresses)); put("limit", 1); put("calculateTotal", true) })
+                add(invoke("Email/query", "to") { put("filter", toFilter(addresses)); put("limit", 1); put("calculateTotal", true) })
+                add(
+                    invoke("Email/query", "old") {
+                        put("filter", personFilter(addresses))
+                        putJsonArray("sort") { add(buildJsonObject { put("property", "receivedAt"); put("isAscending", true) }) }
+                        put("limit", 1)
+                    },
+                )
+                add(
+                    invoke("Email/get", "oldGet") {
+                        putJsonObject("#ids") { put("resultOf", "old"); put("name", "Email/query"); put("path", "/ids") }
+                        putJsonArray("properties") { add("receivedAt") }
+                    },
+                )
+            }
+        }
+        val responses = call(*calls.toTypedArray())
+        val found = responses[1].list().map { it.jsonObject }
+        val consumed = (responses[0][1].jsonObject["ids"] as? JsonArray)?.size ?: found.size
+        val rows = found.filter { o ->
+            val summary = jsonToSummary(o)
+            involves(summary.fromEmail, summary.recipients + addressesIn(o["bcc"]), addresses)
+        }.map(::jsonToSummary)
+        val stats = if (!withStats) null else PersonStats(
+            received = responses[2][1].jsonObject["total"]?.num()?.toInt() ?: 0,
+            sent = responses[3][1].jsonObject["total"]?.num()?.toInt() ?: 0,
+            first = responses[5].list().firstOrNull()?.jsonObject?.get("receivedAt")?.str(),
+            last = if (position == 0) rows.firstOrNull()?.receivedAt ?: found.firstOrNull()?.get("receivedAt")?.str() else null,
+        )
+        return PersonPage(rows, consumed, stats)
+    }
+
     fun query(filter: JsonObject, limit: Int): List<Summary> {
         val responses = call(
             invoke("Email/query", "q") {
@@ -2150,6 +2221,9 @@ private class PushListener(
 private val emailGetProperties =
     listOf(
         "id", "threadId", "from", "subject", "receivedAt", "preview", "keywords", "messageId",
+        // Who it went to, a few dozen bytes a row, so the copy can answer "mail to this
+        // person" without the network. See [Summary.recipients].
+        "to", "cc",
         // For the table's size column and for splitting a saved search by mailing list.
         "size", "header:List-Id:asText",
     )
@@ -2170,6 +2244,7 @@ private fun jsonToSummary(o: JsonObject): Summary = Summary(
     messageId = (o["messageId"] as? JsonArray)?.firstOrNull()?.str().orEmpty(),
     size = o["size"]?.num() ?: 0L,
     listId = listIdOf((o["header:List-Id:asText"] as? JsonPrimitive)?.contentOrNull),
+    recipients = (addressesIn(o["to"]) + addressesIn(o["cc"])).map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct(),
 )
 
 private fun kotlinx.serialization.json.JsonElement.str(): String? = jsonPrimitive.contentOrNull

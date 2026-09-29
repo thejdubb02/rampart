@@ -55,6 +55,8 @@ internal fun ContactsPane(
     onSave: ((Contact) -> Unit)?,
     onDelete: (Contact) -> Unit,
     onWrite: (String) -> Unit,
+    /** A name was clicked: every message from or to them. See PersonHistory.kt. */
+    onHistory: ((Contact) -> Unit)? = null,
     /**
      * Every address book on the account, not only the default one.
      *
@@ -163,6 +165,7 @@ internal fun ContactsPane(
                         onEdit = { editing = contact },
                         onDelete = { confirmDelete = contact },
                         onWrite = onWrite,
+                        onHistory = onHistory?.takeIf { contact.emails.isNotEmpty() }?.let { open -> { open(contact) } },
                     )
                     HorizontalDivider()
                 }
@@ -208,6 +211,8 @@ private fun ContactRow(
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onWrite: (String) -> Unit,
+    /** Null for a card with no address, which has no history to show. */
+    onHistory: (() -> Unit)? = null,
 ) {
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onEdit).padding(vertical = 8.dp),
@@ -232,6 +237,8 @@ private fun ContactRow(
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                // The name opens their history; the rest of the row still opens the card.
+                modifier = onHistory?.let { Modifier.clip(MaterialTheme.shapes.small).clickable(onClick = it) } ?: Modifier,
             )
             val under = listOfNotNull(
                 contact.organisation.takeIf { it.isNotBlank() },
