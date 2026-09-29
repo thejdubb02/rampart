@@ -68,4 +68,13 @@ class SettingsWriteTest {
         assertTrue("gotify-token" !in text)
         assertTrue("app-token-value" !in text)
     }
+
+    @Test
+    fun `density choice persists`() {
+        Settings.setDensity("compact")
+        assertEquals("compact", Settings.density())
+        Settings.setDensity("spacious")
+        assertEquals("spacious", Settings.density())
+    }
 }
+

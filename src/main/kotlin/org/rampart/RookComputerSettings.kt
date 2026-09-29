@@ -109,6 +109,13 @@ internal class ComputerPlace(private val choices: ComputerChoices) : SettingPlac
                 { Settings.iconPack().ifBlank { choices.iconPacks.firstOrNull()?.value.orEmpty() } }, Settings::setIconPack,
             ),
             oneOf(
+                "density", "Density", "How tightly packed the message list is drawn.",
+                "Themes", "density message list compact spacious normal appearance",
+                Density.entries.map { SettingOption(it.key, it.label) },
+                { Settings.density()?.let { Density.of(it).key } ?: Density.NORMAL.key },
+                Settings::setDensity,
+            ),
+            oneOf(
                 "loader", "Loader", "What is drawn while Rampart waits for something.",
                 "Themes", "spinner loading animation appearance", choices.loaders,
                 {

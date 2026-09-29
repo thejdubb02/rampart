@@ -1124,6 +1124,7 @@ private fun Reader(
     var tagColours by remember { mutableStateOf(Settings.tagColours()) }
     var folded by remember { mutableStateOf(Settings.collapsedSections()) }
     var tintRows by remember { mutableStateOf(Settings.tintRowsByTag()) }
+    var density by remember { mutableStateOf(Density.of(Settings.density())) }
     var undoBarSeconds by remember { mutableStateOf(Settings.undoBarSeconds()) }
     var loader by remember { mutableStateOf(Loader.of(Settings.loader())) }
     /*
@@ -3762,6 +3763,7 @@ private fun Reader(
                     "rampart.theme" -> THEMES.firstOrNull { it.key == Settings.theme() }?.let(onTheme)
                     "rampart.icons" -> onIcons(iconPack(Settings.iconPack()))
                     "rampart.loader" -> loader = Loader.of(Settings.loader())
+                    "rampart.density" -> density = Density.of(Settings.density())
                     "rampart.tintRowsByTag" -> tintRows = Settings.tintRowsByTag()
                     "rampart.undoBarSeconds" -> undoBarSeconds = Settings.undoBarSeconds()
                     "rampart.notifyOnArrival" -> notifyOnArrival = Settings.notifyOnArrival()
@@ -5105,6 +5107,7 @@ private fun Reader(
             LocalTagColours provides tagColours,
             LocalTintRowsByTag provides tintRows,
             LocalLoader provides loader,
+            LocalListDensity provides density,
         ) {
         /*
          * One address book, drawn in two places: the full page, and the panel the app bar
@@ -5356,6 +5359,7 @@ private fun Reader(
                     identities = identities[settingsAccount()].orEmpty(),
                     quotas = quotas,
                     onTintRowsByTag = { tintRows = it },
+                    onDensity = { density = it },
                     onUndoBarSeconds = { undoBarSeconds = it },
                     onLoader = { loader = it },
                     onTrackingServer = { trackingServer = it },
@@ -7154,6 +7158,7 @@ internal fun MessageList(
      * photographable.
      */
     showHover: Boolean = false,
+    density: Density = LocalListDensity.current,
     onSelect: (Summary, ctrl: Boolean, shift: Boolean) -> Unit,
 ) {
     Column(
@@ -7298,6 +7303,7 @@ internal fun MessageList(
                             showHover = showHover,
                             scheduledAt = scheduled[message.id],
                             trackingBadge = trackingBadges[message.messageId],
+                            density = density,
                             onDrag = onDrag,
                             onSelect = onSelect,
                         )
@@ -7397,6 +7403,7 @@ private fun MessageRow(
     /** When this draft is due to be sent, or null when it is an ordinary message. */
     scheduledAt: Long? = null,
     trackingBadge: String? = null,
+    density: Density = LocalListDensity.current,
     /**
      * Dragging the row onto a tag. Called with where the pointer is, in window
      * coordinates, and with null when the drag ends.
@@ -7445,6 +7452,7 @@ private fun MessageRow(
         !message.seen -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
         else -> Color.Transparent
     }
+    val (topPad, bottomPad) = densityVerticalPadding(density)
     Row(
         Modifier.fillMaxWidth()
             .background(background)
@@ -7488,20 +7496,12 @@ private fun MessageRow(
             Modifier.width(2.dp).fillMaxHeight()
                 .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent),
         )
-        // Their mark, beside the row rather than above it. Top aligned rather than centred:
-        // a row is three lines tall and a circle floating in the middle of it reads as
-        // belonging to the preview rather than to the sender.
         val (who, _) = displaySender(message.from, message.fromEmail)
-        Box(Modifier.padding(start = 10.dp, top = 12.dp)) {
-            Avatar(
-                label = who,
-                seed = message.fromEmail,
-                size = 30.dp,
-                photo = photoFor(message.fromEmail),
-            )
-        }
-        Column(Modifier.padding(start = 10.dp, end = 14.dp, top = 11.dp, bottom = 12.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        if (density == Density.COMPACT) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 10.dp, end = 14.dp, top = topPad, bottom = bottomPad),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Box(Modifier.size(7.dp)) {
                     if (!message.seen) {
                         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.primary, CircleShape))
@@ -7523,8 +7523,33 @@ private fun MessageRow(
                     fontWeight = if (message.seen) FontWeight.Normal else FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f, fill = false),
                 )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    message.subject,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (message.seen) FontWeight.Normal else FontWeight.Bold,
+                    color = if (message.seen) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1.6f, fill = false),
+                )
+                if (message.threadSize > 1) {
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        message.threadSize.toString(),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier
+                            .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
+                            .padding(horizontal = 6.dp, vertical = 1.dp),
+                    )
+                }
+                tagsOf(message.keywords, LocalTagColours.current).take(4).forEach { tag ->
+                    Spacer(Modifier.width(4.dp))
+                    Box(Modifier.size(7.dp).clip(CircleShape).background(Color(tag.color)))
+                }
                 trackingBadge?.let {
                     Spacer(Modifier.width(8.dp))
                     Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
@@ -7542,17 +7567,8 @@ private fun MessageRow(
                             .padding(horizontal = 7.dp, vertical = 1.dp),
                     )
                 }
+                Spacer(Modifier.weight(0.001f))
                 Spacer(Modifier.width(8.dp))
-                /*
-                 * The buttons take the date's place, in a slot of a fixed size.
-                 *
-                 * Both parts are needed. Swapping one for the other is what every list with
-                 * hover actions does, because buttons appearing beside the date would push
-                 * it sideways under the pointer. The fixed size is what stops the swap
-                 * itself moving anything: three icons are not as wide as "16 Sep 09:12" and
-                 * are taller than it, so without a reserved slot the row jumps both ways as
-                 * the pointer crosses it.
-                 */
                 Box(
                     Modifier.width(HOVER_SLOT).height(18.dp),
                     contentAlignment = Alignment.CenterEnd,
@@ -7582,93 +7598,181 @@ private fun MessageRow(
                     }
                 }
             }
-            Spacer(Modifier.height(3.dp))
-            Row(Modifier.padding(start = 13.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    message.subject,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = if (message.seen) FontWeight.Normal else FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
+        } else {
+            // Their mark, beside the row rather than above it. Top aligned rather than centred:
+            // a row is three lines tall and a circle floating in the middle of it reads as
+            // belonging to the preview rather than to the sender.
+            Box(Modifier.padding(start = 10.dp, top = densityAvatarTopPadding(density))) {
+                Avatar(
+                    label = who,
+                    seed = message.fromEmail,
+                    size = 30.dp,
+                    photo = photoFor(message.fromEmail),
                 )
-                // The row stands for the whole conversation, so it has to say how much of
-                // one is behind it. Without this the list silently hides the other replies.
-                if (message.threadSize > 1) {
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        message.threadSize.toString(),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier
-                            .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
-                            .padding(horizontal = 6.dp, vertical = 1.dp),
-                    )
-                }
-                // Dots rather than chips: a label is worth seeing at a glance, and four of
-                // them spelt out would push the subject off the row it belongs to.
-                tagsOf(message.keywords, LocalTagColours.current).take(4).forEach { tag ->
-                    Spacer(Modifier.width(4.dp))
-                    Box(Modifier.size(7.dp).clip(CircleShape).background(Color(tag.color)))
-                }
             }
-            /*
-             * The sign-in code, on the row, so the message never has to be opened.
-             *
-             * This is the whole point of the feature rather than a flourish on it: a code
-             * is wanted for about forty seconds and the message is never read. It is drawn
-             * instead of the preview, because the preview of one of these messages is the
-             * sentence the code was found in.
-             */
-            val code = remember(message.id) { oneTimeCode(message.subject, message.preview) }
-            // The preview of a scheduled draft is whatever was typed. When it will
-            // go is the thing the row has to say, in the same place.
-            if (scheduledAt != null) {
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    "Scheduled for ${Instant.ofEpochMilli(scheduledAt).toString().asLocalTime()}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(start = 13.dp),
-                )
-            } else if (code != null) {
-                val clipboard = LocalClipboardManager.current
-                Spacer(Modifier.height(3.dp))
-                Row(
-                    Modifier.padding(start = 13.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                        modifier = Modifier.clickable { clipboard.setText(AnnotatedString(code)) },
-                    ) {
-                        Text(
-                            code,
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+            Column(Modifier.padding(start = 10.dp, end = 14.dp, top = topPad, bottom = bottomPad)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(7.dp)) {
+                        if (!message.seen) {
+                            Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.primary, CircleShape))
+                        }
+                    }
+                    if (message.flagged) {
+                        Spacer(Modifier.width(4.dp))
+                        Icon(
+                            RampartIcons.Star,
+                            contentDescription = "Starred",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(11.dp),
                         )
                     }
-                    Spacer(Modifier.width(7.dp))
+                    Spacer(Modifier.width(6.dp))
                     Text(
-                        "Copy",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
+                        who,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (message.seen) FontWeight.Normal else FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
                     )
+                    trackingBadge?.let {
+                        Spacer(Modifier.width(8.dp))
+                        Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                    accountLabel?.let {
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.outline,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
+                                .padding(horizontal = 7.dp, vertical = 1.dp),
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Box(
+                        Modifier.width(HOVER_SLOT).height(18.dp),
+                        contentAlignment = Alignment.CenterEnd,
+                    ) {
+                        if (hovered) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                actions.markRead?.let { mark ->
+                                    RowButton(
+                                        if (message.seen) RampartIcons.Unread else RampartIcons.Read,
+                                        if (message.seen) "Mark unread" else "Mark read",
+                                    ) { mark(message, !message.seen) }
+                                }
+                                actions.archive?.let { archive ->
+                                    RowButton(RampartIcons.Archive, "Archive") { archive(message) }
+                                }
+                                actions.trash?.let { trash ->
+                                    RowButton(RampartIcons.Trash, "Delete") { trash(message) }
+                                }
+                            }
+                        } else {
+                            Text(
+                                message.receivedAt.asLocalTime(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline,
+                                maxLines = 1,
+                            )
+                        }
+                    }
                 }
-            } else if (message.preview.isNotBlank()) {
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    message.preview,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(start = 13.dp),
-                )
+                Spacer(Modifier.height(3.dp))
+                Row(Modifier.padding(start = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        message.subject,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (message.seen) FontWeight.Normal else FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    // The row stands for the whole conversation, so it has to say how much of
+                    // one is behind it. Without this the list silently hides the other replies.
+                    if (message.threadSize > 1) {
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            message.threadSize.toString(),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier
+                                .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
+                                .padding(horizontal = 6.dp, vertical = 1.dp),
+                        )
+                    }
+                    // Dots rather than chips: a label is worth seeing at a glance, and four of
+                    // them spelt out would push the subject off the row it belongs to.
+                    tagsOf(message.keywords, LocalTagColours.current).take(4).forEach { tag ->
+                        Spacer(Modifier.width(4.dp))
+                        Box(Modifier.size(7.dp).clip(CircleShape).background(Color(tag.color)))
+                    }
+                }
+                /*
+                 * The sign-in code, on the row, so the message never has to be opened.
+                 *
+                 * This is the whole point of the feature rather than a flourish on it: a code
+                 * is wanted for about forty seconds and the message is never read. It is drawn
+                 * instead of the preview, because the preview of one of these messages is the
+                 * sentence the code was found in.
+                 */
+                val code = remember(message.id) { oneTimeCode(message.subject, message.preview) }
+                // The preview of a scheduled draft is whatever was typed. When it will
+                // go is the thing the row has to say, in the same place.
+                if (scheduledAt != null) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "Scheduled for ${Instant.ofEpochMilli(scheduledAt).toString().asLocalTime()}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 13.dp),
+                    )
+                } else if (code != null) {
+                    val clipboard = LocalClipboardManager.current
+                    Spacer(Modifier.height(3.dp))
+                    Row(
+                        Modifier.padding(start = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                            modifier = Modifier.clickable { clipboard.setText(AnnotatedString(code)) },
+                        ) {
+                            Text(
+                                code,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                            )
+                        }
+                        Spacer(Modifier.width(7.dp))
+                        Text(
+                            "Copy",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
+                    }
+                } else if (message.preview.isNotBlank()) {
+                    val previewLines = densityPreviewLines(density)
+                    if (previewLines > 0) {
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            message.preview,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                            maxLines = previewLines,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(start = 13.dp),
+                        )
+                    }
+                }
             }
         }
     }

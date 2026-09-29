@@ -104,6 +104,8 @@ internal fun SettingsPane(
     onMessageMode: (String) -> Unit = {},
     /** Told when the message text size changes, for the same reason. */
     onMessageScale: (Float) -> Unit = {},
+    /** Told when the message list density changes, so the list updates immediately. */
+    onDensity: (Density) -> Unit = {},
     /** Told when the tracking server changes, so the composer's toggle appears or goes. */
     onTrackingServer: (String) -> Unit = {},
     onRestart: () -> Unit,
@@ -179,7 +181,7 @@ internal fun SettingsPane(
                             onSave = onFilters,
                             onBusy = onFilterBusy,
                         )
-                        "themes" -> ThemesPage(onTheme, iconPack, onIconPack, onTintRowsByTag, onLoader)
+                        "themes" -> ThemesPage(onTheme, iconPack, onIconPack, onTintRowsByTag, onLoader, onTrackingServer, onDensity)
                         "identities" -> IdentitiesPage(
                             identities, signatureError, onSignature, onPickSignatureImage,
                         )
@@ -266,6 +268,7 @@ private fun ThemesPage(
     onLoader: (Loader) -> Unit = {},
     /** Told when the tracking server changes, so the composer's toggle appears or goes. */
     onTrackingServer: (String) -> Unit = {},
+    onDensity: (Density) -> Unit = {},
 ) {
     val current = LocalRampartTheme.current
     Section("Theme", "Ported from Clique, so the ones you already picked there are here.")
@@ -286,6 +289,31 @@ private fun ThemesPage(
     }
 
     Spacer(Modifier.height(22.dp))
+    Section(
+        "Density",
+        "How tightly packed the message list is drawn.",
+    )
+    var density by remember { mutableStateOf(Density.of(Settings.density())) }
+    Density.entries.forEach { option ->
+        Row(
+            Modifier.fillMaxWidth().clickable {
+                density = option
+                Settings.setDensity(option.key)
+                onDensity(option)
+            }.padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(selected = option == density, onClick = {
+                density = option
+                Settings.setDensity(option.key)
+                onDensity(option)
+            })
+            Spacer(Modifier.width(8.dp))
+            Text(option.label, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+
+    Spacer(Modifier.height(18.dp))
     Section(
         "Icons",
         "Kept apart from the palette, so one can be changed without the other.",

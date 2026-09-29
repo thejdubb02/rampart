@@ -39,6 +39,13 @@ object Settings {
     fun setTheme(key: String) = write { put("theme", JsonPrimitive(key)) }
 
     /**
+     * How tightly packed the message list is: "compact", "normal", or "spacious".
+     */
+    fun density(): String? = read()["density"]?.jsonPrimitive?.contentOrNull
+
+    fun setDensity(key: String) = write { put("density", JsonPrimitive(key)) }
+
+    /**
      * What the light/dark switch was set to before themes existed, and nothing writes it any
      * more. It is still read so that an existing install that had been switched to dark opens
      * dark rather than snapping back to whatever the operating system says.
