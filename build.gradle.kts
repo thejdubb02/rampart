@@ -70,6 +70,18 @@ dependencies {
     // is a code that scans on some phones and not others.
     implementation("com.google.zxing:core:3.5.3")
 
+    // OpenPGP and S/MIME: signing, encrypting, decrypting and checking signatures, and the
+    // keys and certificates for them. Bouncy Castle, not hand rolled: a mistake in a cipher
+    // mode, a key format or a signature check is invisible until somebody's mail is readable
+    // or somebody's forgery verifies. bcpg is OpenPGP, bcpkix is CMS and X.509 for S/MIME,
+    // and bcprov and bcutil are the primitives and ASN.1 both are built on. Used through its
+    // own API and handed to builders as an instance, never registered as a JVM security
+    // provider, so TLS and the rest of the process are unchanged (Pgp.kt, Smime.kt).
+    implementation("org.bouncycastle:bcprov-jdk18on:1.86")
+    implementation("org.bouncycastle:bcutil-jdk18on:1.86")
+    implementation("org.bouncycastle:bcpg-jdk18on:1.86")
+    implementation("org.bouncycastle:bcpkix-jdk18on:1.86")
+
     /*
      * A real engine for message HTML.
      *
