@@ -438,6 +438,8 @@ internal fun Composer(
     /** Told whenever an AI draft or refine request starts or finishes, so somewhere
      *  outside this composer, such as the app bar's Rook button, can show it too. */
     onBusy: (Boolean) -> Unit = {},
+    /** Where "Help me schedule" reads free time from. Null hides it. See CalendarFromMailUi.kt. */
+    schedule: ScheduleSource? = null,
 ) {
     var draft by remember(initial) { mutableStateOf(initial) }
     /*
@@ -1097,6 +1099,9 @@ internal fun Composer(
                     ToolbarDivider()
                     ToolbarButton(RampartIcons.Write, "Help me write", active = showPromptBar) {
                         showPromptBar = !showPromptBar
+                    }
+                    schedule?.let { source ->
+                        HelpMeSchedule(source, replyContext, { body.text }, account, folder) { apply(proposalValue(body, it)) }
                     }
                     ToolbarDivider()
                     var emoji by remember { mutableStateOf(false) }
