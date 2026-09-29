@@ -74,6 +74,7 @@ internal val SHORTCUTS: List<Shortcut> = listOf(
     Shortcut("Ctrl+2", "Calendar, beside the mail", "Everything else"),
     Shortcut("Ctrl+3", "Contacts, beside the mail", "Everything else"),
     Shortcut("Ctrl+4", "Files, beside the mail", "Everything else"),
+    Shortcut("Ctrl+5", "Tasks, beside the mail", "Everything else"),
 )
 
 /**

@@ -26,6 +26,7 @@ internal enum class SideTool(
     CALENDAR("calendar", "Calendar", 2, "side-calendar", 320f),
     CONTACTS("contacts", "Contacts", 3, "side-contacts", 340f),
     FILES("files", "Files", 4, "side-files", 300f),
+    TASKS("tasks", "Tasks", 5, "side-tasks", 300f),
     ;
 
     /** How the shortcut is written in the shortcut list and the palette. */
