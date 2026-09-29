@@ -1,9 +1,9 @@
 # Parity with Bulwark
 
 Read from Bulwark 1.9.2 (`FEATURES.md` plus its `app/`, `lib/` and `components/` trees)
-on 2026-09-17, against Rampart at 0.1.50. **Reviewed against Rampart 0.1.104 on
-2026-09-18**, by which point everything in the original order of work through item 7 had
-shipped. What follows says which, and what is genuinely left.
+on 2026-09-17, against Rampart at 0.1.50. **Reviewed against Rampart through 2026-09-28**,
+by which point calendar, files, account security, and assistant integrations had shipped.
+What follows says which, and what is genuinely left.
 
 Bulwark is the webmail we already run on the same Stalwart. It is the yardstick because
 it is what the mail looks like today, not because Rampart should become a copy of it.
@@ -36,17 +36,29 @@ DMARC, shown only when it is worth saying, with the full working behind Show det
 Remote images blocked and allowed per sender. Push over the JMAP WebSocket. HTML
 signatures held on the server, shared with the webmail. Eighteen themes. Self-updating.
 
-Added since, through 2026-09-18: a rich-text composer. Sieve filters in Bulwark's own
-format, so a rule made in either opens in the other. A local store, encrypted, with
-offline reading and search. Folder management with a real tree. The message-list pass:
-right-click menus, hover actions, five sort orders, a mark-as-read delay, paging. A
-command palette. Recipient autocomplete from your own mail. Templates, read receipts and
-undo-send. Contacts from the server's own address book. Sender marks and contact photos.
-The message header with the routing, authentication and identifiers behind it. Reply-To
-answered rather than the From address, and a `+tag` address recognised as yours. A choice
-of where the sign-off sits. **And the message body drawn by a real engine**, which is the
-reversal recorded in `architecture.md` and the end of the run of hand-drawn HTML work
-listed in the paragraph this one replaced.
+Added since, through 2026-09-28: a rich-text composer. Sieve filters in Bulwark's own
+format, so a rule made in either opens in the other, with muted conversations written as
+Sieve rules. A local store, encrypted, with offline reading and search. Folder management
+with a real tree. The message-list pass: right-click menus, hover actions, five sort
+orders, a mark-as-read delay, paging, unread and starred filter toggles, and message list
+density settings for compact, normal, and spacious rows. A command palette. Recipient
+autocomplete from your own mail. Templates, read receipts, undo-send, and scheduled send
+held on the server where supported. Contacts from the server's own address books, learned
+contacts on send, and sender photos decoded from contact cards and server blobs. The
+message header with the routing, authentication and identifiers behind it, with phishing
+and virus scan verdicts from the server. Reply-To answered rather than the From address,
+and a `+tag` address recognised as yours. A choice of where the sign-off sits, with HTML
+signatures held on the server per identity. Secure delivery and delivery confirmations.
+Open and click tracking with real-time desktop and phone notifications via ntfy and
+Gotify. A custom theme editor alongside eighteen built-in themes. A right-side app bar
+hosting Rook, Calendar, Contacts, and Files beside the mail. Rook setting changes proposed
+as confirmation cards. A full Calendar application with month, week, day, and agenda
+views, JSCalendar recurrence rules, and server-side invitation scheduling. Stalwart file
+storage with a Files page, Save to Files, and From Files. An account security page for
+managing mailbox passwords, app passwords, and TOTP two-step login with QR codes. A phone
+setup page walking through CalDAV and CardDAV synchronization. **And the message body
+drawn by a real engine**, which is the reversal recorded in `architecture.md` and the end
+of the run of hand-drawn HTML work listed in the paragraph this one replaced.
 
 **And a second backend.** IMAP and SMTP, with the server found from the email address
 alone, so Rampart is no longer a client for one server. Everything IMAP cannot do is
@@ -60,7 +72,7 @@ In the order they will be missed.
 
 ### 2.1 to 2.7, all shipped
 
-Built between 2026-09-17 and 2026-09-18. Kept here as a list rather than deleted, because
+Built between 2026-09-17 and 2026-09-28. Kept here as a list rather than deleted, because
 the reasoning behind several of them is still the reason they are the shape they are, and
 that lives in `roadmap.md` under the matching section number.
 
@@ -70,22 +82,25 @@ that lives in `roadmap.md` under the matching section number.
   is kept verbatim. Rules are kept per account or for every account at once; the set kept
   for all of them is compiled into each account's own script and saved to that account's
   server, so it runs at delivery like any other rule rather than needing Rampart open.
+  Muted conversations can also be written as Sieve rules on the server.
 - **2.3 IMAP alongside JMAP.** Have. Reading, writing, sending, folders, attachments,
   search, conversations through THREAD, and IDLE for push. Discovery from the address.
   OAuth2 is deliberately not being done, so Gmail and Microsoft are out until somebody
   wants them enough to register us as an application with both.
-- **2.4 Calendar, contacts and files.** Contacts have. Calendar and files still open, and
-  still three applications rather than three features. See 2.12 below.
+- **2.4 Calendar, contacts and files.** Have for all three. Contacts has address books,
+  contact cards, sender photos, and learned contacts on send. Calendar has month, week,
+  day, and agenda views, JSCalendar recurrence expansion, and iTIP invitation scheduling.
+  Files has folder management, upload, download, Save to Files, and From Files over JMAP
+  FileNode. All three also sit in the right app bar. See 2.12 below.
 - **2.5 Folder management.** Have. Create, rename, nest, move, delete, with the tree shown
   and a role-bearing folder protected from both.
-- **2.6 Templates, read receipts, scheduled send.** Templates and receipts have.
-  Undo-send have. Scheduled send has too, 2026-09-22, client-held rather than
-  server-side: Stalwart advertises submission with no `maxDelayedSend`, which per RFC
-  8621 means zero, so the server still refuses a future send time. Rampart saves the
-  draft immediately and fires it itself on its own minute poll, including once on
-  startup, so a time that passed while it was closed goes as soon as it is next open
-  rather than silently missing it.
-- **2.7 The message list.** Have, all of it, plus paging and sender marks.
+- **2.6 Templates, read receipts, scheduled send.** Have. Templates and receipts have.
+  Undo-send have. Scheduled send is server-held when Stalwart advertises `maxDelayedSend`
+  (submitting with `FUTURERELEASE HOLDUNTIL` so the server sends on time even with
+  Rampart closed), falling back to client-held minute polling for delays beyond the server
+  window or on accounts without delayed send.
+- **2.7 The message list.** Have, all of it, plus paging, sender marks, sender photos
+  from contact cards, and message list density settings (compact, normal, spacious).
 
 ---
 
@@ -124,7 +139,11 @@ this section.
 has two, and the second is "Trusted Senders", which is not decoration: its cards were being
 listed among everything else with nothing saying where they came from, and every new
 contact was saved into the wrong book. Contacts can now be filtered by book, each row says
-which book it is in, and a card can be put in several, which JSContact allows.
+which book it is in, and a card can be put in several, which JSContact allows. Sender
+photos stored as data URIs or downloaded from server blobs are decoded and shown as
+avatars across the list, reader, thread headers, and dashboard. New recipients are
+automatically learned and saved to the server on first send. The Contacts pane is also
+accessible in the right app bar beside the mail.
 
 **Quota, where the server keeps one.** JMAP's `Quota/get` (RFC 9425) and IMAP's own QUOTA
 extension, shown under each account. The thing worth recording: **an advertised capability
@@ -135,9 +154,12 @@ server rather than inferred, the same way `ContactCard/query` was.
 
 ### 2.9 Identities and sending
 
-**Have.** Multiple identities with their own signatures, the From header chosen on the
-composer, Reply-To answered rather than the From address, `user+tag@domain` recognised as
-yours, and the sign-off above or below the quoted text.
+**Have.** Multiple identities with their own signatures held on the server, the From
+header chosen on the composer, Reply-To answered rather than the From address,
+`user+tag@domain` recognised as yours, and the sign-off above or below the quoted text.
+When the server advertises the capability, secure delivery (`REQUIRETLS`) and delivery
+confirmations (`DSN`) can be requested from the composer, with delivery status lines
+displayed on sent mail.
 
 ### 2.10 Encryption
 
@@ -169,29 +191,28 @@ somebody other than Justin uses this.
 
 ### 2.12 Calendar, and files
 
-**Calendar: the half that belongs in a mail client is done.** An invitation is drawn as
-the meeting rather than as a file called invite.ics: what it is, when, where, who called
-it, who is coming, and Accept, Maybe or Decline. A cancellation says so and offers nothing
-to accept. Somebody else's reply says who answered what. The answer goes back to the
-organiser as a METHOD:REPLY calendar file carrying one attendee, which is the whole
-protocol: nobody has standing to answer for anybody else.
+**Calendar: Have.** An invitation is drawn as the meeting rather than as a file called
+invite.ics: what it is, when, where, who called it, who is coming, and Accept, Maybe or
+Decline. A cancellation says so and offers to remove the meeting. On Stalwart accounts
+with calendar support, answering an invitation updates your participant status directly
+over JMAP for Calendars with `sendSchedulingMessages: true` so the server delivers the
+iTIP reply, falling back to an emailed reply on IMAP or when the server cannot schedule.
+The invitation card links directly to the meeting on the Calendar page and offers to
+apply updates or remove cancellations.
 
-It works against any server, IMAP included, because everything shown came in the message.
-That is why it comes before a calendar view rather than after one.
+**The calendar application is built.** A full Calendar page is accessible from the sidebar
+footer, offering month, week, day, and agenda views. Events can be created, edited, and
+deleted, including timed and all-day events. Repeating events are expanded from JSCalendar
+recurrence rules with exceptions and time zones handled cleanly. Multiple calendars per
+account are supported with custom colors and visibility toggles. In addition, a Calendar
+panel in the right app bar shows today and the week ahead beside the mail.
 
-The traps, each one a real invitation from a real sender: the part carries no filename and
-no Content-ID, so the walk that decides what is an attachment was throwing away exactly the
-part that carries the meeting; a VALARM lives inside the event and has its own SUMMARY, so
-a reminder was becoming the title; Exchange writes timezone names that are not in the IANA
-database; DTEND on an all-day event is the day after the last one; and an all-day date has
-no timezone at all, so converting one puts a birthday on the wrong day.
-
-**A calendar view is still a second application** and stays in tier 5 with contacts and
-files. Stalwart advertises the JMAP calendar capabilities, checked against the live session
-rather than assumed, so it is possible when it is wanted.
-
-**Files: need, low.** Bulwark has it, Stalwart serves it, and nothing about mail wants it
-yet.
+**Files: Have.** Full support for Stalwart file storage over JMAP FileNode
+(`urn:ietf:params:jmap:filenode`). Rampart includes a dedicated Files page for creating
+folders, renaming, moving, deleting, uploading via button or drag and drop, and
+downloading files. Attachments on incoming mail can be saved to Files in two server-side
+requests via `Blob/upload`, the composer offers "From Files" to attach FileNode blobs by
+reference without re-uploading, and a Files panel is available in the right app bar.
 
 ---
 
@@ -200,11 +221,13 @@ yet.
 - **Internationalization (27 languages).** Not until there is a second user who needs
   one. The strings are written in plain English on purpose and a translation layer over
   them now is work with no reader.
-- **A plugin system, an extension marketplace, uploadable themes.** Bulwark is a product
-  with an ecosystem. Rampart is a mail client. Every plugin hook is an API we have to
-  keep, and a plugin that can read the email body is a security boundary we would then
-  own. The MCP server in `assistant.md` is the extension story instead: one boundary,
-  outside the process.
+- **A plugin system, an extension marketplace, uploadable marketplace packages.** Bulwark
+  is a product with an ecosystem. Rampart is a mail client. Rampart ships eighteen
+  built-in themes and a custom theme editor for creating, editing, importing, and
+  exporting local themes, but third-party plugin and theme marketplaces remain
+  deliberately not done. Every plugin hook is an API we have to keep, and a plugin that
+  can read the email body is a security boundary we would then own. The MCP server in
+  `assistant.md` is the extension story instead: one boundary, outside the process.
 - **Progressive Web App, service workers, web push, permalinks.** Rampart is a desktop
   application. These are answers to problems a web page has.
 - **Demo mode on fixture data.** The screenshot tests already render every screen from
@@ -223,11 +246,11 @@ yet.
 
 ## 4. Order of work
 
-Items 1 to 7 of the original order shipped between 2026-09-17 and 2026-09-18. On
-2026-09-18 the message body moved to a real engine, identities and sending, tags and
-calendar invitations all finished, the mailbox dashboard shipped, which is the first
-screen Rampart has that webmail has no answer to, and then the trust signals and snooze.
-What is left, in the order it will be missed:
+Items 1 to 7 of the original order shipped between 2026-09-17 and 2026-09-18. Through
+2026-09-28, calendar views, server-side invitation scheduling, Stalwart files, account
+security, phone setup, open and click tracking with ntfy and Gotify alerts, custom themes
+with a theme editor, message list density, the right app bar, and Rook settings cards all
+shipped. What is left, in the order it will be missed:
 
 1. **Encryption** (2.10). S/MIME and PGP. Last on purpose, and the one place where a
    half-built implementation is worse than none.
@@ -269,13 +292,13 @@ gap nobody is working on.
 | Gap | Card |
 |---|---|
 | Shared and delegated mailboxes, and cross-account unified views | 45 |
-| Files: the JMAP FileNode side of Stalwart | 46 |
-| Calendar as an application rather than an invitation answerer | 47 |
+| Files: the JMAP FileNode side of Stalwart | Done (card 46) |
+| Calendar as an application rather than an invitation answerer | Done (card 47) |
 | 27 languages, right-to-left, and an accessibility pass | 49 |
-| Message list shapes and a density control | 42 |
-| Sender favicons as avatars | 27 |
-| The message toolbar: move, unread, print | 28 |
-| Themes anyone can make | 29 |
+| Message list shapes and a density control | Done (card 42) |
+| Sender favicons as avatars | Done (card 27) |
+| The message toolbar: move, unread, print | Done (card 28) |
+| Themes anyone can make | Done (card 29) |
 
 **The largest is 49, and it is the one that looks smallest.** Every user-facing string in
 Rampart is a Kotlin literal. Bulwark has 27 locales and right-to-left. Getting the strings
