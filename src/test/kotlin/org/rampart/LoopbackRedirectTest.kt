@@ -117,6 +117,43 @@ class LoopbackRedirectTest {
     }
 
     @Test
+    fun `the whole browser half, from the address sent out to tokens held`() {
+        var form: Map<String, String> = emptyMap()
+        val endpoint = TokenEndpoint { _, sent ->
+            form = sent
+            200 to """{"access_token":"at","refresh_token":"rt","expires_in":3600}"""
+        }
+        val signIn = BrowserSignIn(OAuthProviders.GOOGLE, OAuthClient("id.apps", "s"), "me@gmail.com", endpoint)
+        val sentOut = queryParams(URI(signIn.url).rawQuery)
+        val redirect = sentOut.getValue("redirect_uri")
+        assertTrue(redirect.startsWith("http://127.0.0.1:"), redirect)
+        val waiting = CompletableFuture.supplyAsync { signIn.await() }
+
+        val back = http.send(
+            HttpRequest.newBuilder(URI("$redirect/?code=c0de&state=${sentOut.getValue("state")}")).timeout(Duration.ofSeconds(10)).GET().build(),
+            HttpResponse.BodyHandlers.ofString(),
+        )
+        assertEquals(200, back.statusCode())
+        val tokens = waiting.get(10, TimeUnit.SECONDS)
+        assertEquals("at", tokens.access)
+        assertEquals("rt", tokens.refresh)
+        // The verifier sent to the token endpoint is the one the challenge in the address was made from.
+        assertEquals("c0de", form["code"])
+        assertEquals(redirect, form["redirect_uri"])
+        assertEquals(sentOut["code_challenge"], Pkce.challenge(form.getValue("code_verifier")))
+    }
+
+    @Test
+    fun `Microsoft is sent localhost, with the listener still on the loopback address`() {
+        BrowserSignIn(OAuthProviders.MICROSOFT, OAuthClient("id"), "me@outlook.com").use { signIn ->
+            assertTrue(signIn.redirectUri.startsWith("http://localhost:"), signIn.redirectUri)
+        }
+        BrowserSignIn(OAuthProviders.MICROSOFT, OAuthClient("id", redirectHost = "127.0.0.1"), "me@outlook.com").use { signIn ->
+            assertTrue(signIn.redirectUri.startsWith("http://127.0.0.1:"), signIn.redirectUri)
+        }
+    }
+
+    @Test
     fun `a provider error ends the wait as a refusal`() {
         val redirect = LoopbackRedirect.open()
         val waiting = CompletableFuture.supplyAsync {

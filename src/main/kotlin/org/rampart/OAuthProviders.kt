@@ -206,6 +206,12 @@ internal data class OAuthClient(
     val clientSecret: String = "",
     /** Microsoft only: "common" for any account, "consumers" or "organizations" to narrow it. */
     val tenant: String = "common",
+    /**
+     * The host the redirect URI names, when an application was registered with the other
+     * one. Only "127.0.0.1" or "localhost"; blank means the provider's usual. The listener
+     * binds 127.0.0.1 either way.
+     */
+    val redirectHost: String = "",
 ) {
     /** A blank ID, or the placeholder a template might carry, is a build with no ID in it. */
     val configured: Boolean
@@ -251,6 +257,7 @@ internal object OAuthClients {
             put("clientId", client.clientId.trim())
             if (client.clientSecret.isNotBlank()) put("clientSecret", client.clientSecret.trim())
             if (provider == OAuthProviders.MICROSOFT) put("tenant", client.tenant.trim().ifBlank { "common" })
+            if (client.redirectHost.isNotBlank()) put("redirectHost", client.redirectHost)
         }
         val document = JsonObject(existing + (provider.id to entry))
         path.parent?.createDirectories()
@@ -279,5 +286,9 @@ internal fun clientFrom(provider: OAuthProvider, shipped: String, override: Stri
         // shape a tenant name or ID actually has and cannot add a path or a host.
         tenant = (mine?.text("tenant") ?: base?.text("tenant"))
             ?.takeIf { it.matches(Regex("[A-Za-z0-9.-]{1,64}")) } ?: "common",
+        // Only the two loopback names. Anything else would send the code somewhere that is
+        // not this machine.
+        redirectHost = (mine?.text("redirectHost") ?: base?.text("redirectHost"))
+            ?.takeIf { it == "127.0.0.1" || it == "localhost" }.orEmpty(),
     )
 }

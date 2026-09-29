@@ -107,6 +107,9 @@ class OAuthProvidersTest {
         )
         // A tenant that could reshape the URL is not taken.
         assertEquals("common", clientFrom(OAuthProviders.MICROSOFT, shipped, """{"microsoft":{"tenant":"evil.example/x?"}}""").tenant)
+        // The redirect host can be switched between the two loopback names and nothing else.
+        assertEquals("127.0.0.1", clientFrom(OAuthProviders.MICROSOFT, shipped, """{"microsoft":{"redirectHost":"127.0.0.1"}}""").redirectHost)
+        assertEquals("", clientFrom(OAuthProviders.MICROSOFT, shipped, """{"microsoft":{"redirectHost":"mail.example.com"}}""").redirectHost)
         // A broken override file is no override.
         assertEquals(OAuthClient("build.apps", "build-secret"), clientFrom(OAuthProviders.GOOGLE, shipped, "{not json"))
     }

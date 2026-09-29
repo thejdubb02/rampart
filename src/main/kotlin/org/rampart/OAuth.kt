@@ -457,7 +457,7 @@ internal class BrowserSignIn(
     private val redirect = LoopbackRedirect.open()
     private val verifier = Pkce.verifier(random)
     private val state = newState(random)
-    val redirectUri: String = redirect.redirectUri(provider.redirectHost)
+    val redirectUri: String = redirect.redirectUri(client.redirectHost.ifBlank { provider.redirectHost })
     val url: String = authorizationUrl(provider, client, redirectUri, Pkce.challenge(verifier), state, email)
 
     /** Blocks until the browser comes back, the time runs out, or [close] is called. */

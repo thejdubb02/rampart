@@ -349,7 +349,10 @@ private fun OAuthClientEditor(provider: OAuthProvider, onDone: () -> Unit) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Button(onClick = {
                 val saved = runCatching {
-                    OAuthClients.saveOverride(provider, OAuthClient(id.trim(), secret.trim(), tenant.trim().ifBlank { "common" }))
+                    OAuthClients.saveOverride(
+                        provider,
+                        OAuthClient(id.trim(), secret.trim(), tenant.trim().ifBlank { "common" }, current.redirectHost),
+                    )
                 }
                 if (saved.isSuccess) onDone() else problem = "It could not be saved: ${saved.exceptionOrNull()?.message.orEmpty()}"
             }) { Text("Save") }
