@@ -4670,6 +4670,7 @@ private fun Reader(
                     folder = currentFolderName(key),
                     subject = cardSummary.subject,
                     turns = { summariseTurns(key, cardSummary) },
+                    backend = sessions.firstOrNull { it.key == key }?.jmap,
                     onPick = { words ->
                         sendError = null; sendDetail = null
                         val all = bareReplyAll(Settings.defaultReplyAll(), hasOtherRecipients(cardSummary, card.body, ours))
@@ -5386,6 +5387,11 @@ private fun Reader(
                         onConfirmCard = { confirmCard(it) },
                         onDismissCard = { settingCards = settingCards.dismiss(it) },
                         modifier = Modifier.fillMaxSize(),
+                        // Saved prompts and a file as context. See RookExtrasUi.kt.
+                        extras = { typed, enabled, insert ->
+                            val key = writingAccount()
+                            RookPanelExtras(key?.let { session(it).jmap }, key, typed, enabled, insert)
+                        },
                     )
                     SideTool.CALENDAR -> {
                         val key = (here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key)

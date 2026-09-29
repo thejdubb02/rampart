@@ -1761,6 +1761,9 @@ private fun AssistantPage(accounts: List<AccountMailboxes>) {
         }
     }
     Spacer(Modifier.height(16.dp))
+    // Whether Help me write and suggested replies carry a sample of the person's writing. See RookExtrasUi.kt.
+    ToneMatchingSetting()
+    Spacer(Modifier.height(16.dp))
 
     AssistantMode.entries.forEach { mode ->
         Row(
