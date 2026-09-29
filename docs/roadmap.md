@@ -887,6 +887,92 @@ What Rook will not copy: Gemini runs whenever mail arrives. Rook does not, becau
 mail client that spends money nobody pressed a button for is the failure the ceiling
 exists to prevent.
 
+### 4.2 Rook, measured against the AI mail tools people keep
+
+Checked 2026-09-29 against the features reviewers keep using in Superhuman, Shortwave,
+Copilot, Spark, Canary and Fyxer. Their order of value, and where Rook stands:
+
+1. **Thread summary.** *Built.* Gap: on a long thread the summary should cite the
+   messages it came from ("from messages 4, 11 and 18"), the "show the work" rule.
+2. **Draft reply in the person's voice.** *Built* as suggested replies plus the opt-in
+   tone sample from Sent. Never sends.
+3. **Rewrite the selected text.** *Partial.* Polish, Formalize, Shorten and Elaborate work
+   on the whole draft; a selection-only rewrite and a "warmer / firmer / more direct" tone
+   coach are not built.
+4. **Ask the inbox in English.** *Built* (Ask Rook from the search box, with sources).
+5. **Needs reply vs noise.** *Partial.* The Today briefing lists what needs a reply, but
+   there is no standing label on rows, and no learning from what the person actually
+   answers. Must start conservative: hiding a real email is worse than extra noise.
+6. **Follow-up after silence.** *Not built.* Tracking already knows when a sent message
+   got no reply; the missing piece is "no answer in N days, draft a nudge", as a card the
+   person sends.
+7. **Plain-English rules.** *Built* (describe a filter).
+8. **Calendar from the thread.** *Built* (Add to calendar, Help me schedule).
+9. **Daily brief.** *Built* (Today).
+10. **On-device AI.** *Partial.* The provider slot is OpenAI-compatible, so a local
+    Ollama works on the same path; it is not offered as a one-click choice or tested.
+11. **Meeting context in the reply.** *Not planned* until there is a meeting-notes source
+    on the server to draw from.
+12. **Agents acting while the app is closed.** *Not planned.* Everything Rook does is
+    approve-first, and that is the rule people trust.
+
+**A decision for Justin.** The loved version of 1 and 2 is "already done when you open
+the thread". That means a model call on open, not on a button press, which breaks the
+rule above. The options: keep button-only; allow it only with a local model, where it
+costs nothing; or allow it on the BYOK key for threads over a length the person sets,
+still under the spending ceiling. Not built either way until decided.
+
+---
+
+## Measured against the desktop clients people install
+
+Checked 2026-09-29 against what Outlook, Apple Mail, Thunderbird, Mailbird, eM Client,
+Spark, Mailspring, Canary and Superhuman users rely on daily, ordered by real use.
+
+**Table stakes.**
+
+| Feature | Rampart |
+|---|---|
+| Several accounts in one window | Built |
+| Unified inbox that still sends from the right address | Built; a warning when replying from a different account than the mail came to is **missing** |
+| Modern sign-in (OAuth for Gmail and Microsoft) | Cloud brief written (RAM-39) |
+| Exchange / Microsoft 365 native (EWS or Graph) | **Missing.** IMAP and JMAP only |
+| Offline cache | Bodies cached; attachments not kept offline (**partial**) |
+| Threads, three panes, density, dark mode | Built |
+| Fast local search with operators (from:, has:attachment, dates) | Built |
+| Attachments: drag and drop into the composer, preview in place | Preview built (images, PDF); **drag and drop into the composer missing** |
+| Per-account identity, signatures, visible From | Built |
+
+**Daily workflow.**
+
+| Feature | Rampart |
+|---|---|
+| Keyboard-first triage and a command palette | Built |
+| Snooze | Built |
+| Send later and undo send | Built (held by the server) |
+| Rules, smart views, folders and tags | Built (Sieve rules, saved searches, split views) |
+| Templates and quick replies | Built |
+| Quiet notifications: VIP only, mute a thread, none for newsletters | Mute built; VIP-only and per-account in the notifications brief (RAM-58) |
+
+**The rest of the desk.**
+
+| Feature | Rampart |
+|---|---|
+| Calendar and invitations | Built |
+| Contacts with history ("every mail from this person") | **Missing** |
+| Follow-up flags with a date | **Partial** (snooze and tasks, no flag with a due date) |
+| Folders and labels together | Built |
+| Colour by account | In the list extras brief (RAM-42) |
+
+**Trust.** Local credentials, phishing warnings that show the real address, PGP and
+S/MIME (RAM-37, in progress), faithful HTML rendering, reliable sync, and import (Maildir,
+mbox and .eml built; **Outlook PST missing**).
+
+**The gaps, as cards:** wrong-account reply warning, contact history, drag and drop into
+the composer, attachments offline, follow-up flags with a date, a focused inbox (people
+vs newsletters), PST import, and Exchange. Exchange is the largest by far and is only
+worth it if Rampart is aimed at offices; it is logged, not scheduled.
+
 ---
 
 ## Tier 5, the applications next door
