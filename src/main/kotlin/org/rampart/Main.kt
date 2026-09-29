@@ -1546,18 +1546,6 @@ private fun Reader(
         return foldersToSkip(role, folderFor("junk", boxes)?.id, folderFor("trash", boxes)?.id)
     }
 
-    /**
-     * The inbox of every signed in account, as one list.
-     *
-     * Every account at once. They are separate servers with nothing to wait on between
-     * them, and asked in turn the merged inbox took as long as all of them added up.
-     */
-    suspend fun everyInbox(memory: Map<String, List<Person>>, asked: QuickFilters): List<Summary> = merged(
-        coroutineScope {
-            sessions.map { open -> async(Dispatchers.IO) { open.key to inboxOf(open, memory, asked) } }.awaitAll()
-        }.toMap(),
-    )
-
     /** One account's share of [everyInbox]. A failure is an empty share, so the others still show. */
     fun inboxOf(open: Session, memory: Map<String, List<Person>>, asked: QuickFilters): List<Summary> {
         val inbox = folderFor("inbox", mailboxes[open.key].orEmpty()) ?: return emptyList()
@@ -1576,6 +1564,18 @@ private fun Reader(
             }
         }.getOrDefault(emptyList())
     }
+
+    /**
+     * The inbox of every signed in account, as one list.
+     *
+     * Every account at once. They are separate servers with nothing to wait on between
+     * them, and asked in turn the merged inbox took as long as all of them added up.
+     */
+    suspend fun everyInbox(memory: Map<String, List<Person>>, asked: QuickFilters): List<Summary> = merged(
+        coroutineScope {
+            sessions.map { open -> async(Dispatchers.IO) { open.key to inboxOf(open, memory, asked) } }.awaitAll()
+        }.toMap(),
+    )
 
     suspend fun <T> io(block: () -> T): T? = try {
         report("")
@@ -2143,6 +2143,9 @@ private fun Reader(
                     store.pruneToPage(mailbox.id, page)
                     store.put(mailbox.id, page)
                 }
+                // The copy matches the top of the folder this far, at this state. Scrolling
+                // further reads pages from the copy while that stays true. See ListPaging.kt.
+                markFirstPage(store, mailbox.id, state, page)
             }
             // The cursor is set from the state read before the fetch, never after it: mail
             // arriving between the two would otherwise be marked as already seen and the
@@ -2175,7 +2178,11 @@ private fun Reader(
         val epoch = listEpoch
         scope.launch {
             Diagnostics.time(Metric.LIST_PAGE_LOAD) {
-                val page = io {
+                // The plain folder is read from the copy where the copy is known to match,
+                // which is no round trip at all. See ListPaging.kt for when that is.
+                val plain = !asked.active
+                val fromCopy = if (plain) io { pageFromCopy(session(key).store, mailbox.id, offset) } else null
+                val page = fromCopy ?: io {
                     val known = if (asked.knownSender) knownAddresses(key, memory) else emptySet()
                     quickPage(
                         session(key).jmap,
@@ -2184,7 +2191,7 @@ private fun Reader(
                         asked,
                         known,
                         from = offset,
-                    )
+                    ).also { fetched -> if (plain) extendCopy(session(key).store, mailbox.id, offset, fetched) }
                 }.orEmpty()
                 val current = here?.let {
                     ListRequest(it.first, it.second.id, query, showingResults, viewingTag, quick, emails.size)
@@ -7966,6 +7973,10 @@ internal fun MessageList(
             }
         }
         LaunchedEffect(wantsMore) { if (wantsMore) onNeedMore() }
+        // Sorted once per change of rows or order, not on every recomposition of the list:
+        // a hover or a selection redraws it, and sorting by subject runs a regular expression
+        // per comparison. At a few thousand loaded rows that was most of each frame.
+        val rowsInOrder = remember(emails, order) { sorted(emails, order) }
         Box(Modifier.fillMaxSize()) {
             when {
                 // A refresh of a list that is already here must not replace it.
@@ -7986,7 +7997,7 @@ internal fun MessageList(
                     // LazyColumn only builds the rows on screen, so a folder with thirty
                     // thousand messages in it costs the same as one with twenty. What that
                     // folder still needs is the next page, which is what `onNeedMore` is.
-                    items(sorted(emails, order), key = { rowToken(it) }) { message ->
+                    items(rowsInOrder, key = { rowToken(it) }) { message ->
                         MessageRow(
                             message = message,
                             selected = rowToken(message) == selected?.let(::rowToken) || rowToken(message) in picked,

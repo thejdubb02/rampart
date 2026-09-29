@@ -186,6 +186,15 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             // repaired by deleting the file.
             "CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(id UNINDEXED, sender, subject, body)",
             "CREATE TABLE IF NOT EXISTS cursor (mailbox TEXT PRIMARY KEY, state TEXT NOT NULL)",
+            // How far down a folder the copy is known to match the server, and at which state.
+            // See pagedThrough: it is what lets scrolling read pages from here instead of the
+            // network. Its own table so an existing file gains it without a migration.
+            "CREATE TABLE IF NOT EXISTS paged (mailbox TEXT PRIMARY KEY, state TEXT NOT NULL, count INTEGER NOT NULL)",
+            // The ids the server gave, in its order, for the stretch the mark vouches for.
+            // Positions rather than the message table's own order, so a row the copy still
+            // holds but the server has since dropped can never land in a page.
+            "CREATE TABLE IF NOT EXISTS paged_id (mailbox TEXT NOT NULL, position INTEGER NOT NULL, id TEXT NOT NULL, " +
+                "PRIMARY KEY (mailbox, position))",
             // What was sent tracked, and what came back. Two tables because one message
             // gets fetched many times and the interesting question is how many.
             """
@@ -1327,6 +1336,82 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             s.setString(1, mailbox)
             s.setString(2, state)
             s.executeUpdate()
+        }
+    }
+
+    /**
+     * How many rows from the top of [mailbox], newest first, are known to be exactly what
+     * the server holds at a given state, or null when nothing is known.
+     *
+     * Only ever true for the one state it was written at. The state is account-wide, so a
+     * matching state means nothing in the account has moved since, and the rows at those
+     * positions cannot have either. Anything else, and the network is asked.
+     */
+    @Synchronized fun pagedThrough(mailbox: String): Pair<String, Int>? =
+        connection.prepareStatement("SELECT state, count FROM paged WHERE mailbox = ?").use { s ->
+            s.setString(1, mailbox)
+            s.executeQuery().use { if (it.next()) it.getString("state") to it.getInt("count") else null }
+        }
+
+    /** The ids at [from] and after, in the server's order, from the stretch [pagedThrough] vouches for. */
+    @Synchronized fun pagedIds(mailbox: String, from: Int, limit: Int): List<String> =
+        connection.prepareStatement(
+            "SELECT id FROM paged_id WHERE mailbox = ? AND position >= ? AND position < ? ORDER BY position",
+        ).use { s ->
+            s.setString(1, mailbox)
+            s.setInt(2, from)
+            s.setInt(3, from + limit)
+            s.executeQuery().use { rows -> buildList { while (rows.next()) add(rows.getString(1)) } }
+        }
+
+    /** The rows for [ids], in the order given. An id not kept is left out. */
+    @Synchronized fun rows(ids: List<String>): List<Summary> {
+        if (ids.isEmpty()) return emptyList()
+        val found = connection.prepareStatement("SELECT * FROM message WHERE id IN (${holders(ids.size)})").use { s ->
+            ids.forEachIndexed { i, id -> s.setString(i + 1, id) }
+            s.executeQuery().use { rows -> buildMap { while (rows.next()) summaryOf(rows).let { put(it.id, it) } } }
+        }
+        return ids.mapNotNull { found[it] }
+    }
+
+    /**
+     * Vouches for [ids] at positions [from] onward, at [state]. From zero it starts the
+     * stretch over; further on it carries it down, and the caller has checked the two meet.
+     */
+    @Synchronized fun markPaged(mailbox: String, state: String, from: Int, ids: List<String>) {
+        val wasAuto = connection.autoCommit
+        connection.autoCommit = false
+        try {
+            if (from == 0) {
+                connection.prepareStatement("DELETE FROM paged_id WHERE mailbox = ?").use { s ->
+                    s.setString(1, mailbox)
+                    s.executeUpdate()
+                }
+            }
+            connection.prepareStatement("INSERT OR REPLACE INTO paged_id (mailbox, position, id) VALUES (?,?,?)").use { s ->
+                ids.forEachIndexed { i, id ->
+                    s.setString(1, mailbox)
+                    s.setInt(2, from + i)
+                    s.setString(3, id)
+                    s.addBatch()
+                }
+                s.executeBatch()
+            }
+            connection.prepareStatement(
+                "INSERT INTO paged (mailbox, state, count) VALUES (?,?,?) " +
+                    "ON CONFLICT(mailbox) DO UPDATE SET state=excluded.state, count=excluded.count",
+            ).use { s ->
+                s.setString(1, mailbox)
+                s.setString(2, state)
+                s.setInt(3, from + ids.size)
+                s.executeUpdate()
+            }
+            connection.commit()
+        } catch (e: Exception) {
+            connection.rollback()
+            throw e
+        } finally {
+            connection.autoCommit = wasAuto
         }
     }
 
