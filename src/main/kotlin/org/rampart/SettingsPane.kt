@@ -185,6 +185,7 @@ internal fun SettingsPane(
                             "accounts" -> Column {
                                 AccountsPage(accounts, onAddAccount, quotas)
                                 AccountColoursSection(accounts)
+                                OfflineAttachmentsSection(accounts)
                                 SettingsSyncSection()
                             }
                             "security" -> SecurityPage(security, accounts, account, onAccount)
