@@ -44,4 +44,16 @@ class SettingsWriteTest {
         val beside = Accounts.file().resolveSibling("settings.json.new")
         assertTrue(!java.nio.file.Files.exists(beside), "a leftover $beside means the move did not happen")
     }
+
+    @Test
+    fun `ntfy settings persist without writing the access token`() {
+        Settings.setNtfyServer("https://ntfy.example.org/rampart")
+        Settings.setNtfyTrackedOpen(false)
+
+        val text = java.nio.file.Files.readString(Accounts.file().resolveSibling("settings.json"))
+        assertEquals("https://ntfy.example.org/rampart", Settings.ntfyServer())
+        assertTrue(!Settings.ntfyTrackedOpen())
+        assertTrue("ntfy-token" !in text)
+        assertTrue("access-token-value" !in text)
+    }
 }

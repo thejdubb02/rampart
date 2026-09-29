@@ -159,6 +159,8 @@ object Secrets {
         return store(named(name), value)
     }
 
+    const val NTFY_TOKEN = "ntfy-token"
+
     fun forget(account: SavedAccount) {
         runCatching {
             val id = id(account)

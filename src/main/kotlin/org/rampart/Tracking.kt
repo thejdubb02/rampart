@@ -40,7 +40,17 @@ internal data class Fetch(
     val at: Instant,
     val userAgent: String,
     val network: String,
+    val classification: String = "",
 )
+
+internal fun classificationText(fetch: Fetch): String = when (fetch.classification) {
+    "person" -> "Read"
+    "apple_privacy" -> "Apple privacy download, may not have been read"
+    "security_scanner" -> "Security scanner, not a person"
+    "gmail_proxy" -> "Gmail, first open only"
+    "repeat" -> "Repeated download"
+    else -> "Unclear"
+}
 
 /**
  * What a fetch actually was.
@@ -69,6 +79,10 @@ internal enum class Opened {
  * one that never happened.
  */
 internal fun classify(fetch: Fetch, sentAt: Instant): Opened {
+    when (fetch.classification) {
+        "person" -> return Opened.READ
+        "apple_privacy", "gmail_proxy", "security_scanner", "repeat" -> return Opened.AUTOMATIC
+    }
     val agent = fetch.userAgent.lowercase()
     if (MACHINE_AGENTS.any { it in agent }) return Opened.AUTOMATIC
     /*

@@ -59,6 +59,21 @@ object Settings {
 
     fun setNotifyOnOpen(value: Boolean) = write { put("notifyOpen", JsonPrimitive(value)) }
 
+    fun ntfyServer(): String = read()["ntfyServer"]?.jsonPrimitive?.contentOrNull.orEmpty()
+
+    fun setNtfyServer(value: String) = write { put("ntfyServer", JsonPrimitive(value.trim())) }
+
+    fun ntfyImportantMail(): Boolean = read()["ntfyImportantMail"]?.jsonPrimitive?.booleanOrNull ?: true
+    fun setNtfyImportantMail(value: Boolean) = write { put("ntfyImportantMail", JsonPrimitive(value)) }
+    fun ntfyScheduledSend(): Boolean = read()["ntfyScheduledSend"]?.jsonPrimitive?.booleanOrNull ?: true
+    fun setNtfyScheduledSend(value: Boolean) = write { put("ntfyScheduledSend", JsonPrimitive(value)) }
+    fun ntfyBounce(): Boolean = read()["ntfyBounce"]?.jsonPrimitive?.booleanOrNull ?: true
+    fun setNtfyBounce(value: Boolean) = write { put("ntfyBounce", JsonPrimitive(value)) }
+    fun ntfyTrackedOpen(): Boolean = read()["ntfyTrackedOpen"]?.jsonPrimitive?.booleanOrNull ?: true
+    fun setNtfyTrackedOpen(value: Boolean) = write { put("ntfyTrackedOpen", JsonPrimitive(value)) }
+    fun ntfyOpenLabels(): Boolean = read()["ntfyOpenLabels"]?.jsonPrimitive?.booleanOrNull ?: false
+    fun setNtfyOpenLabels(value: Boolean) = write { put("ntfyOpenLabels", JsonPrimitive(value)) }
+
     /**
      * Whether closing the window leaves Rampart running in the tray.
      *

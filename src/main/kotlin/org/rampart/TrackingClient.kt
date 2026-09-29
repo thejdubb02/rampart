@@ -22,6 +22,9 @@ import kotlinx.serialization.json.jsonPrimitive
  */
 internal object TrackingClient {
 
+    @Volatile var companionPushes: Boolean = false
+        private set
+
     private val http: HttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
         .build()
@@ -49,15 +52,38 @@ internal object TrackingClient {
         if (response.statusCode() != 200) {
             throw TrackingError("The tracking server answered ${response.statusCode()}.")
         }
-        return Json.parseToJsonElement(response.body()).jsonObject["fetches"]?.jsonArray.orEmpty().map {
+        val root = Json.parseToJsonElement(response.body()).jsonObject
+        companionPushes = root["ntfyConfigured"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() == true
+        return root["fetches"]?.jsonArray.orEmpty().map {
             val o = it.jsonObject
             Fetch(
                 id = o["id"]?.jsonPrimitive?.content.orEmpty(),
                 at = Instant.ofEpochMilli(o["at"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L),
                 userAgent = o["userAgent"]?.jsonPrimitive?.content.orEmpty(),
                 network = o["network"]?.jsonPrimitive?.content.orEmpty(),
+                classification = o["classification"]?.jsonPrimitive?.content.orEmpty(),
             )
         }
+    }
+
+    fun registerLabel(base: String, token: String, id: String, label: String) {
+        val body = """{"id":${jsonString(id)},"label":${jsonString(label)}}"""
+        val response = http.send(
+            HttpRequest.newBuilder(URI.create(base.trim().trimEnd('/') + "/labels"))
+                .header("Authorization", "Bearer $token")
+                .header("Content-Type", "application/json")
+                .timeout(Duration.ofSeconds(10))
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build(),
+            HttpResponse.BodyHandlers.discarding(),
+        )
+        if (response.statusCode() !in 200..299) throw TrackingError("The tracking server did not accept the label.")
+    }
+
+    private fun jsonString(value: String): String = buildString {
+        append('"')
+        value.forEach { if (it == '"' || it == '\\') append('\\'); append(it) }
+        append('"')
     }
 
     /**

@@ -187,6 +187,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             """
             CREATE TABLE IF NOT EXISTS fetched (
                 id TEXT NOT NULL, at INTEGER NOT NULL, userAgent TEXT NOT NULL, network TEXT NOT NULL,
+                classification TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY (id, at)
             )
             """,
@@ -225,6 +226,14 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         if ("used" !in columns) {
             connection.createStatement().use {
                 it.execute("ALTER TABLE kept_picture ADD COLUMN used INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+        val fetchedColumns = connection.prepareStatement("PRAGMA table_info(fetched)").use { s ->
+            s.executeQuery().use { rows -> buildList { while (rows.next()) add(rows.getString("name")) } }
+        }
+        if ("classification" !in fetchedColumns) {
+            connection.createStatement().use {
+                it.execute("ALTER TABLE fetched ADD COLUMN classification TEXT NOT NULL DEFAULT ''")
             }
         }
     }
@@ -286,13 +295,14 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         if (fetches.isEmpty()) return emptyList()
         val inserted = ArrayList<Fetch>(fetches.size)
         connection.prepareStatement(
-            "INSERT OR IGNORE INTO fetched (id, at, userAgent, network) VALUES (?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO fetched (id, at, userAgent, network, classification) VALUES (?, ?, ?, ?, ?)",
         ).use { s ->
             fetches.forEach { fetch ->
                 s.setString(1, fetch.id)
                 s.setLong(2, fetch.at.toEpochMilli())
                 s.setString(3, fetch.userAgent)
                 s.setString(4, fetch.network)
+                s.setString(5, fetch.classification)
                 if (s.executeUpdate() > 0) inserted.add(fetch)
             }
         }
@@ -360,7 +370,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         }
         if (sent.isEmpty()) return emptyList()
         val byId = HashMap<String, MutableList<Fetch>>()
-        connection.prepareStatement("SELECT id, at, userAgent, network FROM fetched ORDER BY at ASC").use { s ->
+        connection.prepareStatement("SELECT id, at, userAgent, network, classification FROM fetched ORDER BY at ASC").use { s ->
             s.executeQuery().use { rows ->
                 while (rows.next()) {
                     byId.getOrPut(rows.getString(1)) { ArrayList() }.add(
@@ -369,6 +379,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
                             java.time.Instant.ofEpochMilli(rows.getLong(2)),
                             rows.getString(3),
                             rows.getString(4),
+                            rows.getString(5),
                         ),
                     )
                 }

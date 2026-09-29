@@ -65,7 +65,7 @@ fun main() {
     server.executor = Executors.newFixedThreadPool(8)
 
     server.createContext("/o/") { exchange -> pixel(exchange, log, ntfy, pushes) }
-    server.createContext("/opens") { exchange -> opens(exchange, log, token) }
+    server.createContext("/opens") { exchange -> opens(exchange, log, token, ntfy != null) }
     server.createContext("/labels") { exchange -> labels(exchange, log, token) }
     server.createContext("/diag") { exchange -> diag(exchange, log, token, diagToken) }
     /*
@@ -126,7 +126,7 @@ private fun pixel(exchange: HttpExchange, log: Log, ntfy: NtfyClient?, pushes: j
  * Authenticated, because this is the half that is about somebody's mail: which of their
  * messages were opened and when. The pixel above is public by necessity; this never is.
  */
-private fun opens(exchange: HttpExchange, log: Log, token: String) {
+private fun opens(exchange: HttpExchange, log: Log, token: String, ntfyConfigured: Boolean) {
     val given = exchange.requestHeaders.getFirst("Authorization").orEmpty().removePrefix("Bearer ").trim()
     if (!sameToken(given, token)) {
         // No detail. "Wrong token" and "no token" are the same answer to anyone guessing.
@@ -138,7 +138,7 @@ private fun opens(exchange: HttpExchange, log: Log, token: String) {
         ?.removePrefix("since=")?.toLongOrNull() ?: 0L
     val found = log.since(since)
     val body = buildString {
-        append("""{"fetches":[""")
+        append("""{"ntfyConfigured":$ntfyConfigured,"fetches":[""")
         found.forEachIndexed { at, fetch ->
             if (at > 0) append(',')
             append("{")

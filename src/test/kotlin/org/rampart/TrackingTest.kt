@@ -18,6 +18,18 @@ import kotlin.test.assertTrue
  */
 class TrackingTest {
 
+    @Test
+    fun `server classifications have plain language labels`() {
+        val fetch = Fetch("id", Instant.EPOCH, "", "")
+        assertEquals("Read", classificationText(fetch.copy(classification = "person")))
+        assertEquals(
+            "Apple privacy download, may not have been read",
+            classificationText(fetch.copy(classification = "apple_privacy")),
+        )
+        assertEquals("Security scanner, not a person", classificationText(fetch.copy(classification = "security_scanner")))
+        assertEquals("Gmail, first open only", classificationText(fetch.copy(classification = "gmail_proxy")))
+    }
+
     private val sent = Instant.parse("2026-09-18T10:00:00Z")
 
     private fun fetch(after: Long, agent: String) =
