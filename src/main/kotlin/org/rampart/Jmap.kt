@@ -328,6 +328,8 @@ internal class Jmap private constructor(
     override val maxDelayedSend: Long = 0L,
     /** What the server's submission capability says it will take on an envelope. */
     override val submissionExtensions: Set<String> = emptySet(),
+    /** Every account the session listed, the login's own included. Shared mailboxes come from these (SharedMailboxes.kt). */
+    val sessionAccounts: List<SessionAccount> = emptyList(),
 ) : MailBackend {
     override val maxSizeUpload: Long get() = maxUpload
     companion object {
@@ -390,6 +392,7 @@ internal class Jmap private constructor(
                     ((session["accounts"] as? JsonObject)?.get(account) as? JsonObject)
                         ?.get("accountCapabilities")?.let { it as? JsonObject }?.get(SUBMISSION),
                 ).ifEmpty { submissionExtensionsIn((session["capabilities"] as? JsonObject)?.get(SUBMISSION)) },
+                sessionAccounts = sessionAccountsIn(session),
             )
         }
 
@@ -1667,6 +1670,31 @@ internal class Jmap private constructor(
      */
     internal fun manage(vararg invocations: JsonArray): List<JsonArray> =
         call(*invocations, also = STALWART_CAPABILITY)
+
+    /**
+     * This same signed-in session, speaking for another account in it: a group's mailbox or
+     * one shared with this login (SharedMailboxes.kt). Every request it makes names [id],
+     * because [invoke] writes in the field this changes. Push, file storage, Stalwart's own
+     * objects and every capability but mail are left off, so nothing but mail can be done to
+     * somebody else's account through it.
+     */
+    internal fun forAccount(id: String): Jmap = Jmap(
+        credential = credential,
+        apiUrl = apiUrl,
+        accountId = id,
+        downloadUrl = downloadUrl,
+        uploadUrl = uploadUrl,
+        capabilities = capabilities.filter { it == CORE || it == MAIL }.toSet(),
+        pushUrl = "",
+        maxUpload = maxUpload,
+    )
+
+    /**
+     * A batch whose requests already carry their account id, built in SharedAccounts.kt.
+     * [also] is the one extra capability they need, `principals` for a Principal lookup.
+     */
+    internal fun sharingCall(vararg invocations: JsonArray, also: String? = null): List<JsonArray> =
+        call(*invocations, also = also)
 
     // ---- file storage (Files.kt) ------------------------------------------------------
 

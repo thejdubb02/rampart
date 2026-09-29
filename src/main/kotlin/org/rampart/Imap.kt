@@ -311,6 +311,14 @@ internal class Imap private constructor(
         runCatching { store.close() }
     }
 
+    /**
+     * The store, for sharing a folder with RFC 4314 ACL commands (ImapSharing.kt), or null
+     * where the server does not advertise ACL. Under the same lock every folder call takes,
+     * because one connection cannot carry two commands at once.
+     */
+    internal fun <T> withAcl(block: (IMAPStore) -> T): T? =
+        if (runCatching { store.hasCapability("ACL") }.getOrDefault(false)) gate.withLock { block(store) } else null
+
     // ---- the rest of the seam ------------------------------------------------------
 
     /**
