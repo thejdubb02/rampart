@@ -2,7 +2,9 @@ package org.rampart
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class FoldersTest {
     private fun box(name: String, role: String? = null, unread: Int = 0) = Mailbox("id-$name", name, role, unread)
@@ -38,6 +40,19 @@ class FoldersTest {
     @Test
     fun `case and stray spaces do not stop a match`() {
         assertEquals("  ARCHIVE ", folderFor("archive", listOf(box("  ARCHIVE ")))?.name)
+    }
+
+    @Test
+    fun `trash, junk, sent and drafts are not unread to act on`() {
+        assertTrue(unreadIsNoise(box("Trash", "trash")))
+        assertTrue(unreadIsNoise(box("Junk", "junk")))
+        assertTrue(unreadIsNoise(box("Sent", "sent")))
+        assertTrue(unreadIsNoise(box("Drafts", "drafts")))
+        // Archive is not in the quiet set. Unread there is still mail.
+        assertFalse(unreadIsNoise(box("Inbox", "inbox")))
+        assertFalse(unreadIsNoise(box("Archive", "archive")))
+        // Somebody's own folder that happens to be named Trash. The role decides, not the name.
+        assertFalse(unreadIsNoise(box("Trash")))
     }
 
     @Test

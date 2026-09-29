@@ -149,7 +149,8 @@ internal fun mailboxesWithRights(accountId: String, ids: List<String>? = null): 
         if (ids == null) put("ids", JsonNull) else putJsonArray("ids") { ids.forEach { add(JsonPrimitive(it)) } }
         putJsonArray("properties") {
             listOf(
-                "id", "name", "parentId", "role", "sortOrder", "totalEmails", "unreadEmails",
+                "id", "name", "parentId", "role", "sortOrder", "totalEmails",
+                "unreadEmails", "unreadThreads",
                 "myRights", "isSubscribed", "shareWith",
             ).forEach { add(JsonPrimitive(it)) }
         }
@@ -213,18 +214,9 @@ internal fun rightsFoldersIn(response: JsonArray): List<RightsFolder> {
     val list = (response.getOrNull(1) as? JsonObject)?.get("list") as? JsonArray ?: return emptyList()
     val rows = list.mapNotNull { element ->
         val o = element as? JsonObject ?: return@mapNotNull null
-        val id = (o["id"] as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
-        fun text(name: String) = (o[name] as? JsonPrimitive)?.contentOrNull
-        fun count(name: String) = (o[name] as? JsonPrimitive)?.intOrNull ?: 0
+        if ((o["id"] as? JsonPrimitive)?.contentOrNull == null) return@mapNotNull null
         RightsFolder(
-            mailbox = Mailbox(
-                id = id,
-                name = text("name") ?: "(no name)",
-                role = text("role"),
-                unread = count("unreadEmails"),
-                parentId = text("parentId"),
-                total = count("totalEmails"),
-            ),
+            mailbox = mailboxFrom(o),
             rights = MailboxRights.from(o["myRights"]),
             shareWith = (o["shareWith"] as? JsonObject)?.mapValues { (_, v) -> MailboxRights.from(v) },
         )

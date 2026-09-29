@@ -12,7 +12,7 @@ import org.jetbrains.skia.FontStyle
 import org.jetbrains.skia.Paint
 
 /**
- * The tray icon with the number of unread messages on it.
+ * The tray icon with the number of unread conversations on it.
  *
  * **The tray is the only part of a mail client that works while nobody is looking at it.**
  * Without a count on it the window has to be open and in front for the number to mean

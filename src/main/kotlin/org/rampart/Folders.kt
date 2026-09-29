@@ -107,6 +107,19 @@ internal fun nested(boxes: List<Mailbox>): List<Nested> {
 internal fun isProtected(mailbox: Mailbox): Boolean = !mailbox.role.isNullOrBlank()
 
 /**
+ * Whether an unread count on this folder is noise rather than mail waiting to be read.
+ *
+ * Trash, junk, sent and drafts still show their number. The sidebar draws it quietly,
+ * and the collapsed sidebar draws no dot, because nothing there is waiting on anybody.
+ * Judged on the role the server declared, the same way [isProtected] is: a folder
+ * somebody named Trash is their own folder.
+ */
+internal fun unreadIsNoise(mailbox: Mailbox): Boolean = when (mailbox.role) {
+    "trash", "junk", "sent", "drafts" -> true
+    else -> false
+}
+
+/**
  * The subfolder a message archived today belongs in, or null to use Archive itself.
  *
  * Taken from the message's own date rather than today's, so filing last year's mail in a

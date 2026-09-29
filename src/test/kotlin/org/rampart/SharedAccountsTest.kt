@@ -137,6 +137,8 @@ class SharedAccountsTest {
         val properties = mailboxesWithRights("g")[1].jsonObject["properties"] as JsonArray
         assertTrue(JsonPrimitive("shareWith") in properties)
         assertTrue(JsonPrimitive("myRights") in properties)
+        // The sidebar counts conversations. A listing that does not ask for this gets messages.
+        assertTrue(JsonPrimitive("unreadThreads") in properties)
     }
 
     // ---- answers ------------------------------------------------------------------------

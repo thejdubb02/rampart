@@ -162,8 +162,9 @@ internal fun Sidebar(
             // One account has nothing to merge, so the row would be a second name for Inbox.
             if (accounts.size > 1) {
                 item(key = "all-inboxes") {
+                    // Conversations, so this row matches each Inbox and the list under it.
                     val unread = accounts.sumOf { a ->
-                        folderFor("inbox", a.mailboxes)?.unread ?: 0
+                        folderFor("inbox", a.mailboxes)?.unreadThreads ?: 0
                     }
                     FolderRow(
                         mailbox = allInboxes(unread),
@@ -641,6 +642,10 @@ private fun FolderRow(
     onClick: () -> Unit,
 ) {
     val tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+    // Conversations, not messages. Trash, junk, sent and drafts keep the number and lose
+    // the emphasis: unread there is not mail waiting to be read.
+    val threads = mailbox.unreadThreads
+    val attention = threads > 0 && !unreadIsNoise(mailbox)
     var menu by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier.fillMaxWidth().height(32.dp)
@@ -685,9 +690,9 @@ private fun FolderRow(
                 tint = tint,
                 modifier = Modifier.size(16.dp),
             )
-            // Collapsed there is no room for a count, so an unread folder carries a dot on
-            // the corner of its icon instead of losing the signal altogether.
-            if (collapsed && mailbox.unread > 0) {
+            // Collapsed there is no room for a count, so a folder with unread conversations
+            // carries a dot. Noise folders do not: their count is not mail to read.
+            if (collapsed && attention) {
                 Box(
                     Modifier.size(7.dp).offset(x = 9.dp, y = (-8).dp)
                         .background(MaterialTheme.colorScheme.primary, CircleShape),
@@ -699,18 +704,18 @@ private fun FolderRow(
             Text(
                 mailbox.name,
                 style = MaterialTheme.typography.bodyMedium,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                fontWeight = if (attention || selected) FontWeight.SemiBold else FontWeight.Normal,
                 color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            if (mailbox.unread > 0) {
+            if (threads > 0) {
                 Text(
-                    "${mailbox.unread}",
+                    "$threads",
                     style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = tint,
+                    fontWeight = if (attention) FontWeight.Bold else FontWeight.Normal,
+                    color = if (attention) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
                 )
             }
         }

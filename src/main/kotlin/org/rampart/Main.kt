@@ -739,11 +739,12 @@ private fun Reader(
      *
      * Every signed-in inbox, added up, and only the inboxes: a count that included Junk
      * and Archive would go up when the filter caught something, which is the opposite of
-     * what a badge is for. Sent from here because this is where the counts are, and read
-     * where the tray is, which is outside the window on purpose.
+     * what a badge is for. The number is unread conversations, the same one the sidebar
+     * shows, so the badge and the Inbox row agree. Sent from here because this is where
+     * the counts are, and read where the tray is, which is outside the window on purpose.
      */
     LaunchedEffect(mailboxes) {
-        onUnread(mailboxes.values.sumOf { boxes -> folderFor("inbox", boxes)?.unread ?: 0 })
+        onUnread(mailboxes.values.sumOf { boxes -> folderFor("inbox", boxes)?.unreadThreads ?: 0 })
     }
     var here by remember { mutableStateOf<Pair<String, Mailbox>?>(null) }
     var emails by remember { mutableStateOf<List<Summary>>(emptyList()) }

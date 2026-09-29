@@ -130,6 +130,16 @@ data class Mailbox(
      * matched against the folder itself, rather than asking again just to draw a number.
      */
     val total: Int = 0,
+    /**
+     * Unread conversations in this folder, which is what the list and the sidebar show.
+     *
+     * The list marks a conversation unread when any message in it is unread, including
+     * one filed in another folder. [unread] counts messages in this folder only, so the
+     * two numbers disagree: the Inbox can say 1 while two unread conversations are on
+     * screen. JMAP calls the conversation number unreadThreads (RFC 8621). It defaults
+     * to [unread] for a server that left it out, and for IMAP, which has no such count.
+     */
+    val unreadThreads: Int = unread,
 )
 
 data class Summary(
@@ -466,22 +476,9 @@ internal class Jmap private constructor(
 
     private fun mailboxCall() = invoke("Mailbox/get", "m") { put("ids", JsonNull) }
 
-    private fun mailboxesIn(response: JsonArray): List<Mailbox> {
-        val list = response.list()
-        return list.map {
-            val o = it.jsonObject
-            Mailbox(
-                id = o["id"].require("id"),
-                name = o["name"]?.str() ?: "(no name)",
-                role = o["role"]?.str(),
-                unread = o["unreadEmails"]?.jsonPrimitive?.intOrNull ?: 0,
-                parentId = o["parentId"]?.str(),
-                // totalEmails rides in the same Mailbox/get as the unread count. Reading it
-                // here is not a second request.
-                total = o["totalEmails"]?.jsonPrimitive?.intOrNull ?: 0,
-            )
-        }.sortedWith(compareBy({ if (it.role == "inbox") 0 else 1 }, { it.name.lowercase() }))
-    }
+    private fun mailboxesIn(response: JsonArray): List<Mailbox> =
+        response.list().map { mailboxFrom(it.jsonObject) }
+            .sortedWith(compareBy({ if (it.role == "inbox") 0 else 1 }, { it.name.lowercase() }))
 
     /**
      * A string that changes whenever anything about this account's mail changes.
@@ -2227,6 +2224,30 @@ private val emailGetProperties =
         // For the table's size column and for splitting a saved search by mailing list.
         "size", "header:List-Id:asText",
     )
+
+/**
+ * One folder from a Mailbox object in a Mailbox/get reply.
+ *
+ * [Mailbox.unreadThreads] is read here, beside [Mailbox.unread], because the sidebar
+ * counts conversations and everything else that already used the message count should
+ * keep using it.
+ */
+internal fun mailboxFrom(o: JsonObject): Mailbox {
+    val unread = o["unreadEmails"]?.jsonPrimitive?.intOrNull ?: 0
+    return Mailbox(
+        id = o["id"].require("id"),
+        name = o["name"]?.str() ?: "(no name)",
+        role = o["role"]?.str(),
+        unread = unread,
+        parentId = o["parentId"]?.str(),
+        // totalEmails rides in the same Mailbox/get as the unread count. Reading it
+        // here is not a second request.
+        total = o["totalEmails"]?.jsonPrimitive?.intOrNull ?: 0,
+        // Missing means the server did not say. Fall back to the message count rather
+        // than showing zero conversations when the mail is still unread.
+        unreadThreads = o["unreadThreads"]?.jsonPrimitive?.intOrNull ?: unread,
+    )
+}
 
 private fun jsonToSummary(o: JsonObject): Summary = Summary(
     id = o["id"].require("id"),

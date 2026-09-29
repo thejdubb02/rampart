@@ -148,13 +148,14 @@ internal class Imap private constructor(
             val selectable = folder.type and Folder.HOLDS_MESSAGES != 0
             val id = folder.fullName
             if (id.isNotBlank()) {
+                // Asking a folder that holds no messages for a count is an error on
+                // some servers and a round trip on the rest.
+                val unreadCount = if (selectable) runCatching { folder.unreadMessageCount }.getOrDefault(0) else 0
                 found += Mailbox(
                     id = id,
                     name = folder.name,
                     role = roleOf(folder),
-                    // Asking a folder that holds no messages for a count is an error on
-                    // some servers and a round trip on the rest.
-                    unread = if (selectable) runCatching { folder.unreadMessageCount }.getOrDefault(0) else 0,
+                    unread = unreadCount,
                     parentId = parent,
                     // The same listing. -1 is "not known yet" on a folder we have not
                     // opened, and a count we do not have is 0 rather than a crash.
@@ -163,6 +164,9 @@ internal class Imap private constructor(
                     } else {
                         0
                     },
+                    // IMAP counts unread messages and has no conversation count. The
+                    // sidebar shows that number for both rather than inventing threads.
+                    unreadThreads = unreadCount,
                 )
             }
             if (folder.type and Folder.HOLDS_FOLDERS != 0) {
