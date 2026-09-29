@@ -116,6 +116,15 @@ an IMAP account gets a sentence saying why they are not there):
 
 The calendar features share one consent and one ledger line, `calendar`, beside the others.
 
+**Tasks, saved prompts, tone and files.** Started 2026-09-29 on the branch
+`claude/rook-extras` (RAM-102), not released. "Make a task" under a message and Rook's
+`propose_task` make an editable task card whose Save writes a JMAP Task or, on Stalwart, a
+VTODO into the person's own calendar over CalDAV. Saved prompts live in the account's
+Files. Match my tone adds a fenced sample of the person's own sent mail to Help me write
+and suggested replies, under an agreement of its own. Add a file sends a text file or a
+PDF from Files as fenced context. `docs/rook-extras.md` has the design and the Stalwart
+source it was read from.
+
 **Summarise a long thread.** Twenty messages, one paragraph, before you decide whether to
 read it. This is the one people ask for and the one with the least that can go wrong: it
 is read-only, it is per-thread, and a bad summary costs a few seconds.

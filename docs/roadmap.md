@@ -780,8 +780,10 @@ under the rules above. Gemini's four jobs, and where Rook stands on each:
 - Polish, Formalize, Shorten, Elaborate, and "change it how?". *Same branch, not released.*
 - Proofread, as inline suggestions accepted one at a time. *Same branch, not released.*
 - Suggested replies: up to three full drafts on request. *Same branch, not released.*
-- Matching the person's own tone from their Sent mail. *Not started. Needs a small style
-  sample sent with the prompt, shown in the packet viewer like everything else.*
+- Matching the person's own tone from their Sent mail. *Started 2026-09-29 on branch
+  claude/rook-extras (RAM-102), not released.* Opt in under Settings, Rook: the last five
+  sent messages, own words only, 1,500 characters in all, fenced, and shown in the packet
+  viewer under an agreement of its own. `docs/rook-extras.md`.
 
 **Find for you.**
 - A question typed in the search box answered in two or three sentences, with links to
@@ -807,11 +809,19 @@ under the rules above. Gemini's four jobs, and where Rook stands on each:
 - Rook's `agenda` (read a day of the calendar) and `propose_event` (an event card, never a
   write). *Started 2026-09-29 on the same branch, not released.*
 - Tasks from mail: a to-do inferred from a message, written as a Stalwart task (JMAP
-  Tasks, or a VTODO over CalDAV) so it shows on the phone too. *Not started.*
-- Pull a file from Stalwart Files into a draft or an answer, Gemini's `@file`. *Not
-  started. Files exists (RAM-46), so this is a Rook tool over it.*
+  Tasks, or a VTODO over CalDAV) so it shows on the phone too. *Started 2026-09-29 on
+  branch claude/rook-extras (RAM-102), not released, not yet tried against a live server.*
+  "Make a task" under a message and Rook's `propose_task` both make an editable card; Save
+  is the only write. Stalwart 0.16 has no JMAP Tasks, so there it is a VTODO PUT into the
+  person's own calendar at /dav/cal. A Tasks panel is the fifth in the app bar.
+- Pull a file from Stalwart Files into a draft or an answer, Gemini's `@file`. *Started
+  2026-09-29 on the same branch, not released.* Add a file under Help me write and in the
+  Rook panel: text-like files and PDFs, read on this machine (PDFBox for PDFs), capped at
+  20,000 characters and fenced as data.
 - Saved prompts, Gemini's "Gems": a named instruction the person reuses ("reply to a
-  lead", "decline politely"). *Not started. Small: stored as a server-side setting.*
+  lead", "decline politely"). *Started 2026-09-29 on the same branch, not released.* One
+  JSON file, Rampart/saved-prompts.json, in the account's own Files; kept on this computer,
+  and labelled so, where the account has no Files.
 
 What Rook will not copy: Gemini runs whenever mail arrives. Rook does not, because an open
 mail client that spends money nobody pressed a button for is the failure the ceiling
