@@ -1579,9 +1579,12 @@ private fun ScheduleChoice(label: String, at: ZonedDateTime, onPick: (Long) -> U
     }
 }
 
-/** A one-line box, the same shape Settings uses, so a dialog does not invent a second kind. */
+/**
+ * A one-line box, the same shape Settings uses, so a dialog does not invent a second kind.
+ * The follow-up dialog (FollowUpUi.kt) types its date into this one too.
+ */
 @Composable
-private fun ClockField(value: String, hint: String, onChange: (String) -> Unit) {
+internal fun ClockField(value: String, hint: String, onChange: (String) -> Unit) {
     Box(
         Modifier.fillMaxWidth().height(36.dp)
             .background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small)

@@ -914,6 +914,24 @@ private fun Reader(
     fun accountOf(message: Summary?): String? =
         message?.account?.ifBlank { null } ?: here?.first?.takeIf { it != ALL_ACCOUNTS }
 
+    /** Follow-up flags (FollowUpUi.kt). A row is repainted only once the server has taken the change. */
+    val followUps = rememberFollowUps(
+        scope = scope,
+        backend = { k -> runCatching { session(k).jmap }.getOrNull() },
+        accountOf = { accountOf(it) },
+        own = { k -> identities[k].orEmpty().map { it.email.trim().lowercase() }.toSet() },
+        report = { title, detail -> report(title, detail) },
+        repaint = { account, id, keywords ->
+            emails = emails.map { if (it.sameMail(account, id)) it.copy(keywords = keywords) else it }
+            thread = thread.map { if (it.sameMail(account, id)) it.copy(keywords = keywords) else it }
+            selected?.let { if (it.sameMail(account, id)) selected = it.copy(keywords = keywords) }
+            // Cleared or moved later, it leaves the Follow up view at once.
+            if (viewingTag == FOLLOW_UP && !followUpDue(keywords, Instant.now())) {
+                emails = emails.filterNot { it.sameMail(account, id) }
+            }
+        },
+    )
+
     /** How the list collapses its rows into conversations. See [ThreadContext]. */
     fun threadContext() = ThreadContext(
         account = here?.first?.takeIf { it != ALL_ACCOUNTS },
@@ -1588,7 +1606,9 @@ private fun Reader(
              * server being unreachable loses its share rather than the whole list, and an
              * account that has never seen the keyword is not asked at all.
              */
-            val holders = accountsWith(tagsSeen, tagging).ifEmpty { listOf(key) }
+            // The Follow up view (FollowUpUi.kt) asks every account, since its keyword is not a tag.
+            val holders = if (tagging == FOLLOW_UP) sessions.map { it.key }
+                else accountsWith(tagsSeen, tagging).ifEmpty { listOf(key) }
             withContext(Dispatchers.IO) {
                 holders.flatMap { account ->
                     // Stamped with its account, as the unified inbox does: ids can repeat
@@ -1598,6 +1618,7 @@ private fun Reader(
                         .map { it.copy(account = account) }
                 }
             }.sortedByDescending { it.receivedAt }
+                .let { if (tagging == FOLLOW_UP) dueFollowUps(it, Instant.now()) else it }
         } else if (key == ALL_ACCOUNTS && UnifiedView.of(mailbox.id) != null) {
             // All unread, all starred, all mail (UnifiedViews.kt), from the folders chosen for each.
             val view = UnifiedView.of(mailbox.id)!!
@@ -2305,6 +2326,11 @@ private fun Reader(
             }
         }
         scope.launch { reload() }
+    }
+
+    // Attachments kept for offline use (OfflineAttachmentsUi.kt), in the background.
+    LaunchedEffect(sessions) {
+        OfflineAttachments.run { offlineAccounts(sessions) { k -> folderFor("inbox", mailboxes[k].orEmpty())?.id } }
     }
 
     // New mail is announced a burst at a time, checked again just before it is shown.
@@ -3343,6 +3369,8 @@ private fun Reader(
             waited = 0
             // A group mailbox can hold snoozed mail too, and nothing else would wake it.
             (sessions + sharing.shared).forEach { runCatching { wakeSnoozed(it.key) } }
+            // Follow-up flags ride the same minute, and ask each server every few minutes.
+            runCatching { followUps.check(sessions.map { it.key to it.jmap }) }
             runCatching { fireDue() }
             delay(60_000)
         }
@@ -4027,6 +4055,7 @@ private fun Reader(
 
     val rowActions = RowActions(
         snooze = { message, until -> snooze(message, until) },
+        followUp = { message -> followUps.ask(message) },
         reply = { message, all ->
             val key = accountOf(message)
             if (key != null) {
@@ -4102,6 +4131,7 @@ private fun Reader(
         return MessageActions(
             archive = moveTo("archive"),
             snooze = { until -> snooze(message, until) },
+            followUp = { followUps.ask(message) },
             trash = moveTo("trash"),
             junk = if (junked) null else moveTo("junk"),
             notJunk = if (junked) moveTo("inbox") else null,
@@ -4178,7 +4208,7 @@ private fun Reader(
             val parsed = io {
                 val dir = Files.createTempDirectory("rampart-attached")
                 try {
-                    val path = session(key).jmap.download(attachment, dir)
+                    val path = session(key).fetchAttachment(attachment, dir)
                     readAttachedMessage(Files.readAllBytes(path))
                 } finally {
                     runCatching { dir.toFile().deleteRecursively() }
@@ -4201,7 +4231,7 @@ private fun Reader(
             val fetched = io {
                 val dir = Files.createTempDirectory("rampart-tnef")
                 try {
-                    val path = session(key).jmap.download(attachment, dir)
+                    val path = session(key).fetchAttachment(attachment, dir)
                     val bytes = Files.readAllBytes(path)
                     val contents = readTnef(bytes)
                     if (contents != null) contents to null
@@ -4520,14 +4550,14 @@ private fun Reader(
                     scope.launch {
                         val landed = io {
                             val folder = downloadsFolder()
-                            session(key).jmap.download(attachment, folder)
+                            session(key).fetchAttachment(attachment, folder)
                         }
                         if (landed != null) updateCard(key, cardSummary.id) { copy(saved = landed.toString()) }
                     }
                 }
             },
             onDragFile = if (key == null) null else { attachment ->
-                materializeAttachment { dir -> session(key).jmap.download(attachment, dir) }
+                materializeAttachment { dir -> session(key).fetchAttachment(attachment, dir) }
             },
             onDragFailed = { report("That file could not be dragged out.", it) },
             saveToFiles = key?.let { filesOf(session(it).jmap) },
@@ -5025,6 +5055,7 @@ private fun Reader(
             confirm != null || summarisePacket != null || actionJob.waiting != null || attached != null || folderAsk != null ||
             filterFor != null || changelogDialog != null || tnef != null,
     )
+    FollowUpDialog(followUps)
     Box(Modifier.fillMaxSize()) {
     Column(
         Modifier.fillMaxSize()
@@ -5342,6 +5373,13 @@ private fun Reader(
                     AccountMailboxes(it.key, it.account.name, it.account.email, mailboxes[it.key].orEmpty())
                 } + sharing.sidebarAccounts(mailboxes),
                 folderRefusal = sharing::folderRefusal,
+                followUp = { narrowed ->
+                    FollowUpRow(followUps, narrowed, selected = viewingTag == FOLLOW_UP) {
+                        settingsOpen = false; contactsOpen = false; dashboardOpen = false; calendarOpen = false
+                        activeSavedSearch = null
+                        openTag(FOLLOW_UP)
+                    }
+                },
                 unifiedViews = { narrowed ->
                     UnifiedViewRows(
                         collapsed = narrowed,
@@ -5738,7 +5776,7 @@ private fun Reader(
                     title = listHeading(
                         searching = showingResults,
                         query = query,
-                        folder = viewingTag?.let { tagsOf(setOf(it)).firstOrNull()?.label ?: it }
+                        folder = viewingTag?.let { if (it == FOLLOW_UP) FOLLOW_UP_VIEW else tagsOf(setOf(it)).firstOrNull()?.label ?: it }
                             ?: here?.second?.name.orEmpty(),
                         savedSearchName = activeSavedSearch?.name,
                     ),

@@ -127,6 +127,8 @@ internal fun Sidebar(
     folderRefusal: (String, Mailbox, FolderJob) -> String? = { _, _, _ -> null },
     /** The cross-account views under "All inboxes" (SharedMailboxesUi.kt), given whether the sidebar is narrowed. */
     unifiedViews: @Composable (Boolean) -> Unit = {},
+    /** The Follow up view's row (FollowUpUi.kt), given whether the sidebar is narrowed. */
+    followUp: @Composable (Boolean) -> Unit = {},
 ) {
     Column(
         Modifier.width(if (collapsed) 60.dp else 232.dp).fillMaxHeight()
@@ -204,6 +206,7 @@ internal fun Sidebar(
                     )
                 }
             }
+            item(key = "follow-up") { followUp(collapsed) }
             accounts.forEachIndexed { index, account ->
                 // With one account the heading is noise. With two it is the only way to tell
                 // one Inbox from the other. Collapsed, there is no room for it at all, so

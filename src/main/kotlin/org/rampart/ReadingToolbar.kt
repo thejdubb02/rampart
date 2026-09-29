@@ -353,6 +353,10 @@ private fun MoreMenu(
                     MenuItem(until.label) { more = false; put(until) }
                 }
             }
+            actions.followUp?.let { ask ->
+                if (actions.snooze == null) HorizontalDivider()
+                MenuItem(followUpMenuLabel(summary.keywords)) { more = false; ask() }
+            }
             HorizontalDivider()
             MenuItem(if (sourceOpen) "Back to the message" else "View source") {
                 more = false
