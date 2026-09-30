@@ -1620,6 +1620,7 @@ internal class Jmap private constructor(
                         put("mailboxIds/$draftsMailboxId", JsonNull)
                         if (sentMailboxId != null) put("mailboxIds/$sentMailboxId", JsonPrimitive(true))
                         put("keywords/\$draft", JsonNull)
+                        put("keywords/\$seen", JsonPrimitive(true))
                     }
                 }
             },
@@ -1714,6 +1715,7 @@ internal class Jmap private constructor(
                         put("mailboxIds/$draftsMailboxId", JsonNull)
                         if (sentMailboxId != null) put("mailboxIds/$sentMailboxId", JsonPrimitive(true))
                         put("keywords/\$draft", JsonNull)
+                        put("keywords/\$seen", JsonPrimitive(true))
                     }
                 }
             },
