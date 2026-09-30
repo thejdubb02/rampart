@@ -45,6 +45,13 @@ internal fun emailDocument(
      * Draw an undesigned message dark. A designed one is never touched. See [PLAIN_DARK].
      */
     dark: Boolean = false,
+    /**
+     * The page a plain message is drawn on. A hybrid theme's light page is not white,
+     * and a plain message has to be that page or it sits as a white slab on the tint.
+     * Designed mail ignores both and stays white.
+     */
+    pageBackground: String = "#ffffff",
+    pageText: String = "#1a1a1a",
 ): EmailPage {
     val source = Jsoup.parse(withoutTofu(html)).also(::scrubTofu)
     val clean = Cleaner(EMAIL_SAFELIST).clean(source)
@@ -74,7 +81,7 @@ internal fun emailDocument(
      * attribute on an already-loaded page. Nothing is fetched, nothing is laid out from
      * scratch, and the message does not flicker back to the top.
      */
-    val plain = if (designed) DESIGNED_CSS else PLAIN_LIGHT + PLAIN_DARK
+    val plain = if (designed) DESIGNED_CSS else plainLight(pageBackground, pageText) + PLAIN_DARK
     return EmailPage(
         """<!DOCTYPE html>
 <html${if (dark) " data-dark" else ""}${if (designed) "" else " data-plain"}><head>
@@ -347,7 +354,8 @@ table:not([style*="max-width"]) { max-width: 100%; }
  *
  * The white matters even though the sender is about to paint over most of it: the panel
  * behind the engine is transparent, so without it the dark window shows through the gaps
- * between a newsletter's own tables.
+ * between a newsletter's own tables. A hybrid theme leaves this white. Designed mail was
+ * built for a white page.
  */
 private const val DESIGNED_CSS = """
 html { background: #ffffff; }
@@ -379,9 +387,14 @@ body { overflow-wrap: break-word; word-break: break-word; }
 html { font: 15px/1.55 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
 """
 
-/** The light version, which is what a message gets in a light window. */
-private const val PLAIN_LIGHT = PLAIN_CSS + """
-html { background: #ffffff; color: #1a1a1a; }
+/**
+ * The light version, which is what a message gets on a light page.
+ *
+ * The two colours are the page's own, so a plain message is not a white slab on a
+ * tinted pane. Left unset, this is the white page from before hybrid themes.
+ */
+private fun plainLight(background: String, text: String): String = PLAIN_CSS + """
+html { background: $background; color: $text; }
 """
 
 /**

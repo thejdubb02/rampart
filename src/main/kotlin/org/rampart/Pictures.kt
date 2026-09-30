@@ -231,6 +231,10 @@ internal data class Reading(
     val images: Map<String, ImageBitmap>,
 )
 
+/**
+ * [pageBackground] and [pageText] are a plain message's page. Designed mail ignores
+ * them and stays white.
+ */
 internal fun prepareReading(
     fromEmail: String,
     fromName: String,
@@ -240,6 +244,8 @@ internal fun prepareReading(
     showRemote: Boolean,
     dark: Boolean,
     known: Set<String>,
+    pageBackground: String = "#ffffff",
+    pageText: String = "#1a1a1a",
 ): Reading {
     val carried = attachments.mapNotNull { part ->
         val cid = cidKey(part.cid) ?: return@mapNotNull null
@@ -257,7 +263,7 @@ internal fun prepareReading(
      */
     val images = emptyMap<String, ImageBitmap>()
     return Reading(
-        page = body.html?.let { emailDocument(it, carried, showRemote, dark) },
+        page = body.html?.let { emailDocument(it, carried, showRemote, dark, pageBackground, pageText) },
         cited = carried.keys,
         // The server's verdicts first, and the checks worked out here only where it gave
         // none. See [trustWarnings].
@@ -272,6 +278,19 @@ internal fun prepareReading(
         ),
         images = images,
     )
+}
+
+/**
+ * Whether a prepared page already uses these colours.
+ *
+ * A designed message stays white, so a colour change is not a reason to build it again.
+ * A plain message has the colours written into the light page, and a different pair
+ * means the theme changed.
+ */
+internal fun plainPageMatches(reading: Reading?, background: String, text: String): Boolean {
+    val document = reading?.page?.document ?: return reading != null
+    if (!document.contains("data-plain")) return true
+    return document.contains("background: $background;") && document.contains("color: $text;")
 }
 
 /** Figure, punctuation, thin and hair spaces, and the narrow no-break space. */

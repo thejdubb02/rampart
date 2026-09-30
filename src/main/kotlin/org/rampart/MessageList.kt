@@ -1087,6 +1087,9 @@ private fun MessageRow(
  *
  * Only the message changes. The window, the list and the sidebar stay as they were, because
  * the point is to see one message as it was meant to look, not to change the app.
+ *
+ * A hybrid's pane is already that light page, so this adds nothing on top of it. When the
+ * card does draw, it uses the page's own colours instead of plain white.
  */
 @Composable
 internal fun Paper(on: Boolean, content: @Composable () -> Unit) {
@@ -1094,20 +1097,32 @@ internal fun Paper(on: Boolean, content: @Composable () -> Unit) {
         content()
         return
     }
+    val page = LocalRampartTheme.current.page
+    // The reading pane is already this page, so a card on top of it would be a second page.
+    if (page != null && MaterialTheme.colorScheme.background == page.background) {
+        content()
+        return
+    }
+    val background = page?.background ?: Color.White
+    val surface = page?.surface ?: Color.White
+    val text = page?.text ?: Color(0xFF17171B)
+    val variant = page?.surfaceVariant ?: Color(0xFFF4F4F6)
+    val muted = page?.muted ?: Color(0xFF63636E)
+    val line = page?.line ?: Color(0xFFE6E6EB)
     MaterialTheme(
         colorScheme = MaterialTheme.colorScheme.copy(
-            background = Color.White,
-            onBackground = Color(0xFF17171B),
-            surface = Color.White,
-            onSurface = Color(0xFF17171B),
-            surfaceVariant = Color(0xFFF4F4F6),
-            onSurfaceVariant = Color(0xFF17171B),
-            outline = Color(0xFF63636E),
-            outlineVariant = Color(0xFFE6E6EB),
+            background = background,
+            onBackground = text,
+            surface = surface,
+            onSurface = text,
+            surfaceVariant = variant,
+            onSurfaceVariant = text,
+            outline = muted,
+            outlineVariant = line,
         ),
         typography = MaterialTheme.typography,
     ) {
-        Surface(color = Color.White, shape = MaterialTheme.shapes.small) {
+        Surface(color = background, shape = MaterialTheme.shapes.small) {
             Box(Modifier.padding(horizontal = 18.dp, vertical = 16.dp)) { content() }
         }
     }

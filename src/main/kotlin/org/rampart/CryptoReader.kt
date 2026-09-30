@@ -124,6 +124,9 @@ internal fun SealedPanel(
     store: () -> Store?,
     known: Set<String>,
     dark: Boolean,
+    /** A plain message's page. A theme change retints an open message without decrypting it again. */
+    pageBackground: String = "#ffffff",
+    pageText: String = "#1a1a1a",
     /** Shows the packet for summarising this thread with its decrypted text, before anything is sent. Null hides it. */
     onDecryptToSummarise: (() -> Unit)?,
 ) {
@@ -136,7 +139,29 @@ internal fun SealedPanel(
     var state by remember(account, summary.id) { mutableStateOf<PanelState>(PanelState.Opening) }
     var note by remember(account, summary.id) { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(account, summary.id, attempt) {
+    LaunchedEffect(account, summary.id, attempt, pageBackground, pageText) {
+        val cached = SealedView.of(account, summary.id)
+        val cachedBody = cached?.body
+        if (cached != null && cachedBody != null && !plainPageMatches(cached.reading, pageBackground, pageText)) {
+            val reading = withContext(Dispatchers.Default) {
+                prepareReading(
+                    summary.fromEmail,
+                    summary.from,
+                    cachedBody,
+                    emptyList(),
+                    emptyMap(),
+                    false,
+                    dark,
+                    known,
+                    pageBackground,
+                    pageText,
+                )
+            }
+            val view = cached.copy(reading = reading)
+            SealedView.put(account, summary.id, view)
+            state = PanelState.Done(view)
+            return@LaunchedEffect
+        }
         state = PanelState.Opening
         val result = withContext(Dispatchers.IO) {
             runCatching {
@@ -155,7 +180,18 @@ internal fun SealedPanel(
                     ).joinToString("\n\n").ifBlank { null }
                     val shown = body.copy(html = opened.html, text = text)
                     RookGate.markDecrypted(shown)
-                    val reading = prepareReading(summary.fromEmail, summary.from, shown, emptyList(), emptyMap(), false, dark, known)
+                    val reading = prepareReading(
+                        summary.fromEmail,
+                        summary.from,
+                        shown,
+                        emptyList(),
+                        emptyMap(),
+                        false,
+                        dark,
+                        known,
+                        pageBackground,
+                        pageText,
+                    )
                     val plaintext = text ?: opened.html?.let { org.jsoup.Jsoup.parse(it).text() }
                     val local = if (ring.index().searchInside) runCatching { store() }.getOrNull() else null
                     if (plaintext != null && local != null && EncryptedSearch.mayIndex(true, local.encrypted)) {

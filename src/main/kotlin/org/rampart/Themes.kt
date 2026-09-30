@@ -40,6 +40,14 @@ data class Theme(
     val line: Color,
     val accent: Color,
     val onAccent: Color,
+    /**
+     * The light palette the reading pane is drawn in, while the rest of the window keeps this theme.
+     *
+     * Null on an ordinary theme, which draws the message in the same palette as the window.
+     * A hybrid is dark and sets this to a light theme of its own. That light theme is not
+     * listed in [THEMES]: choosing the hybrid is what puts it on screen.
+     */
+    val page: Theme? = null,
 ) {
     fun scheme(): ColorScheme {
         val base = if (dark) darkColorScheme() else lightColorScheme()
@@ -83,6 +91,40 @@ data class Theme(
         )
     }
 }
+
+/**
+ * The light page a hybrid theme draws the open message on.
+ *
+ * Not an entry in [THEMES]. It exists only as [Theme.page], so the list stays the list
+ * of themes a person can pick.
+ */
+private fun readingPage(
+    key: String,
+    label: String,
+    background: Color,
+    surface: Color,
+    surfaceVariant: Color,
+    selection: Color,
+    text: Color,
+    muted: Color,
+    line: Color,
+    accent: Color,
+    onAccent: Color,
+) = Theme(
+    key = "$key-page",
+    label = label,
+    dark = false,
+    art = null,
+    background = background,
+    surface = surface,
+    surfaceVariant = surfaceVariant,
+    selection = selection,
+    text = text,
+    muted = muted,
+    line = line,
+    accent = accent,
+    onAccent = onAccent,
+)
 
 /**
  * Rampart's own two come first, because they are the ones cut from the brand rather than
@@ -368,7 +410,114 @@ val THEMES: List<Theme> = listOf(
         accent = Color(0xFF4FC3F7),
         onAccent = Color(0xFF000000),
     ),
+    // Dark window, light page. The page itself is not an entry in this list.
+    Theme(
+        key = "ink-paper",
+        label = "Ink and paper",
+        dark = true,
+        art = null,
+        background = Color(0xFF131316),
+        surface = Color(0xFF0F0F12),
+        surfaceVariant = Color(0xFF1B1B20),
+        selection = Color(0xFF2A1A21),
+        text = Color(0xFFECECF1),
+        muted = Color(0xFF9B9BA8),
+        line = Color(0xFF26262D),
+        accent = Color(0xFFFF7A96),
+        onAccent = Color(0xFF000000),
+        page = readingPage(
+            key = "ink-paper",
+            label = "Ink and paper",
+            background = Color(0xFFFFFFFF),
+            surface = Color(0xFFFFFFFF),
+            surfaceVariant = Color(0xFFF4F4F6),
+            selection = Color(0xFFFDECF0),
+            text = Color(0xFF17171B),
+            muted = Color(0xFF63636E),
+            line = Color(0xFFE6E6EB),
+            accent = Color(0xFFDB2D54),
+            onAccent = Color(0xFFFFFFFF),
+        ),
+    ),
+    Theme(
+        key = "midnight-cloud",
+        label = "Midnight and cloud",
+        dark = true,
+        art = null,
+        background = Color(0xFF10172A),
+        surface = Color(0xFF0C1222),
+        surfaceVariant = Color(0xFF182139),
+        selection = Color(0xFF1F2A4D),
+        text = Color(0xFFE6EAF5),
+        muted = Color(0xFF97A0BA),
+        line = Color(0xFF222C47),
+        accent = Color(0xFF8B95FF),
+        onAccent = Color(0xFF000000),
+        page = readingPage(
+            key = "midnight-cloud",
+            label = "Midnight and cloud",
+            background = Color(0xFFF5F8FC),
+            surface = Color(0xFFF9FBFE),
+            surfaceVariant = Color(0xFFEAF0F8),
+            selection = Color(0xFFE3E7FF),
+            text = Color(0xFF141A2B),
+            muted = Color(0xFF5B647A),
+            line = Color(0xFFDCE3EE),
+            accent = Color(0xFF4652C8),
+            onAccent = Color(0xFFFFFFFF),
+        ),
+    ),
+    Theme(
+        key = "forest-parchment",
+        label = "Forest and parchment",
+        dark = true,
+        art = null,
+        background = Color(0xFF14201A),
+        surface = Color(0xFF101A15),
+        surfaceVariant = Color(0xFF1B2A22),
+        selection = Color(0xFF223A2C),
+        text = Color(0xFFE7EFE9),
+        muted = Color(0xFF97AA9E),
+        line = Color(0xFF24352B),
+        accent = Color(0xFF7FD19B),
+        onAccent = Color(0xFF000000),
+        page = readingPage(
+            key = "forest-parchment",
+            label = "Forest and parchment",
+            background = Color(0xFFFBF8EE),
+            surface = Color(0xFFFDFBF4),
+            surfaceVariant = Color(0xFFF1ECDD),
+            selection = Color(0xFFE3F0E6),
+            text = Color(0xFF1D2520),
+            muted = Color(0xFF5F6B63),
+            line = Color(0xFFE4DDCB),
+            accent = Color(0xFF2F7D4F),
+            onAccent = Color(0xFFFFFFFF),
+        ),
+    ),
 )
+
+/**
+ * Whether the open message is drawn on a dark page.
+ *
+ * "dark" and "light" are the reader's own choice and they win. With nothing chosen, a
+ * hybrid theme still draws the message on its light page, because the dark half of that
+ * theme is the window and not the mail. Every other theme follows the surface already
+ * on screen, which is how a dark window has always meant a dark page.
+ */
+internal fun pageIsDark(messageMode: String, theme: Theme, surfaceLuminance: Float): Boolean = when (messageMode) {
+    "dark" -> true
+    "light" -> false
+    else -> theme.page == null && surfaceLuminance < 0.5f
+}
+
+/** CSS hex for a plain message on [theme], or the white page from before hybrids existed. */
+internal fun plainPageBackground(theme: Theme): String =
+    theme.page?.let { themeColourString(it.background).lowercase() } ?: "#ffffff"
+
+/** CSS hex for the text on [plainPageBackground]. */
+internal fun plainPageText(theme: Theme): String =
+    theme.page?.let { themeColourString(it.text).lowercase() } ?: "#1a1a1a"
 
 /** The stored theme, or the one that matches what the operating system is set to. */
 fun themeFor(key: String?, systemDark: Boolean): Theme =

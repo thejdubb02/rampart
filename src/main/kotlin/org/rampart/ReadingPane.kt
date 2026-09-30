@@ -159,6 +159,29 @@ internal fun TnefOverlay(
     }
 }
 
+/**
+ * The light page of a hybrid theme, around the whole reading pane.
+ *
+ * Header, sender, subject, toolbar, body and attachments all sit on it. The sidebar,
+ * the list and the settings stay on the dark chrome. A pane that is already on this
+ * page is left as it is, so the body is not wrapped a second time.
+ */
+@Composable
+internal fun ReadingPage(messageMode: String, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    val theme = LocalRampartTheme.current
+    val page = theme.page
+    val lightPage = page != null && !pageIsDark(messageMode, theme, MaterialTheme.colorScheme.surface.luminance())
+    if (page == null || !lightPage || MaterialTheme.colorScheme.background == page.background) {
+        content()
+        return
+    }
+    MaterialTheme(colorScheme = page.scheme(), typography = MaterialTheme.typography) {
+        Surface(color = page.background, contentColor = page.text, modifier = modifier) {
+            content()
+        }
+    }
+}
+
 @Composable
 internal fun Message(
     summary: Summary?,
@@ -340,11 +363,10 @@ internal fun Message(
      * that does not flash white at night, are both things somebody wants, and they were one
      * setting only because the window was the only thing that knew.
      */
-    val darkWindow = when (messageMode) {
-        "dark" -> true
-        "light" -> false
-        else -> MaterialTheme.colorScheme.surface.luminance() < 0.5f
-    }
+    val theme = LocalRampartTheme.current
+    val darkWindow = pageIsDark(messageMode, theme, MaterialTheme.colorScheme.surface.luminance())
+    val pageBackground = plainPageBackground(theme)
+    val pageText = plainPageText(theme)
     /*
      * The open path hands this in already built. A viewer that only has the bytes builds
      * the same page off to the side, so neither path parses HTML while drawing.
@@ -356,7 +378,7 @@ internal fun Message(
     val who = summary
     val letter = body
     if (reading == null && letter != null && who != null) {
-        LaunchedEffect(letter, attachments, imageBytes, showRemote, darkWindow, paper) {
+        LaunchedEffect(letter, attachments, imageBytes, showRemote, darkWindow, paper, pageBackground, pageText) {
             built = withContext(Dispatchers.Default) {
                 prepareReading(
                     who.fromEmail,
@@ -367,6 +389,8 @@ internal fun Message(
                     showRemote,
                     darkWindow && !paper,
                     knownDomains,
+                    pageBackground,
+                    pageText,
                 )
             }
         }
@@ -488,8 +512,15 @@ internal fun Message(
     // that pane rather than the pane itself, so it draws only its own content and lets its
     // width, not the window's height, decide how tall it is.
     val ownsPane = externalScroll == null
+    ReadingPage(messageMode, if (ownsPane) Modifier.fillMaxSize() else Modifier.fillMaxWidth()) {
     Box(
-        if (ownsPane) Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface) else Modifier.fillMaxWidth(),
+        if (ownsPane) Modifier.fillMaxSize().background(
+            if (LocalRampartTheme.current.page?.background == MaterialTheme.colorScheme.background) {
+                MaterialTheme.colorScheme.background
+            } else {
+                MaterialTheme.colorScheme.surface
+            },
+        ) else Modifier.fillMaxWidth(),
     ) {
         if (ownsPane) ThemeArt(Modifier.align(Alignment.BottomEnd))
         Column(if (ownsPane) Modifier.fillMaxSize() else Modifier.fillMaxWidth()) {
@@ -1186,6 +1217,7 @@ internal fun Message(
                 }
             }
         }
+    }
     }
 }
 

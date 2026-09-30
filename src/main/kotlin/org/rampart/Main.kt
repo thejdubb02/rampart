@@ -1199,13 +1199,14 @@ private fun Reader(
      * Whether an undesigned message is drawn dark.
      *
      * Computed while composing. The loader runs later, off this thread, and a theme
-     * read from there is not a theme read.
+     * read from there is not a theme read. [pageBackground] and [pageText] are the
+     * same snapshot: a hybrid's light page is decided here, and the loader must use
+     * this one rather than asking again later.
      */
-    val darkMail = when (messageMode) {
-        "dark" -> true
-        "light" -> false
-        else -> MaterialTheme.colorScheme.surface.luminance() < 0.5f
-    }
+    val openTheme = LocalRampartTheme.current
+    val darkMail = pageIsDark(messageMode, openTheme, MaterialTheme.colorScheme.surface.luminance())
+    val pageBackground = plainPageBackground(openTheme)
+    val pageText = plainPageText(openTheme)
 
     fun knownDomains(): Set<String> =
         books.values.flatten().map { domainOf(it.email) }.filter { it.isNotBlank() }.toSet()
@@ -1294,12 +1295,15 @@ private fun Reader(
         val remote = showRemoteFor(findSummary(key, id))
         val dark = darkMail
         val known = knownDomains()
+        val pageBg = pageBackground
+        val pageInk = pageText
         val kept = withContext(Dispatchers.IO) { runCatching { session(key).store?.kept(id) }.getOrNull() }
         if (!live()) return
         val showing = cards[slot]
         if (
             kept != null && showing?.reading != null && showing.pageRemote == remote &&
-            showing.body == restoredBody(key, kept.body) && cacheStillGood(key, id, kept)
+            showing.body == restoredBody(key, kept.body) && cacheStillGood(key, id, kept) &&
+            plainPageMatches(showing.reading, pageBg, pageInk)
         ) {
             if (!live()) return
             Diagnostics.count(Metric.MESSAGE_OPEN_CACHE_HIT)
@@ -1318,6 +1322,8 @@ private fun Reader(
                     remote,
                     dark,
                     known,
+                    pageBg,
+                    pageInk,
                 )
             }
             if (!live()) return
@@ -1360,6 +1366,8 @@ private fun Reader(
                     remote,
                     dark,
                     known,
+                    pageBg,
+                    pageInk,
                 )
             }
             if (!live()) return@time
@@ -4618,6 +4626,8 @@ private fun Reader(
             store = { open?.store },
             known = knownDomains(),
             dark = darkMail,
+            pageBackground = pageBackground,
+            pageText = pageText,
             onDecryptToSummarise = key?.let { k ->
                 val cfg = Assistant.config()
                 if (cfg.mode == AssistantMode.OFF) {
@@ -4658,10 +4668,15 @@ private fun Reader(
         // Show images rebuilds the page off this thread. The first build happened in
         // loadCard, with whatever the reader had already allowed. The account is part
         // of the key so two messages that share an id do not reuse each other's page.
-        LaunchedEffect(key, cardSummary.id, remote) {
+        // Dark and light already share one document. A hybrid's tint is written into
+        // the light page, so a new theme is a new page.
+        LaunchedEffect(key, cardSummary.id, remote, pageBackground, pageText) {
             val current = cardFor(cardSummary)
             val body = current.body ?: return@LaunchedEffect
-            if (current.reading != null && current.pageRemote == remote) return@LaunchedEffect
+            if (
+                current.reading != null && current.pageRemote == remote &&
+                plainPageMatches(current.reading, pageBackground, pageText)
+            ) return@LaunchedEffect
             val reading = withContext(Dispatchers.Default) {
                 prepareReading(
                     cardSummary.fromEmail,
@@ -4672,6 +4687,8 @@ private fun Reader(
                     remote,
                     darkMail,
                     knownDomains(),
+                    pageBackground,
+                    pageText,
                 )
             }
             if (key != null) updateCard(key, cardSummary.id) {
@@ -6416,6 +6433,7 @@ private fun Reader(
                 }
                 },
                 reading = {
+                    ReadingPage(messageMode, Modifier.fillMaxSize()) {
                     if (picked.size > 1) {
                 Picked(
                     count = picked.size,
@@ -6486,7 +6504,7 @@ private fun Reader(
                     } else {
                         val message = openMessage
             if (message == null) {
-                Message(summary = null, body = null, onLink = { confirm = it })
+                Message(summary = null, body = null, onLink = { confirm = it }, messageMode = messageMode)
             } else {
                 /*
                  * One place for the card, whether or not the thread has arrived.
@@ -6502,7 +6520,11 @@ private fun Reader(
                 val stackScroll = rememberScrollState()
                 Box(
                     Modifier.fillMaxSize().background(
-                        if (stacked) MaterialTheme.colorScheme.surface else Color.Transparent,
+                        if (stacked && LocalRampartTheme.current.page?.background != MaterialTheme.colorScheme.background) {
+                            MaterialTheme.colorScheme.surface
+                        } else {
+                            Color.Transparent
+                        },
                     ),
                 ) {
                     if (stacked) ThemeArt(Modifier.align(Alignment.BottomEnd))
@@ -6589,6 +6611,7 @@ private fun Reader(
                     }
                 }
             }
+                    }
                     }
                 },
             )
@@ -6782,6 +6805,7 @@ private fun Reader(
                         seen = true,
                     ),
                     body = mail.body,
+                    messageMode = messageMode,
                     readOnly = true,
                     onClose = {
                         attached = null

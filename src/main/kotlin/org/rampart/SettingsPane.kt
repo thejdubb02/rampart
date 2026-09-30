@@ -2569,7 +2569,7 @@ private fun ThemeCard(theme: Theme, selected: Boolean, onPick: () -> Unit) {
             )
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf(theme.accent, theme.surface, theme.surfaceVariant, theme.selection).forEach { swatch ->
+                listOfNotNull(theme.accent, theme.surface, theme.surfaceVariant, theme.selection, theme.page?.background).forEach { swatch ->
                     Box(
                         Modifier.size(14.dp).clip(CircleShape).background(swatch)
                             .border(1.dp, theme.line, CircleShape),
