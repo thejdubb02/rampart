@@ -47,6 +47,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
@@ -600,11 +602,13 @@ private fun AddAccountButton(onClick: () -> Unit) {
                     .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    "+",
-                    fontSize = 16.sp,
-                    color = MaterialTheme.colorScheme.outline,
-                )
+                // Drawn, not a "+" glyph: the font puts its plus below the middle of the line box.
+                val colour = MaterialTheme.colorScheme.outline
+                Canvas(Modifier.size(10.dp)) {
+                    val w = 1.5.dp.toPx()
+                    drawLine(colour, Offset(0f, center.y), Offset(size.width, center.y), w)
+                    drawLine(colour, Offset(center.x, 0f), Offset(center.x, size.height), w)
+                }
             }
         }
     }
