@@ -67,6 +67,21 @@ is found.
 
 ---
 
+## Next up (set 2026-09-30)
+
+The working order for the next stretch, most important first. Card numbers are the RAM board; each card says what done means. Builder briefs for the queued feature work are in `docs/briefs/`, and the audits behind the fix cards are in `docs/audits/`.
+
+1. **RAM-125, Rook safety (urgent).** Every mailbox change behind a confirmation card, and each account's conversation kept separate. A message must never be able to steer Rook into changing mail.
+2. **RAM-124, the lost sign-off.** An agent draft reopened and sent from Rampart lost "Best regards," and the signature. Cause not yet found; capture the stored draft next time before sending.
+3. **RAM-127, eight feature bugs** from the 2026-09-29 audit (wrong-account warning on reopen, update prefetch, calendar time zone, contact history totals and Bcc, tray badge and shared mailboxes, UI freezes on drag and paste, spell check language).
+4. **RAM-126, Rook reliability.** Tool calls from any model, typed arguments, token budgets, a tidy panel.
+5. **Review and ship what is built:** the account switcher in the right-hand bar (RAM-117, last part) and the focused inbox (RAM-122).
+6. **RAM-128 Appearance extras, then RAM-129 mail layouts, then RAM-27 sender pictures** (briefs ready).
+7. **RAM-110 follow-up flags and offline attachments**: the cloud session's branch never reached GitHub; get it pushed or rebuild from the card.
+8. **RAM-44** the fifty thousand message test, **RAM-39** Gmail and Microsoft sign-in (needs client IDs registered), **RAM-72** a failed deferred update, **RAM-113** confirm the update icon on a real click.
+
+Waiting on a decision from Justin: RAM-111 (may Rook run on open, or only on a button press).
+
 ## The order
 
 Reset 2026-09-17 on one instruction: **make it the daily driver first.** The measure is not
