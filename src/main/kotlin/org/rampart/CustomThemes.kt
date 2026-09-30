@@ -2,6 +2,7 @@ package org.rampart
 
 import androidx.compose.ui.graphics.Color
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -22,28 +23,27 @@ internal object ThemeJson {
 
     fun encode(theme: Theme): String = json.encodeToString(JsonObject.serializer(), objectOf(theme))
 
+    /**
+     * A hybrid theme carries a light reading page under `page`.
+     *
+     * The page is the same kind of colours as the window, drawn light, and it is only
+     * valid when the window itself is dark. A light theme that also claims a page is
+     * rejected: there is no second surface to put it on. A `description` may be present
+     * and is ignored, so a catalogue file can explain itself without becoming part of
+     * the theme. Files written before pages existed have no `page` and load unchanged.
+     */
     fun decode(text: String): Theme {
         val root = json.parseToJsonElement(text).jsonObject
-        fun required(name: String): String = root[name]?.jsonPrimitive?.contentOrNull
-            ?: throw IllegalArgumentException("Theme JSON is missing $name.")
-        val label = required("name").trim()
+        val label = required(root, "name").trim()
         require(label.isNotEmpty()) { "Theme name cannot be empty." }
-        return Theme(
-            key = customThemeKey(label),
-            label = label,
-            dark = root["dark"]?.jsonPrimitive?.content?.toBooleanStrictOrNull()
-                ?: throw IllegalArgumentException("Theme JSON has an invalid dark value."),
-            art = null,
-            background = parseThemeColour(required("background")),
-            surface = parseThemeColour(required("surface")),
-            surfaceVariant = parseThemeColour(required("surfaceVariant")),
-            selection = parseThemeColour(required("selection")),
-            text = parseThemeColour(required("text")),
-            muted = parseThemeColour(required("muted")),
-            line = parseThemeColour(required("line")),
-            accent = parseThemeColour(required("accent")),
-            onAccent = parseThemeColour(required("onAccent")),
-        )
+        val dark = root["dark"]?.jsonPrimitive?.content?.toBooleanStrictOrNull()
+            ?: throw IllegalArgumentException("Theme JSON has an invalid dark value.")
+        val theme = palette(root, customThemeKey(label), label, dark)
+        val pageNode = root["page"]
+        if (pageNode == null || pageNode is JsonNull) return theme
+        if (!dark) throw IllegalArgumentException("A theme with a reading page has to be dark.")
+        val page = palette(pageNode.jsonObject, "${theme.key}-page", label, dark = false)
+        return theme.copy(page = page)
     }
 
     internal fun objectOf(theme: Theme): JsonObject = buildJsonObject {
@@ -58,7 +58,42 @@ internal object ThemeJson {
         put("line", themeColourString(theme.line))
         put("accent", themeColourString(theme.accent))
         put("onAccent", themeColourString(theme.onAccent))
+        // Omitted on an ordinary theme, so a file that never had a page stays the file it was.
+        theme.page?.let { page ->
+            put("page", buildJsonObject {
+                put("background", themeColourString(page.background))
+                put("surface", themeColourString(page.surface))
+                put("surfaceVariant", themeColourString(page.surfaceVariant))
+                put("selection", themeColourString(page.selection))
+                put("text", themeColourString(page.text))
+                put("muted", themeColourString(page.muted))
+                put("line", themeColourString(page.line))
+                put("accent", themeColourString(page.accent))
+                put("onAccent", themeColourString(page.onAccent))
+            })
+        }
     }
+
+    private fun palette(obj: JsonObject, key: String, label: String, dark: Boolean): Theme = Theme(
+        key = key,
+        label = label,
+        dark = dark,
+        art = null,
+        background = parseThemeColour(required(obj, "background")),
+        surface = parseThemeColour(required(obj, "surface")),
+        surfaceVariant = parseThemeColour(required(obj, "surfaceVariant")),
+        selection = parseThemeColour(required(obj, "selection")),
+        text = parseThemeColour(required(obj, "text")),
+        muted = parseThemeColour(required(obj, "muted")),
+        line = parseThemeColour(required(obj, "line")),
+        accent = parseThemeColour(required(obj, "accent")),
+        onAccent = parseThemeColour(required(obj, "onAccent")),
+        // A page is a palette, not a theme that has its own page.
+        page = null,
+    )
+
+    private fun required(obj: JsonObject, name: String): String = obj[name]?.jsonPrimitive?.contentOrNull
+        ?: throw IllegalArgumentException("Theme JSON is missing $name.")
 }
 
 internal fun customThemeKey(name: String): String = CUSTOM_THEME_PREFIX + name.trim().lowercase()

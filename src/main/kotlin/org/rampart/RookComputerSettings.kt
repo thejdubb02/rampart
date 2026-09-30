@@ -126,6 +126,16 @@ internal class ComputerPlace(private val choices: ComputerChoices) : SettingPlac
                     }
                 },
             ),
+            Local(
+                entry(
+                    "catalogue", "Catalogue",
+                    "Themes and message templates you can add. Blank uses the catalogue Rampart ships with. Nothing is fetched until the catalogue page is opened.",
+                    SettingKind.Words(500), "Catalogue",
+                    "catalogue catalog themes templates addon add-on browse",
+                ),
+                { JsonPrimitive(Settings.catalogue()) },
+                null,
+            ),
             oneOf(
                 "icons", "Icons", "The icon pack, kept apart from the theme so either can change without the other.",
                 "Themes", "icon pack glyphs appearance", choices.iconPacks,

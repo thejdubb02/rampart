@@ -67,6 +67,17 @@ object Settings {
     }
 
     /**
+     * Where the add-on catalogue's index lives, or blank for [DEFAULT_CATALOGUE].
+     *
+     * Blank is the normal case. Nothing is fetched while this sits here: the catalogue
+     * is contacted only when its page is opened. Kept on this computer, the same way a
+     * companion server address is, because it says where this install goes to ask.
+     */
+    fun catalogue(): String = read()["catalogue"]?.jsonPrimitive?.contentOrNull.orEmpty()
+
+    fun setCatalogue(value: String) = write { put("catalogue", JsonPrimitive(value.trim())) }
+
+    /**
      * Saved search queries stored locally.
      *
      * Kept in the local settings file alongside other preferences.

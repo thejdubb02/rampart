@@ -238,7 +238,9 @@ internal fun SettingsPane(
                             "themes" -> ThemesPage(
                                 onTheme, iconPack, onIconPack, onTintRowsByTag, onLoader, onTrackingServer, onDensity,
                                 sidebarIcons, onSidebarIcons, onAppearance, onOrderAll,
+                                onBrowseCatalogue = { page = "catalogue" },
                             )
+                            "catalogue" -> CataloguePage()
                             "identities" -> IdentitiesPage(
                                 accounts, account, onAccount, identities, signatureError, onSignature, onPickSignatureImage,
                             )
@@ -272,6 +274,7 @@ internal val SettingsPages: List<Triple<String, String, String>> = listOf(
     Triple("notifications", "Notifications", "General"),
     Triple("region", "Language, Region & Time", "General"),
     Triple("themes", "Themes", "Appearance"),
+    Triple("catalogue", "Catalogue", "Appearance"),
     // Kept with the other Mail pages. The nav groups in list order, so a page filed out of
     // sequence makes its heading appear twice.
     Triple("reading", "Reading and archiving", "Mail"),
@@ -464,6 +467,7 @@ private fun ThemesPage(
     onSidebarIcons: (SidebarIcons) -> Unit = {},
     onAppearance: () -> Unit = {},
     onOrderAll: (Boolean) -> Unit = {},
+    onBrowseCatalogue: () -> Unit = {},
 ) {
     val current = LocalRampartTheme.current
     var customThemes by remember { mutableStateOf(Settings.customThemes()) }
@@ -591,6 +595,7 @@ private fun ThemesPage(
                 }
                 .onFailure { themeMessage = it.message ?: "The theme could not be imported." }
         }) { Text("Import") }
+        OutlinedButton(onClick = onBrowseCatalogue) { Text("Browse catalogue") }
     }
 
     Spacer(Modifier.height(22.dp))
