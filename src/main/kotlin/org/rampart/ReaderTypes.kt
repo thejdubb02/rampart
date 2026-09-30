@@ -146,6 +146,10 @@ internal data class RowActions(
      */
     val markIds: ((Summary, Set<String>, Boolean) -> Unit)? = null,
     val starIds: ((Summary, Set<String>, Boolean) -> Unit)? = null,
+    /** Set a per-sender override to always treat this sender as Focused. */
+    val alwaysFocused: ((Summary) -> Unit)? = null,
+    /** Set a per-sender override to always treat this sender as Other. */
+    val alwaysOther: ((Summary) -> Unit)? = null,
 )
 
 /** Roles that already have a button on the message, so Move does not offer them again. */

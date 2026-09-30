@@ -296,5 +296,7 @@ internal fun threadActions(base: RowActions, rowOf: (Summary) -> ThreadRow?): Ro
                 }
             }
         },
+        alwaysFocused = base.alwaysFocused?.let { f -> { m: Summary -> f(raw(m)) } },
+        alwaysOther = base.alwaysOther?.let { f -> { m: Summary -> f(raw(m)) } },
     )
 }

@@ -816,4 +816,30 @@ object Settings {
     fun lastStart(): Long = read()["lastStart"]?.jsonPrimitive?.longOrNull ?: 0L
 
     fun setLastStart(time: Long) = write { put("lastStart", JsonPrimitive(time)) }
+
+    /**
+     * Whether the inbox splits messages into Focused and Other tabs. Off by default.
+     */
+    fun focusedInbox(): Boolean = read()["focusedInbox"]?.jsonPrimitive?.booleanOrNull ?: false
+
+    fun setFocusedInbox(value: Boolean) = write { put("focusedInbox", JsonPrimitive(value)) }
+
+    /**
+     * Explicit per-sender overrides for the focused inbox, keyed by lowercased email address.
+     */
+    fun focusOverrides(): Map<String, String> =
+        (read()["focusOverrides"] as? JsonObject)?.mapNotNull { (key, value) ->
+            (value as? JsonPrimitive)?.contentOrNull?.let { key.lowercase() to it }
+        }?.toMap() ?: emptyMap()
+
+    /**
+     * Sets or clears an explicit focused/other override for an email address.
+     */
+    fun setFocusOverride(email: String, override: String?) = write {
+        val current = (this["focusOverrides"] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
+        val key = email.trim().lowercase()
+        if (override == null) current.remove(key) else current[key] = JsonPrimitive(override)
+        put("focusOverrides", JsonObject(current))
+    }
 }
+

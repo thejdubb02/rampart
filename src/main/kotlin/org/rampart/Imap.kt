@@ -870,6 +870,9 @@ internal class Imap private constructor(
             // RFC822.SIZE comes with the envelope fetch, so this costs nothing extra.
             size = runCatching { message.size.toLong() }.getOrNull()?.coerceAtLeast(0L) ?: 0L,
             listId = listIdOf(runCatching { message.getHeader("List-Id")?.firstOrNull() }.getOrNull()),
+            listUnsubscribe = headerText(message, "List-Unsubscribe"),
+            precedence = headerText(message, "Precedence"),
+            autoSubmitted = headerText(message, "Auto-Submitted"),
             // To, Cc and Bcc ride in the ENVELOPE already fetched, so this is not another
             // request. Bcc is usually empty on mail you received. On mail you sent it is
             // the only place a blind copy is written, and leaving it out drops that person.
@@ -913,8 +916,9 @@ internal fun imapId(uid: Long, uidValidity: Long, mailboxId: String): String = "
  * Everything a row in the list shows, asked for in one go.
  *
  * ENVELOPE carries the sender, the subject and both dates, FLAGS the read and starred
- * state, and UID the id the rest of Rampart addresses the message by. Nothing else is
- * asked for: the body is not, which is what keeps a page of a folder small.
+ * state, and UID the id the rest of Rampart addresses the message by. The body is not
+ * asked for, which is what keeps a page of a folder small. A few named headers ride
+ * along in that same fetch: List-Id, and the three the focused inbox reads.
  */
 /**
  * Everything reading one message touches: the structure and size on top of what a row
@@ -937,9 +941,16 @@ private val summaryFields = FetchProfile().apply {
     add(FetchProfile.Item.FLAGS)
     add(UIDFolder.FetchProfileItem.UID)
     add("Message-ID")
-    // One more header in the same fetch, for splitting a saved search by mailing list.
+    // Same fetch as the row. List-Id splits a saved search. The other three are all
+    // the focused inbox reads from the header block.
     add("List-Id")
+    add("List-Unsubscribe")
+    add("Precedence")
+    add("Auto-Submitted")
 }
+
+private fun headerText(message: MimeMessage, name: String): String =
+    runCatching { message.getHeader(name)?.firstOrNull()?.trim() }.getOrNull().orEmpty()
 
 /** The UID half, or -1 when this is not one of ours, which finds no message. */
 internal fun uidOf(id: String): Long = id.substringBefore(' ').toLongOrNull() ?: -1L

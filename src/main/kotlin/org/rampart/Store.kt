@@ -303,6 +303,17 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         if ("listId" !in messageColumns) connection.createStatement().use {
             it.execute("ALTER TABLE message ADD COLUMN listId TEXT NOT NULL DEFAULT ''")
         }
+        // The three headers the focused inbox reads. A row written before has none,
+        // which stays empty until that message is fetched again. Empty is personal mail.
+        if ("listUnsubscribe" !in messageColumns) connection.createStatement().use {
+            it.execute("ALTER TABLE message ADD COLUMN listUnsubscribe TEXT NOT NULL DEFAULT ''")
+        }
+        if ("precedence" !in messageColumns) connection.createStatement().use {
+            it.execute("ALTER TABLE message ADD COLUMN precedence TEXT NOT NULL DEFAULT ''")
+        }
+        if ("autoSubmitted" !in messageColumns) connection.createStatement().use {
+            it.execute("ALTER TABLE message ADD COLUMN autoSubmitted TEXT NOT NULL DEFAULT ''")
+        }
         if ("keywordsIndexed" !in messageColumns) connection.createStatement().use {
             it.execute("ALTER TABLE message ADD COLUMN keywordsIndexed INTEGER NOT NULL DEFAULT 0")
         }
@@ -649,14 +660,17 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             connection.prepareStatement(
                 """
                 INSERT INTO message (id, mailbox, thread, threadSize, sender, senderEmail,
-                    subject, receivedAt, preview, seen, flagged, keywords, messageId, size, listId, keywordsIndexed)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+                    subject, receivedAt, preview, seen, flagged, keywords, messageId, size, listId,
+                    listUnsubscribe, precedence, autoSubmitted, keywordsIndexed)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
                 ON CONFLICT(id) DO UPDATE SET
                     mailbox=excluded.mailbox, thread=excluded.thread, threadSize=excluded.threadSize,
                     sender=excluded.sender, senderEmail=excluded.senderEmail, subject=excluded.subject,
                     receivedAt=excluded.receivedAt, preview=excluded.preview, seen=excluded.seen,
                     flagged=excluded.flagged, keywords=excluded.keywords, messageId=excluded.messageId,
-                    size=excluded.size, listId=excluded.listId, keywordsIndexed=1
+                    size=excluded.size, listId=excluded.listId,
+                    listUnsubscribe=excluded.listUnsubscribe, precedence=excluded.precedence,
+                    autoSubmitted=excluded.autoSubmitted, keywordsIndexed=1
                 """.trimIndent(),
             ).use { s ->
                 located.values.forEach { (mailbox, m) ->
@@ -675,6 +689,9 @@ internal class Store(private val connection: Connection) : AutoCloseable {
                         s.setString(13, m.messageId)
                         s.setLong(14, m.size)
                         s.setString(15, m.listId)
+                        s.setString(16, m.listUnsubscribe)
+                        s.setString(17, m.precedence)
+                        s.setString(18, m.autoSubmitted)
                         s.addBatch()
                 }
                 s.executeBatch()
@@ -1632,4 +1649,7 @@ private fun summaryOf(rows: java.sql.ResultSet) = Summary(
     messageId = rows.getString("messageId"),
     size = rows.getLong("size"),
     listId = rows.getString("listId"),
+    listUnsubscribe = rows.getString("listUnsubscribe").orEmpty(),
+    precedence = rows.getString("precedence").orEmpty(),
+    autoSubmitted = rows.getString("autoSubmitted").orEmpty(),
 )

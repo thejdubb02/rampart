@@ -149,6 +149,8 @@ internal val SYNCED_SETTINGS: Map<String, SyncShape> = mapOf(
     "timeFormat" to SyncShape.TEXT,
     "timeZone" to SyncShape.TEXT,
     "weekStart" to SyncShape.TEXT,
+    "focusedInbox" to SyncShape.TEXT,
+    "focusOverrides" to SyncShape.MAP_OF_TEXT,
 )
 
 /**

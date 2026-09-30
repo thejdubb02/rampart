@@ -1078,6 +1078,30 @@ private fun ReadingPage(
             onCheckedChange = { exactIdentities = it; Settings.setExactIdentitiesOnly(it) },
         )
     }
+    var focusedInbox by remember { mutableStateOf(Settings.focusedInbox()) }
+    Row(
+        Modifier.fillMaxWidth().clickable {
+            focusedInbox = !focusedInbox
+            Settings.setFocusedInbox(focusedInbox)
+        }.padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Focused inbox", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "Separate personal mail into Focused and bulk mail into Other in your inbox.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+        Switch(
+            checked = focusedInbox,
+            onCheckedChange = {
+                focusedInbox = it
+                Settings.setFocusedInbox(it)
+            },
+        )
+    }
     var delimiter by remember { mutableStateOf(Settings.subAddressDelimiter().toString()) }
     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Text("Sub-address character", style = MaterialTheme.typography.bodyMedium)

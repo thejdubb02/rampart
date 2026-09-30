@@ -787,6 +787,10 @@ private fun Reader(
     // last folder's rows under the new folder's name while the new one loads.
     var emailsFrom by remember { mutableStateOf<Any?>(null) }
     var selected by remember { mutableStateOf<Summary?>(null) }
+    var focusedInbox by remember { mutableStateOf(Settings.focusedInbox()) }
+    var focusOverrides by remember { mutableStateOf(Settings.focusOverrides()) }
+    var focusTab by remember { mutableStateOf(FocusTab.FOCUSED) }
+    var expandedBundles by remember { mutableStateOf(setOf<String>()) }
     /**
      * Everything fetched for the open conversation's messages, by id. See [Card].
      *
@@ -2189,6 +2193,8 @@ private fun Reader(
         if ("settings.messageScale" in changed) messageScale = Settings.messageScale()
         if ("settings.mailLayout" in changed) MailLayoutState.reload()
         if ("settings.savedSearches" in changed) savedSearches = Settings.savedSearches()
+        if ("settings.focusedInbox" in changed) focusedInbox = Settings.focusedInbox()
+        if ("settings.focusOverrides" in changed) focusOverrides = Settings.focusOverrides()
     }
     CalendarJumpFollows(calendarOpen) {
         calendarOpen = true; settingsOpen = false; contactsOpen = false; dashboardOpen = false
@@ -4405,6 +4411,20 @@ private fun Reader(
         },
         markIds = { message, ids, read -> accountOf(message)?.let { setSeen(it, ids, read) } },
         starIds = { message, ids, on -> accountOf(message)?.let { starMany(it, ids, on) } },
+        alwaysFocused = { message ->
+            val email = message.fromEmail.trim().lowercase()
+            if (email.isNotEmpty()) {
+                Settings.setFocusOverride(email, "focused")
+                focusOverrides = Settings.focusOverrides()
+            }
+        },
+        alwaysOther = { message ->
+            val email = message.fromEmail.trim().lowercase()
+            if (email.isNotEmpty()) {
+                Settings.setFocusOverride(email, "other")
+                focusOverrides = Settings.focusOverrides()
+            }
+        },
     )
 
     /**
@@ -6122,6 +6142,32 @@ private fun Reader(
             // The undo card sits over the list, not the message: the message is a native panel
             // that paints over anything drawn on top of it. When the focused layout covers
             // the list, the same card sits between Back and the message, still off that panel.
+            val isInboxView = !showingResults && query.isEmpty() && viewingPerson == null &&
+                viewingTag == null && activeSavedSearch == null &&
+                here?.second?.role == "inbox" &&
+                (here?.first != ALL_ACCOUNTS || here?.second?.id == ALL_ACCOUNTS)
+            val focusActive = focusedInbox && isInboxView
+            // The book this window already keeps. A sender in it stays in Focused.
+            // Someone moved between the tabs is recorded in focusOverrides, passed with it.
+            val memory = books
+            val focusKnown = if (focusActive) {
+                val k = here?.first?.takeIf { it != ALL_ACCOUNTS }
+                if (k != null) knownAddresses(k, memory)
+                else sessions.flatMap { knownAddresses(it.key, memory) }.toSet()
+            } else emptySet()
+
+            val (focusedEmails, otherEmails) = if (focusActive) {
+                emails.partition { isFocused(it, focusKnown, focusOverrides) }
+            } else {
+                emails to emptyList()
+            }
+
+            val otherUnread = if (focusActive) otherEmails.count { !it.seen } else 0
+            val otherBundles = if (focusActive) bundleOtherMessages(otherEmails) else emptyList()
+            val shownEmails = if (focusActive) {
+                if (focusTab == FocusTab.FOCUSED) focusedEmails else otherEmails
+            } else emails
+
             val openMessage = selected
             MailPanes(
                 modifier = Modifier.weight(1f).fillMaxHeight(),
@@ -6135,9 +6181,18 @@ private fun Reader(
                 onBack = { focusedNav = focusedNav.backed() },
                 list = { wide ->
                 MessageList(
-                    emails = emails,
+                    emails = shownEmails,
                     selected = selected,
                     loading = loading,
+                    focusEnabled = focusActive,
+                    focusTab = focusTab,
+                    onFocusTab = { focusTab = it; selected = null },
+                    otherUnread = otherUnread,
+                    otherBundles = otherBundles,
+                    expandedBundles = expandedBundles,
+                    onToggleBundle = { key ->
+                        expandedBundles = if (key in expandedBundles) expandedBundles - key else expandedBundles + key
+                    },
                     title = listHeading(
                         searching = showingResults,
                         query = query,

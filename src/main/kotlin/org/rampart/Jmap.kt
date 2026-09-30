@@ -170,6 +170,15 @@ data class Summary(
     /** The List-Id identifier, see [listIdOf]. Empty for mail that did not come from a list. */
     val listId: String = "",
     /**
+     * List-Unsubscribe, Precedence and Auto-Submitted from the list fetch.
+     *
+     * Kept on the row so the focused inbox can sort a newsletter without opening it.
+     * Empty when that header was not on the message.
+     */
+    val listUnsubscribe: String = "",
+    val precedence: String = "",
+    val autoSubmitted: String = "",
+    /**
      * Every address in To, Cc and Bcc, lowercased.
      *
      * Kept so the local copy can say who a message went to, which is what lets a person's
@@ -2289,6 +2298,10 @@ internal val emailGetProperties =
         "to", "cc", "bcc",
         // For the table's size column and for splitting a saved search by mailing list.
         "size", "header:List-Id:asText",
+        // The focused inbox. These three only: the rest of the header block stays unread.
+        "header:List-Unsubscribe:asText",
+        "header:Precedence:asText",
+        "header:Auto-Submitted:asText",
     )
 
 /**
@@ -2332,7 +2345,14 @@ private fun jsonToSummary(o: JsonObject): Summary = Summary(
     size = o["size"]?.num() ?: 0L,
     listId = listIdOf((o["header:List-Id:asText"] as? JsonPrimitive)?.contentOrNull),
     recipients = recipientsIn(o),
+    listUnsubscribe = headerAsText(o, "List-Unsubscribe"),
+    precedence = headerAsText(o, "Precedence"),
+    autoSubmitted = headerAsText(o, "Auto-Submitted"),
 )
+
+/** One header the list asked for by name. Missing or null is empty, not an error. */
+private fun headerAsText(email: JsonObject, name: String): String =
+    (email["header:$name:asText"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
 
 /**
  * Every address a message was sent to, for the local copy.

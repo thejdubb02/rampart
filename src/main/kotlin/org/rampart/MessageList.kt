@@ -1,5 +1,6 @@
 package org.rampart
 
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -360,6 +361,18 @@ internal fun MessageList(
      * the whole width and a fixed strip in the middle of it would be a mistake.
      */
     fillWidth: Boolean = false,
+    /** Whether the focused inbox tabs are active for this list. */
+    focusEnabled: Boolean = false,
+    /** Which tab is currently active. */
+    focusTab: FocusTab = FocusTab.FOCUSED,
+    onFocusTab: (FocusTab) -> Unit = {},
+    /** Unread count on the Other tab. */
+    otherUnread: Int = 0,
+    /** Bundled bulk messages by sender for the Other tab. */
+    otherBundles: List<FocusBundle> = emptyList(),
+    /** Which sender bundles are currently expanded. */
+    expandedBundles: Set<String> = emptySet(),
+    onToggleBundle: (String) -> Unit = {},
     onSelect: (Summary, ctrl: Boolean, shift: Boolean) -> Unit,
 ) {
     // Table and Cards are drawn in ListLayoutsUi.kt. Normal is the path below, unchanged.
@@ -459,6 +472,14 @@ internal fun MessageList(
                 }
             }
         }
+        if (focusEnabled) {
+            FocusTabs(
+                selected = focusTab,
+                otherUnread = otherUnread,
+                onSelect = onFocusTab,
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        }
         QuickFilterRow(
             filters = filters,
             onFilters = onFilters,
@@ -511,6 +532,7 @@ internal fun MessageList(
             when {
                 // A refresh of a list that is already here must not replace it.
                 emails.isNotEmpty() -> Unit
+                focusEnabled && focusTab == FocusTab.OTHER && otherBundles.isNotEmpty() -> Unit
                 loading -> ListSkeleton()
                 else -> EmptyFolder(
                     searching = searching,
@@ -522,26 +544,64 @@ internal fun MessageList(
             if (emails.isNotEmpty() && layout != ListLayout.NORMAL) {
                 LayoutList(layout, shown, order, selected, picked, threadedActions, loadingMore, scroll, pick)
             }
-            if (emails.isNotEmpty() && layout == ListLayout.NORMAL) {
+            if ((emails.isNotEmpty() || (focusEnabled && focusTab == FocusTab.OTHER && otherBundles.isNotEmpty())) && layout == ListLayout.NORMAL) {
                 LazyColumn(Modifier.fillMaxSize(), state = scroll) {
-                    // LazyColumn only builds the rows on screen, so a folder with thirty
-                    // thousand messages in it costs the same as one with twenty. What that
-                    // folder still needs is the next page, which is what `onNeedMore` is.
-                    items(rowsInOrder, key = { rowToken(it) }) { message ->
-                        Column(Modifier.rowChange()) {
-                        MessageRow(
-                            message = message,
-                            selected = rowToken(message) == selected?.let(::rowToken) || rowToken(message) in picked,
-                            accountLabel = accountLabels[message.account],
-                            actions = threadedActions,
-                            showHover = showHover,
-                            scheduledAt = scheduled[message.id],
-                            trackingBadge = trackingBadges[message.messageId],
-                            density = density,
-                            onDrag = drag,
-                            onSelect = pick,
-                        )
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    if (focusEnabled && focusTab == FocusTab.OTHER) {
+                        otherBundles.forEach { bundle ->
+                            val expanded = bundle.senderEmail in expandedBundles
+                            val bundleSelected = bundle.messages.any { m ->
+                                rowToken(m) == selected?.let(::rowToken) || rowToken(m) in picked
+                            }
+                            item(key = "bundle-${bundle.senderEmail}") {
+                                FocusBundleRow(
+                                    bundle = bundle,
+                                    expanded = expanded,
+                                    selected = bundleSelected,
+                                    density = density,
+                                    actions = threadedActions,
+                                    onToggle = { onToggleBundle(bundle.senderEmail) },
+                                    onSelect = pick,
+                                )
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            }
+                            if (expanded) {
+                                items(bundle.messages, key = { rowToken(it) }) { message ->
+                                    MessageRow(
+                                        message = message,
+                                        selected = rowToken(message) == selected?.let(::rowToken) || rowToken(message) in picked,
+                                        accountLabel = accountLabels[message.account],
+                                        actions = threadedActions,
+                                        showHover = showHover,
+                                        scheduledAt = scheduled[message.id],
+                                        trackingBadge = trackingBadges[message.messageId],
+                                        density = density,
+                                        onDrag = drag,
+                                        onSelect = pick,
+                                    )
+                                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                }
+                            }
+                        }
+                    } else {
+                        // LazyColumn only builds the rows on screen, so a folder with thirty
+                        // thousand messages in it costs the same as one with twenty. What that
+                        // folder still needs is the next page, which is what `onNeedMore` is.
+                        items(rowsInOrder, key = { rowToken(it) }) { message ->
+                            Column(Modifier.rowChange()) {
+                                MessageRow(
+                                    message = message,
+                                    selected = rowToken(message) == selected?.let(::rowToken) || rowToken(message) in picked,
+                                    accountLabel = accountLabels[message.account],
+                                    actions = threadedActions,
+                                    showHover = showHover,
+                                    scheduledAt = scheduled[message.id],
+                                    trackingBadge = trackingBadges[message.messageId],
+                                    density = density,
+                                    onDrag = drag,
+                                    onSelect = pick,
+                                )
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            }
                         }
                     }
                     if (loadingMore) {
@@ -1123,6 +1183,11 @@ internal fun RowMenu(
         val clipboard = LocalClipboardManager.current
         if (message.fromEmail.isNotBlank()) {
             entry("Copy address") { clipboard.setText(AnnotatedString(message.fromEmail)) }
+            if (actions.alwaysFocused != null || actions.alwaysOther != null) {
+                HorizontalDivider()
+                actions.alwaysFocused?.let { entry("Always Focused") { it(message) } }
+                actions.alwaysOther?.let { entry("Always Other") { it(message) } }
+            }
         }
         actions.filter?.let { offer ->
             HorizontalDivider()
@@ -1291,3 +1356,191 @@ internal fun pickedAfter(
         else -> emptySet()
     }
 }
+
+/**
+ * The Focused and Other tabs at the top of an inbox list.
+ */
+@Composable
+internal fun FocusTabs(
+    selected: FocusTab,
+    otherUnread: Int,
+    onSelect: (FocusTab) -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        FocusTabButton(
+            label = "Focused",
+            selected = selected == FocusTab.FOCUSED,
+            unreadCount = 0,
+            onClick = { onSelect(FocusTab.FOCUSED) },
+        )
+        FocusTabButton(
+            label = "Other",
+            selected = selected == FocusTab.OTHER,
+            unreadCount = otherUnread,
+            onClick = { onSelect(FocusTab.OTHER) },
+        )
+    }
+}
+
+@Composable
+private fun FocusTabButton(
+    label: String,
+    selected: Boolean,
+    unreadCount: Int,
+    onClick: () -> Unit,
+) {
+    val bg = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
+    val fg = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+    val fw = if (selected) FontWeight.SemiBold else FontWeight.Normal
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(bg)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = fw,
+            color = fg,
+        )
+        if (unreadCount > 0) {
+            Spacer(Modifier.width(6.dp))
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(horizontal = 6.dp, vertical = 1.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    unreadCount.toString(),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * An expandable row grouping bulk messages from one sender in the Other tab.
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun FocusBundleRow(
+    bundle: FocusBundle,
+    expanded: Boolean,
+    selected: Boolean,
+    density: Density,
+    actions: RowActions,
+    onToggle: () -> Unit,
+    onSelect: (Summary, ctrl: Boolean, shift: Boolean) -> Unit,
+) {
+    var menu by remember { mutableStateOf(false) }
+    var pointerOver by remember { mutableStateOf(false) }
+    val (who, _) = displaySender(bundle.sender, bundle.senderEmail)
+    val hasUnread = bundle.unreadCount > 0
+    val topPad = if (density == Density.COMPACT) 6.dp else if (density == Density.SPACIOUS) 14.dp else 10.dp
+    val bottomPad = if (density == Density.COMPACT) 6.dp else if (density == Density.SPACIOUS) 14.dp else 10.dp
+
+    val background = when {
+        selected -> MaterialTheme.colorScheme.surfaceVariant
+        hasUnread -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        else -> Color.Transparent
+    }
+
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(background)
+            .onPointerEvent(PointerEventType.Enter) { pointerOver = true }
+            .onPointerEvent(PointerEventType.Exit) { pointerOver = false }
+            .onPointerEvent(PointerEventType.Press) { event ->
+                val button = event.button
+                val primary = button == null || button == PointerButton.Primary
+                val secondary = button == PointerButton.Secondary
+                if (secondary) {
+                    menu = true
+                    onSelect(bundle.newest, false, false)
+                } else if (primary) {
+                    onToggle()
+                    onSelect(bundle.newest, event.keyboardModifiers.isCtrlPressed || event.keyboardModifiers.isMetaPressed, event.keyboardModifiers.isShiftPressed)
+                }
+            }
+            .padding(start = 10.dp, end = 14.dp, top = topPad, bottom = bottomPad),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+            Icon(
+                RampartIcons.Expand,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+                tint = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.size(12.dp).rotate(if (expanded) 90f else 0f),
+            )
+        }
+        Spacer(Modifier.width(6.dp))
+        Box(Modifier.size(7.dp)) {
+            if (hasUnread) {
+                Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.primary, CircleShape))
+            }
+        }
+        Spacer(Modifier.width(6.dp))
+        Text(
+            who,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (hasUnread) FontWeight.Bold else FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(8.dp))
+        Box(
+            Modifier
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(horizontal = 7.dp, vertical = 1.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                bundle.count.toString(),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            bundle.newest.subject.ifBlank { "(no subject)" },
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (hasUnread) FontWeight.Bold else FontWeight.Normal,
+            color = if (hasUnread) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1.5f),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            bundle.newest.receivedAt.asLocalTime(),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.outline,
+            maxLines = 1,
+        )
+        RowMenu(
+            message = bundle.newest,
+            actions = actions,
+            open = menu,
+            onClose = { menu = false },
+        )
+    }
+}
+
