@@ -305,7 +305,7 @@ internal fun WritingHelpPanel(
             PromptField(
                 value = state.instruction,
                 onValueChange = { state.instruction = it },
-                placeholder = if (own.isBlank()) "Help me write: describe the message" else "Help me write: describe a new version",
+                placeholder = if (own.isBlank()) "Ask Rook: describe your message" else "Ask Rook: describe a new version",
                 busy = state.running == "Help me write",
                 enabled = !state.busy,
                 onSubmit = ::write,

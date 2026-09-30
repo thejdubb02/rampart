@@ -556,7 +556,7 @@ internal fun Composer(
     var heldSendAt by remember(initial) { mutableStateOf<Long?>(null) }
     var scheduleMenu by remember { mutableStateOf(false) }
     var showSchedule by remember { mutableStateOf(false) }
-    var showPromptBar by remember { mutableStateOf(false) }
+    var showPromptBar by remember { mutableStateOf(Assistant.config().mode != AssistantMode.OFF) }
     val writingHelp = remember(initial) { WritingHelpState() }
     val firstField = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
@@ -1461,19 +1461,6 @@ internal fun Composer(
                         ) { Text("Picture") }
                     }
                 }
-                if (showPromptBar) {
-                    WritingHelpPanel(
-                        state = writingHelp,
-                        body = body.text,
-                        signature = draft.textSignature,
-                        subject = draft.subject,
-                        replyContext = replyContext,
-                        account = account,
-                        folder = folder,
-                        onReplace = { apply(TextFieldValue(it)) },
-                        backend = schedule?.backend,
-                    )
-                }
                 HorizontalDivider()
             }
 
@@ -1531,6 +1518,23 @@ internal fun Composer(
                         }
                     }
                 }
+            }
+            // At the bottom, under what is being written, the way Gmail puts "Describe your
+            // message": asking Rook is part of writing, not a toolbar setting. Shown by default
+            // whenever Rook is switched on; the pencil in the toolbar still hides it.
+            if (showPromptBar) {
+                HorizontalDivider()
+                WritingHelpPanel(
+                    state = writingHelp,
+                    body = body.text,
+                    signature = draft.textSignature,
+                    subject = draft.subject,
+                    replyContext = replyContext,
+                    account = account,
+                    folder = folder,
+                    onReplace = { apply(TextFieldValue(it)) },
+                    backend = schedule?.backend,
+                )
             }
         }
             if (dropHover) DropToAttach()
