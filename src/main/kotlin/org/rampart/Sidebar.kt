@@ -123,6 +123,14 @@ internal fun Sidebar(
     folderRefusal: (String, Mailbox, FolderJob) -> String? = { _, _, _ -> null },
     /** The cross-account views under "All inboxes" (SharedMailboxesUi.kt), given whether the sidebar is narrowed. */
     unifiedViews: @Composable (Boolean) -> Unit = {},
+    /**
+     * Unread conversations across the inboxes that feed All inboxes.
+     *
+     * Null adds up every account passed in, which is what a screenshot does. The window
+     * passes the unified total, so a shared mailbox switched out of All inboxes is left
+     * out of this row as well as the tray badge. That account still has its own row.
+     */
+    unifiedUnread: Int? = null,
 ) {
     Column(
         Modifier.width(if (collapsed) 60.dp else 232.dp).fillMaxHeight()
@@ -159,7 +167,9 @@ internal fun Sidebar(
             if (accounts.size > 1) {
                 item(key = "all-inboxes") {
                     // Conversations, so this row matches each Inbox and the list under it.
-                    val unread = accounts.sumOf { a ->
+                    // The window passes the unified total. Without one, every account counts,
+                    // which is what the screenshots show.
+                    val unread = unifiedUnread ?: accounts.sumOf { a ->
                         folderFor("inbox", a.mailboxes)?.unreadThreads ?: 0
                     }
                     FolderRow(

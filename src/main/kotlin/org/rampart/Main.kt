@@ -406,7 +406,7 @@ private fun App(
     notify: (String, String) -> Unit,
     icons: IconPack = LineIcons,
     onIcons: (IconPack) -> Unit = {},
-    /** Unread across every signed-in inbox, for the badge on the tray icon. */
+    /** Unread conversations in the inboxes that feed All inboxes, for the tray badge. */
     onUnread: (Int) -> Unit = {},
     /** See [Reader], which is what actually needs this. */
     windowSize: () -> DpSize = { DefaultWindowSize },
@@ -570,7 +570,7 @@ private fun Reader(
     onAddAccount: () -> Unit,
     icons: IconPack = LineIcons,
     onIcons: (IconPack) -> Unit = {},
-    /** Unread across every signed-in inbox, for the badge on the tray icon. */
+    /** Unread conversations in the inboxes that feed All inboxes, for the tray badge. */
     onUnread: (Int) -> Unit = {},
     /**
      * The window's current content size, read fresh rather than carried as a plain value: a
@@ -777,18 +777,6 @@ private fun Reader(
     val keyboard = remember { FocusRequester() }
     var mailboxes by remember { mutableStateOf<Map<String, List<Mailbox>>>(emptyMap()) }
 
-    /*
-     * The number on the tray icon.
-     *
-     * Every signed-in inbox, added up, and only the inboxes: a count that included Junk
-     * and Archive would go up when the filter caught something, which is the opposite of
-     * what a badge is for. The number is unread conversations, the same one the sidebar
-     * shows, so the badge and the Inbox row agree. Sent from here because this is where
-     * the counts are, and read where the tray is, which is outside the window on purpose.
-     */
-    LaunchedEffect(mailboxes) {
-        onUnread(mailboxes.values.sumOf { boxes -> folderFor("inbox", boxes)?.unreadThreads ?: 0 })
-    }
     var here by remember { mutableStateOf<Pair<String, Mailbox>?>(null) }
     var emails by remember { mutableStateOf<List<Summary>>(emptyList()) }
     // True when the selection came from a right-click, which picks the row for its menu
@@ -953,6 +941,20 @@ private fun Reader(
 
     /** Mailboxes shared with the signed-in logins, kept apart from them (SharedMailboxesUi.kt). */
     val sharing = rememberSharing(sessions)
+
+    /*
+     * The number on the tray icon, and on the taskbar where the window draws one.
+     *
+     * Unread conversations in the inboxes that feed All inboxes, and only the inboxes:
+     * a count that included Junk and Archive would go up when the filter caught something,
+     * which is the opposite of what a badge is for. A shared mailbox switched out of that
+     * view still has its own row, and it is not added in here. The All inboxes row uses
+     * the same total. This sits after the shared-mailbox preferences exist, because the
+     * total cannot be decided without them.
+     */
+    LaunchedEffect(mailboxes, sharing.prefs) {
+        onUnread(unifiedInboxUnread(mailboxes, sharing.prefs))
+    }
 
     fun session(key: String) = sessions.firstOrNull { it.key == key } ?: sharing.shared.first { it.key == key }
 
@@ -1365,8 +1367,8 @@ private fun Reader(
         update = (result as? UpdateCheckResult.Newer)?.version
         updateCheckFailure = (result as? UpdateCheckResult.Failed)?.reason
         Diagnostics.event(Metric.UPDATE_CHECK, updateCheckCategory(result))
-        if (result is UpdateCheckResult.Newer && barState !is UpdateBarState.Waiting && !barState.busy) {
-            barState = UpdateBarState.Waiting(result.version)
+        if (result is UpdateCheckResult.Newer) {
+            barState = Updates.stateAfterNewer(barState, result.version)
         }
     }
 
@@ -1398,12 +1400,12 @@ private fun Reader(
      *
      * Once per version. A fetch that failed is not retried in a loop: the next half-hourly
      * check finds the same version, and nothing here is allowed to become a machine that
-     * downloads a package over and over.
+     * downloads a package over and over. The check itself must not say the package is
+     * ready. This is what fetches it, and only a fetch that lands sets the bar to waiting.
      */
     LaunchedEffect(update) {
         val version = update ?: return@LaunchedEffect
-        val already = (barState as? UpdateBarState.Waiting)?.version == version
-        if (already || barState.busy) return@LaunchedEffect
+        if (!Updates.shouldPrefetch(barState, version)) return@LaunchedEffect
         val staged = withContext(Dispatchers.IO) { Updates.stage() }
         Diagnostics.event(Metric.UPDATE_STAGE, stageOutcome(staged))
         if (staged) barState = UpdateBarState.Waiting(version)
@@ -5667,6 +5669,7 @@ private fun Reader(
                     )
                 },
                 accounts = sidebarAccounts,
+                unifiedUnread = unifiedInboxUnread(mailboxes, sharing.prefs),
                 folderRefusal = sharing::folderRefusal,
                 unifiedViews = { narrowed ->
                     UnifiedViewRows(

@@ -170,11 +170,12 @@ data class Summary(
     /** The List-Id identifier, see [listIdOf]. Empty for mail that did not come from a list. */
     val listId: String = "",
     /**
-     * Every address in To and Cc, lowercased.
+     * Every address in To, Cc and Bcc, lowercased.
      *
      * Kept so the local copy can say who a message went to, which is what lets a person's
      * history (PersonHistory.kt) be answered from this computer when the server cannot be.
-     * Empty where a backend did not say, which is not the same as nobody.
+     * Bcc is in here because a person who was only blind-copied otherwise disappears from
+     * that history. Empty where a backend did not say, which is not the same as nobody.
      */
     val recipients: List<String> = emptyList(),
 )
@@ -260,6 +261,17 @@ data class Body(
      * Read only when [deliveredTo] did not name one of our addresses.
      */
     val originalTo: List<String> = emptyList(),
+    /**
+     * Who the message being answered was addressed to, stored on a draft so opening
+     * it again can still warn when From is a different address.
+     *
+     * These are not the draft's own To and Cc. A draft saved before they were kept
+     * has them empty, and the warning stays off rather than guessing.
+     */
+    val answeredTo: List<String> = emptyList(),
+    val answeredCc: List<String> = emptyList(),
+    val answeredDeliveredTo: List<String> = emptyList(),
+    val answeredOriginalTo: List<String> = emptyList(),
 )
 
 /**
@@ -689,6 +701,9 @@ internal class Jmap private constructor(
                 // To names the list. A header nobody asks for is not sent.
                 add("header:Delivered-To:asText:all")
                 add("header:X-Original-To:asText:all")
+                // Who the answered message was addressed to, on a draft. Absent on
+                // everything else, and a header nobody asks for is not sent.
+                answeredGetProperties().forEach { add(it) }
                 // Asked for by name. These are not JMAP properties, they are ordinary
                 // headers, and a header nobody asks for is not sent.
                 add("header:List-Unsubscribe:asText")
@@ -761,6 +776,10 @@ internal class Jmap private constructor(
             }.toMap(),
             deliveredTo = headerAddresses("header:Delivered-To:asText:all"),
             originalTo = headerAddresses("header:X-Original-To:asText:all"),
+            answeredTo = answeredAddresses(stringsIn(email["header:$ANSWERED_TO:asText:all"])),
+            answeredCc = answeredAddresses(stringsIn(email["header:$ANSWERED_CC:asText:all"])),
+            answeredDeliveredTo = answeredAddresses(stringsIn(email["header:$ANSWERED_DELIVERED_TO:asText:all"])),
+            answeredOriginalTo = answeredAddresses(stringsIn(email["header:$ANSWERED_ORIGINAL_TO:asText:all"])),
         )
         val attachments = attachmentsIn(email)
         val calendar = attachments.firstOrNull {
@@ -1508,7 +1527,14 @@ internal class Jmap private constructor(
     override fun saveDraft(draft: Draft, identity: Identity, draftsMailboxId: String, replacing: String?): String {
         val response = call(
             invoke("Email/set", "d") {
-                putJsonObject("create") { putJsonObject("m") { emailObject(draft, identity, draftsMailboxId) } }
+                putJsonObject("create") {
+                    putJsonObject("m") {
+                        emailObject(draft, identity, draftsMailboxId)
+                        // On the draft only. Sending builds the message through emailObject
+                        // and does not add these, so a reply does not grow headers nobody asked for.
+                        answeredJmapFields(draft).forEach { (name, value) -> put(name, value) }
+                    }
+                }
                 if (replacing != null) putJsonArray("destroy") { add(replacing) }
             },
         )[0][1].jsonObject
@@ -2073,9 +2099,9 @@ internal class Jmap private constructor(
      *
      * The page is an Email/query over the whole account with every folder in it, Sent
      * included, and no thread collapsing, because every message counts. With the first page
-     * come the two counts, each a query asked only for its total, and the oldest message's
-     * date, a query sorted the other way asked for one id. Five method calls and one round
-     * trip, rather than four round trips for a header.
+     * comes one more query, oldest first and capped, whose messages are counted here.
+     * The server's own total matches a piece of an address, so it is not used. Four method
+     * calls and one round trip when the counts are asked for, two on a later page.
      */
     override fun personPage(addresses: List<String>, position: Int, limit: Int, withStats: Boolean): PersonPage {
         val newestFirst = buildJsonObject { put("property", "receivedAt"); put("isAscending", false) }
@@ -2091,26 +2117,25 @@ internal class Jmap private constructor(
             add(
                 invoke("Email/get", "g") {
                     putJsonObject("#ids") { put("resultOf", "q"); put("name", "Email/query"); put("path", "/ids") }
-                    // Bcc as well as the list's own properties: a message you sent them blind
-                    // is found by the filter and has to be recognised as theirs below.
-                    putJsonArray("properties") { (emailGetProperties + "bcc").forEach { add(it) } }
+                    putJsonArray("properties") { emailGetProperties.forEach { add(it) } }
                 },
             )
             if (withStats) {
-                // A limit of one rather than zero: zero is legal and not every server takes it.
-                add(invoke("Email/query", "from") { put("filter", fromFilter(addresses)); put("limit", 1); put("calculateTotal", true) })
-                add(invoke("Email/query", "to") { put("filter", toFilter(addresses)); put("limit", 1); put("calculateTotal", true) })
                 add(
-                    invoke("Email/query", "old") {
+                    invoke("Email/query", "stat") {
                         put("filter", personFilter(addresses))
-                        putJsonArray("sort") { add(buildJsonObject { put("property", "receivedAt"); put("isAscending", true) }) }
-                        put("limit", 1)
+                        putJsonArray("sort") {
+                            add(buildJsonObject { put("property", "receivedAt"); put("isAscending", true) })
+                        }
+                        put("limit", PERSON_STAT_LIMIT)
                     },
                 )
                 add(
-                    invoke("Email/get", "oldGet") {
-                        putJsonObject("#ids") { put("resultOf", "old"); put("name", "Email/query"); put("path", "/ids") }
-                        putJsonArray("properties") { add("receivedAt") }
+                    invoke("Email/get", "statGet") {
+                        putJsonObject("#ids") { put("resultOf", "stat"); put("name", "Email/query"); put("path", "/ids") }
+                        putJsonArray("properties") {
+                            add("from"); add("to"); add("cc"); add("bcc"); add("receivedAt")
+                        }
                     },
                 )
             }
@@ -2118,16 +2143,24 @@ internal class Jmap private constructor(
         val responses = call(*calls.toTypedArray())
         val found = responses[1].list().map { it.jsonObject }
         val consumed = (responses[0][1].jsonObject["ids"] as? JsonArray)?.size ?: found.size
-        val rows = found.filter { o ->
-            val summary = jsonToSummary(o)
-            involves(summary.fromEmail, summary.recipients + addressesIn(o["bcc"]), addresses)
-        }.map(::jsonToSummary)
-        val stats = if (!withStats) null else PersonStats(
-            received = responses[2][1].jsonObject["total"]?.num()?.toInt() ?: 0,
-            sent = responses[3][1].jsonObject["total"]?.num()?.toInt() ?: 0,
-            first = responses[5].list().firstOrNull()?.jsonObject?.get("receivedAt")?.str(),
-            last = if (position == 0) rows.firstOrNull()?.receivedAt ?: found.firstOrNull()?.get("receivedAt")?.str() else null,
-        )
+        val rows = found.map(::jsonToSummary).filter { involves(it.fromEmail, it.recipients, addresses) }
+        val stats = if (!withStats) {
+            null
+        } else {
+            val hits = responses[3].list().map { element ->
+                val email = element.jsonObject
+                PersonHit(
+                    fromEmail = (email["from"] as? JsonArray)?.firstOrNull()?.jsonObject?.get("email")?.str().orEmpty(),
+                    recipients = recipientsIn(email),
+                    receivedAt = email["receivedAt"]?.str().orEmpty(),
+                )
+            }
+            val counted = exactPersonStats(hits, addresses, onFirstPage = position == 0)
+            // The first page is newest first and already exact, so its top row is the
+            // newest message. Falling back to an unfiltered hit would name somebody else.
+            val newest = if (position == 0) rows.firstOrNull()?.receivedAt ?: counted.last else null
+            counted.copy(last = newest)
+        }
         return PersonPage(rows, consumed, stats)
     }
 
@@ -2247,12 +2280,13 @@ private class PushListener(
     }
 }
 
-private val emailGetProperties =
+internal val emailGetProperties =
     listOf(
         "id", "threadId", "from", "subject", "receivedAt", "preview", "keywords", "messageId",
         // Who it went to, a few dozen bytes a row, so the copy can answer "mail to this
-        // person" without the network. See [Summary.recipients].
-        "to", "cc",
+        // person" without the network. Bcc is included: a header nobody asks for is not
+        // sent, and a blind copy would then be missing from the copy. See [Summary.recipients].
+        "to", "cc", "bcc",
         // For the table's size column and for splitting a saved search by mailing list.
         "size", "header:List-Id:asText",
     )
@@ -2297,8 +2331,22 @@ private fun jsonToSummary(o: JsonObject): Summary = Summary(
     messageId = (o["messageId"] as? JsonArray)?.firstOrNull()?.str().orEmpty(),
     size = o["size"]?.num() ?: 0L,
     listId = listIdOf((o["header:List-Id:asText"] as? JsonPrimitive)?.contentOrNull),
-    recipients = (addressesIn(o["to"]) + addressesIn(o["cc"])).map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct(),
+    recipients = recipientsIn(o),
 )
+
+/**
+ * Every address a message was sent to, for the local copy.
+ *
+ * Bcc is included because a person who was only blind-copied disappears from history
+ * answered on this computer otherwise. Case is not part of an address, and the same
+ * address written twice is one person.
+ */
+internal fun storedRecipients(to: List<String>, cc: List<String>, bcc: List<String> = emptyList()): List<String> =
+    (to + cc + bcc).map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct()
+
+/** [storedRecipients] from one Email object. A missing header is nobody, not an error. */
+internal fun recipientsIn(email: JsonObject): List<String> =
+    storedRecipients(addressesIn(email["to"]), addressesIn(email["cc"]), addressesIn(email["bcc"]))
 
 private fun kotlinx.serialization.json.JsonElement.str(): String? = jsonPrimitive.contentOrNull
 

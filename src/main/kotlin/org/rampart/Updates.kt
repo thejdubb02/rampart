@@ -560,6 +560,32 @@ object Updates {
     internal fun afterFailure(version: String, problem: String?): UpdateBarState =
         if (problem == NOT_READY) UpdateBarState.Waiting(version)
         else UpdateBarState.Failed(version, problem ?: "The update did not go in.")
+
+    /**
+     * Whether the package for [version] still needs fetching.
+     *
+     * Waiting means that version is already on disk, so fetching it again would only
+     * repeat the download. A failure may be tried the next time this is asked: the bar
+     * must not claim the package is ready before it has been fetched. Busy means a click
+     * is already fetching or installing, and a second fetch would race it.
+     */
+    internal fun shouldPrefetch(state: UpdateBarState, version: String?): Boolean {
+        if (version.isNullOrBlank()) return false
+        if (state.busy) return false
+        return (state as? UpdateBarState.Waiting)?.version != version
+    }
+
+    /**
+     * What the bar shows when a check finds [version].
+     *
+     * The check only records that a newer build exists. The bar says it is ready after
+     * the package has been fetched, and not before: saying so here is what left the
+     * download until the moment of the restart.
+     */
+    internal fun stateAfterNewer(state: UpdateBarState, version: String): UpdateBarState {
+        if (version.isEmpty()) return state
+        return state
+    }
 }
 
 /**

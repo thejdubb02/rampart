@@ -13,6 +13,8 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import javax.imageio.ImageIO
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * What a paste is offering the composer.
@@ -20,12 +22,13 @@ import javax.imageio.ImageIO
  * A file list wins over a picture: copying a file in Explorer puts the file on
  * the clipboard, and some systems also put a thumbnail beside it. Treating the
  * thumbnail as a new screenshot would attach the picture twice and lose the
- * file. Text is not taken here. The field pastes that itself, which is how a
- * sentence keeps landing where the caret is.
+ * file. Text is taken here too, so the flavor can be read off the window thread
+ * and the composer can still put the sentence where the caret is.
  */
 internal sealed interface PasteOffer {
     data class Files(val paths: List<Path>) : PasteOffer
     class Image(val png: ByteArray) : PasteOffer
+    data class Text(val text: String) : PasteOffer
     data object Directories : PasteOffer
     data object Pass : PasteOffer
 }
@@ -57,6 +60,16 @@ private val PASTED_IMAGE_STAMP: DateTimeFormatter =
 internal fun pastedImageName(at: LocalDateTime): String =
     "screenshot-${at.format(PASTED_IMAGE_STAMP)}.png"
 
+/**
+ * [droppedFiles] off the caller's thread.
+ *
+ * Asking whether a path is a file blocks when the drive is no longer there. A drop
+ * handler on the window thread has to capture the addresses and call this, not
+ * [droppedFiles].
+ */
+internal suspend fun filesFromDrop(uris: List<String>): DroppedFiles =
+    withContext(Dispatchers.IO) { droppedFiles(uris) }
+
 /** [uris] from a drop, kept only when each one is a real file. */
 internal fun droppedFiles(uris: List<String>): DroppedFiles {
     var folders = 0
@@ -72,11 +85,20 @@ internal fun droppedFiles(uris: List<String>): DroppedFiles {
 }
 
 /**
- * What [transferable] is for the composer: files, a picture, or nothing to take.
+ * [pasteOffer] off the caller's thread.
  *
- * Text is [PasteOffer.Pass] even when a picture is sitting beside it, so Ctrl+V
- * of a sentence is left for the field. A blank text flavor does not count: a
- * screenshot tool sometimes adds one, and that must not hide the picture.
+ * Reading a clipboard flavor blocks on a slow provider, and a file flavor can block
+ * on a disconnected network drive. The window thread captures the [transferable]
+ * and calls this. It does not call [pasteOffer] or [filesOf] itself.
+ */
+internal suspend fun offerFromClipboard(transferable: Transferable): PasteOffer =
+    withContext(Dispatchers.IO) { pasteOffer(transferable) }
+
+/**
+ * What [transferable] is for the composer: files, text, a picture, or nothing to take.
+ *
+ * A file list still wins over text and over a picture. A blank text flavor does not
+ * count: a screenshot tool sometimes adds one, and that must not hide the picture.
  */
 internal fun pasteOffer(transferable: Transferable): PasteOffer = runCatching {
     val listed = filesOf(transferable)
@@ -85,10 +107,28 @@ internal fun pasteOffer(transferable: Transferable): PasteOffer = runCatching {
         if (paths.isNotEmpty()) return@runCatching PasteOffer.Files(paths)
         if (listed.all { it.isDirectory }) return@runCatching PasteOffer.Directories
     }
-    if (hasPlainText(transferable)) return@runCatching PasteOffer.Pass
+    val text = plainClipboardText(transferable)
+    if (text != null) return@runCatching PasteOffer.Text(text)
     val png = clipboardPng(transferable)
     if (png != null) PasteOffer.Image(png) else PasteOffer.Pass
 }.getOrDefault(PasteOffer.Pass)
+
+/** Where pasted text lands: the new body, and the caret just after the insert. */
+internal data class PastedText(val text: String, val caret: Int)
+
+/**
+ * [insert] in place of the selection, with the caret after what was inserted.
+ *
+ * The field used to paste text itself. Taking the clipboard off the window thread
+ * means the composer has to place the text, and undo still has to see one edit.
+ * Selection ends that arrive reversed are the same range.
+ */
+internal fun pastedInto(text: String, selectionStart: Int, selectionEnd: Int, insert: String): PastedText {
+    val start = minOf(selectionStart, selectionEnd).coerceIn(0, text.length)
+    val end = maxOf(selectionStart, selectionEnd).coerceIn(0, text.length)
+    val next = text.substring(0, start) + insert + text.substring(end)
+    return PastedText(next, start + insert.length)
+}
 
 /**
  * Writes [png] under [pastedImageName] so the existing upload, which takes a
@@ -152,12 +192,14 @@ internal fun filesOf(transferable: Transferable): List<java.io.File> {
     return data.filterIsInstance<java.io.File>()
 }
 
-/** True when the clipboard has text the field should paste. Blank does not count. */
-internal fun hasPlainText(transferable: Transferable): Boolean {
-    if (!transferable.isDataFlavorSupported(DataFlavor.stringFlavor)) return false
-    val text = transferable.getTransferData(DataFlavor.stringFlavor) as? String ?: return false
-    return text.isNotBlank()
+/** The clipboard's text, or null when there is none worth pasting. Blank does not count. */
+internal fun plainClipboardText(transferable: Transferable): String? {
+    if (!transferable.isDataFlavorSupported(DataFlavor.stringFlavor)) return null
+    val text = transferable.getTransferData(DataFlavor.stringFlavor) as? String ?: return null
+    return text.takeIf { it.isNotBlank() }
 }
+
+/** True when the clipboard has text the field should paste. Blank does not count. */
 
 private fun clipboardPng(transferable: Transferable): ByteArray? {
     // A flavor that throws is skipped. Some clipboards advertise an image and

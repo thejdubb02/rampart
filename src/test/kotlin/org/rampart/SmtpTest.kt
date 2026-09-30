@@ -63,6 +63,33 @@ class SmtpTest {
     }
 
     @Test
+    fun `a sent message does not carry the draft warning, and a saved draft does`() {
+        val draft = Draft(
+            from = "alice@example.com",
+            to = "bob@example.com",
+            subject = "Hello",
+            sourceTo = listOf("Justin <justin@example.org>"),
+        )
+        val sent = buildMessage(session, draft, identity, emptyList())
+        assertEquals(null, sent.getHeader(ANSWERED_TO)?.firstOrNull())
+        val saved = buildMessage(session, draft, identity, emptyList(), forDraft = true)
+        val restored = draftOf(
+            Summary("1", "Alice", "alice@example.com", "Hello", "2026-09-29T12:00:00Z", "", true),
+            bodyFromHeaders(headerPairs(saved)),
+            "billing@willhitestrategy.com",
+        )
+        assertEquals(listOf("justin@example.org"), restored.sourceTo)
+        assertEquals(
+            "justin@example.org",
+            replyAccountWarning(
+                to = restored.sourceTo,
+                own = listOf("justin@example.org", "alice@example.com"),
+                from = restored.from,
+            )?.cameTo,
+        )
+    }
+
+    @Test
     fun `a draft with HTML produces alternative multipart with text and html`() {
         val draft = Draft(
             from = "alice@example.com",

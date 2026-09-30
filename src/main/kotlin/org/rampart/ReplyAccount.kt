@@ -68,3 +68,58 @@ internal fun replyAccountWarning(
     if (addressKey(bareAddress(from)) == addressKey(bareAddress(came))) return null
     return ReplyAccountWarning(cameTo = came, from = from.trim())
 }
+
+/**
+ * Draft-only headers naming who the message being answered was addressed to.
+ *
+ * A draft is stored as a message, and these fields are not part of that message's
+ * own To and Cc. They have to be written onto the draft and read back, or opening
+ * it again has nothing to warn from. They are not written on the way out.
+ */
+internal const val ANSWERED_TO = "X-Rampart-Answered-To"
+internal const val ANSWERED_CC = "X-Rampart-Answered-Cc"
+internal const val ANSWERED_DELIVERED_TO = "X-Rampart-Answered-Delivered-To"
+internal const val ANSWERED_ORIGINAL_TO = "X-Rampart-Answered-Original-To"
+
+private val ANSWERED_HEADER_NAMES = listOf(
+    ANSWERED_TO,
+    ANSWERED_CC,
+    ANSWERED_DELIVERED_TO,
+    ANSWERED_ORIGINAL_TO,
+)
+
+/** Header lines to store on a draft. An empty list is left off, so an old draft stays unchanged. */
+internal fun answeredHeaderLines(draft: Draft): List<Pair<String, String>> {
+    val fields = listOf(
+        ANSWERED_TO to draft.sourceTo,
+        ANSWERED_CC to draft.sourceCc,
+        ANSWERED_DELIVERED_TO to draft.sourceDeliveredTo,
+        ANSWERED_ORIGINAL_TO to draft.sourceOriginalTo,
+    )
+    return fields.mapNotNull { (name, addresses) ->
+        val line = addresses.map { it.trim() }.filter { it.isNotEmpty() }
+        if (line.isEmpty()) null else name to line.joinToString(", ")
+    }
+}
+
+/** Addresses out of the draft-only headers, in the order they were written. */
+internal fun answeredAddresses(values: List<String>): List<String> =
+    values.flatMap { header -> parseAddressList(header).map { it.email } }
+
+/**
+ * The same lines as [answeredHeaderLines], in the form Email/set accepts.
+ *
+ * One form per header. Setting the text and the address list together is refused,
+ * and the text is what [answeredAddresses] reads back.
+ */
+internal fun answeredJmapFields(draft: Draft): List<Pair<String, String>> =
+    answeredHeaderLines(draft).map { (name, value) -> "header:$name:asText" to value }
+
+/**
+ * What Email/get must ask for so [answeredAddresses] can see those headers.
+ *
+ * `:all` comes back as a list. The form without it is one string, and a string is
+ * not a list, so the header would be stored and then read as nothing.
+ */
+internal fun answeredGetProperties(): List<String> =
+    ANSWERED_HEADER_NAMES.map { "header:$it:asText:all" }

@@ -197,8 +197,10 @@ data class Draft(
      * Who the message being answered was addressed to, and where it was delivered.
      *
      * The composer reads these to warn when From is a different address. Empty on
-     * a new message. Not part of what is sent: the original already carries them,
-     * and repeating them on the way out would be writing headers nobody asked for.
+     * a new message. Not part of what is sent: they are written onto the draft
+     * alone, as headers, and read back when the draft is opened. Transient so a
+     * scheduled send, which stores the draft as JSON, does not treat them as part
+     * of the message.
      */
     @Transient val sourceTo: List<String> = emptyList(),
     @Transient val sourceCc: List<String> = emptyList(),
@@ -821,7 +823,7 @@ internal fun Composer(
 
     /**
      * Ctrl+V, and Command+V on macOS, where that is paste.
-     * Text returns false so the field pastes it exactly as it does today.
+     * With nowhere to attach a file, the field pastes the text itself.
      */
     fun pasteShortcut(event: KeyEvent): Boolean =
         event.key == Key.V &&
@@ -829,23 +831,29 @@ internal fun Composer(
             !event.isAltPressed &&
             !event.isShiftPressed
 
+    // Latest body, so a paste that resumes after more typing lands in the text
+    // the person sees. Same reason a drop reads the latest attach callback.
+    val onPastedText = rememberUpdatedState<(String) -> Unit> { text ->
+        val placed = pastedInto(body.text, body.selection.start, body.selection.end, text)
+        apply(TextFieldValue(placed.text, TextRange(placed.caret)))
+    }
+
     fun pasteFromClipboard(): Boolean {
         if (onAttach == null) return false
         val contents = runCatching { Toolkit.getDefaultToolkit().systemClipboard.getContents(null) }.getOrNull()
             ?: return false
-        // Text is decided here, on the key press, so the field keeps pasting it. Everything
-        // else is worked out off the UI thread: encoding a large screenshot as PNG can take
-        // long enough to freeze the window.
-        val text = runCatching { filesOf(contents).isEmpty() && hasPlainText(contents) }.getOrDefault(false)
-        if (text) return false
+        // The flavor itself is read off this thread. A clipboard provider, or a file
+        // on a disconnected network drive, can block long enough to freeze the window.
+        // Capturing the transferable here is the part that has to happen on the key press.
         scope.launch {
-            when (val offer = withContext(Dispatchers.IO) { pasteOffer(contents) }) {
+            when (val offer = offerFromClipboard(contents)) {
                 is PasteOffer.Files -> attachChosen(offer.paths)
                 is PasteOffer.Image -> pasteScreenshot(offer.png)
                 PasteOffer.Directories -> if (!sending && !attaching) {
                     attachError = FOLDERS_NOT_ATTACHABLE
                     attachDetail = null
                 }
+                is PasteOffer.Text -> onPastedText.value(offer.text)
                 PasteOffer.Pass -> Unit
             }
         }
@@ -902,12 +910,17 @@ internal fun Composer(
                     (event.dragData() as? DragData.FilesList)?.readFiles()
                 }.getOrNull().orEmpty()
                 if (uris.isEmpty()) return false
-                val dropped = droppedFiles(uris)
-                if (dropped.paths.isEmpty()) {
-                    if (dropped.foldersOnly) onFoldersOnly.value()
-                    return dropped.foldersOnly
+                // Whether each path is a file is decided off this thread. Asking the
+                // filesystem here blocks the window when a path is on a drive that is
+                // no longer there. The addresses themselves were captured above.
+                scope.launch {
+                    val dropped = filesFromDrop(uris)
+                    if (dropped.paths.isEmpty()) {
+                        if (dropped.foldersOnly) onFoldersOnly.value()
+                    } else {
+                        onDropped.value(dropped.paths)
+                    }
                 }
-                onDropped.value(dropped.paths)
                 return true
             }
         }
@@ -1972,7 +1985,8 @@ private fun ClockField(value: String, hint: String, onChange: (String) -> Unit) 
  * that HTML is what a later save sends until the text itself is edited, and the composer
  * is filled with the same markup it would have held if the draft had been written here.
  * Inline pictures stay out of the file list: they belong to the body, not to the files
- * the writer attached.
+ * the writer attached. The answered-message headers come back too, or a reply that was
+ * saved and opened again would lose the warning about sending from the wrong address.
  */
 internal fun draftOf(
     summary: Summary,
@@ -1995,6 +2009,10 @@ internal fun draftOf(
         htmlSignature = restored.htmlSignature,
         html = html.orEmpty(),
         replying = false,
+        sourceTo = body?.answeredTo.orEmpty(),
+        sourceCc = body?.answeredCc.orEmpty(),
+        sourceDeliveredTo = body?.answeredDeliveredTo.orEmpty(),
+        sourceOriginalTo = body?.answeredOriginalTo.orEmpty(),
     )
 }
 

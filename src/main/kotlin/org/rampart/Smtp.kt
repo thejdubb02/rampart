@@ -126,6 +126,12 @@ internal fun buildMessage(
     draft: Draft,
     identity: Identity,
     files: List<Outgoing>,
+    /**
+     * A draft keeps who the answered message was addressed to, so opening it again can
+     * still warn. A message that is actually sent does not: those headers were never
+     * asked for by the recipient.
+     */
+    forDraft: Boolean = false,
 ): MimeMessage {
     val message = MimeMessage(session)
     val fromAddress = if (identity.name.isBlank()) {
@@ -157,6 +163,13 @@ internal fun buildMessage(
             InternetAddress(identity.email, identity.name, "UTF-8").toString()
         }
         message.setHeader(MDN_HEADER, senderStr)
+    }
+
+    // Before saveChanges. A second save regenerates the Message-ID, so the headers
+    // have to be on the message the first time it is written. Only a draft: a message
+    // that is sent does not carry them.
+    if (forDraft) {
+        answeredHeaderLines(draft).forEach { (name, value) -> message.setHeader(name, value) }
     }
 
     val html = htmlPartOf(draft)

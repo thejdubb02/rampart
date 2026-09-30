@@ -154,3 +154,16 @@ internal fun feedChange(view: UnifiedView, selectors: List<String>): Pair<String
 /** The accounts that feed the cross-account views, in the order given. */
 internal fun unifiedKeys(keys: List<String>, prefs: Map<String, String>): List<String> =
     keys.filter { includedInUnified(it, prefs) }
+
+/**
+ * Unread conversations across the inboxes that feed All inboxes.
+ *
+ * A shared mailbox switched out of that view still has its own row. This total is what
+ * the tray badge and the All inboxes row both show, so the two cannot disagree. Your own
+ * accounts always count: [includedInUnified] does not let them be switched out.
+ */
+internal fun unifiedInboxUnread(mailboxes: Map<String, List<Mailbox>>, prefs: Map<String, String>): Int =
+    mailboxes.entries.sumOf { (key, boxes) ->
+        if (!includedInUnified(key, prefs)) 0
+        else folderFor("inbox", boxes)?.unreadThreads ?: 0
+    }

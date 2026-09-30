@@ -90,6 +90,47 @@ internal fun involves(fromEmail: String, recipients: Collection<String>, address
 }
 
 /**
+ * How many messages to read when counting one person's history.
+ *
+ * The server's own total matches a piece of the address, so `bob@example.org` is also
+ * counted as `jimbob@example.org`. The numbers are taken from the messages themselves
+ * instead. A history longer than this is capped rather than counted from that total.
+ */
+internal const val PERSON_STAT_LIMIT = 500
+
+/** One message, reduced to what the counts need. */
+internal data class PersonHit(
+    val fromEmail: String,
+    val recipients: List<String>,
+    val receivedAt: String,
+)
+
+/**
+ * Counts and dates for [addresses], matching the whole address.
+ *
+ * A message can count as both received and sent, the same way a from-query and a
+ * to-query were independent of each other. [last] is only set on the first page: a
+ * later page is not the newest mail, and naming its newest row as the whole history's
+ * newest would be wrong. An empty [addresses] counts nothing.
+ */
+internal fun exactPersonStats(
+    hits: List<PersonHit>,
+    addresses: Collection<String>,
+    onFirstPage: Boolean,
+): PersonStats {
+    val wanted = addresses.map { it.trim().lowercase() }.filter { it.isNotEmpty() }.toSet()
+    if (wanted.isEmpty()) return PersonStats()
+    val exact = hits.filter { involves(it.fromEmail, it.recipients, wanted) }
+    val dates = exact.map { it.receivedAt }.filter { it.isNotBlank() }
+    return PersonStats(
+        received = exact.count { it.fromEmail.trim().lowercase() in wanted },
+        sent = exact.count { hit -> hit.recipients.any { it.trim().lowercase() in wanted } },
+        first = dates.minOrNull(),
+        last = if (onFirstPage) dates.maxOrNull() else null,
+    )
+}
+
+/**
  * The same message seen twice is shown once.
  *
  * Across accounts that is the same Message-ID, which is what happens when a list writes to

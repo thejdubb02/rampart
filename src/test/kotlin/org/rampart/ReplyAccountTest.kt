@@ -177,4 +177,57 @@ class ReplyAccountTest {
         assertEquals(listOf("justin@example.org"), body.deliveredTo)
         assertEquals(listOf("billing@willhitestrategy.com"), body.originalTo)
     }
+
+    @Test
+    fun `a saved reply still warns after it is opened again`() {
+        val summary = Summary(
+            id = "1",
+            from = "Dana Whitfield",
+            fromEmail = "dana@example.org",
+            subject = "the quote",
+            receivedAt = "2026-09-17T09:00:00Z",
+            preview = "",
+            seen = true,
+        )
+        val body = Body(
+            html = null,
+            text = "Numbers attached.",
+            to = listOf("justin@example.org"),
+            cc = listOf("sam@example.org"),
+            deliveredTo = listOf("justin@example.org"),
+            originalTo = listOf("billing@willhitestrategy.com"),
+        )
+        val draft = replyTo(summary, body, "billing@willhitestrategy.com")
+        val reopened = draftOf(
+            summary.copy(subject = draft.subject),
+            bodyFromHeaders(answeredHeaderLines(draft)),
+            draft.from,
+        )
+        assertEquals(
+            "justin@example.org",
+            replyAccountWarning(
+                to = reopened.sourceTo,
+                cc = reopened.sourceCc,
+                deliveredTo = reopened.sourceDeliveredTo,
+                originalTo = reopened.sourceOriginalTo,
+                own = own,
+                from = reopened.from,
+            )?.cameTo,
+        )
+    }
+
+    @Test
+    fun `the headers written on a draft are the ones a later open asks for`() {
+        val draft = Draft(
+            from = "billing@willhitestrategy.com",
+            sourceTo = listOf("justin@example.org"),
+            sourceCc = listOf("sam@example.org"),
+            sourceDeliveredTo = listOf("justin@example.org"),
+            sourceOriginalTo = listOf("billing@willhitestrategy.com"),
+        )
+        val written = answeredHeaderLines(draft).map { it.first }.toSet()
+        val asked = answeredGetProperties().map { it.removePrefix("header:").removeSuffix(":asText:all") }.toSet()
+        assertEquals(written, asked)
+        assertEquals(4, written.size)
+    }
 }

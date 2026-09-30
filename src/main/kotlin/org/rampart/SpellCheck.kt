@@ -53,7 +53,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.languagetool.JLanguageTool
-import org.languagetool.language.AmericanEnglish
+import org.languagetool.Language
+import org.languagetool.Languages
 import org.languagetool.rules.Rule
 import org.languagetool.rules.RuleMatch
 
@@ -268,23 +269,48 @@ internal fun dictionaryProblem(text: String): String? {
 }
 
 /**
+ * Which English dictionary [locale] should check with.
+ *
+ * British, Canadian and Australian English are the ones Language, Region and Time can
+ * name. Anything else, including English with no country and a computer set to another
+ * language, uses American. Checking is English only on purpose: the dictionaries for
+ * other languages are not installed.
+ *
+ * The language comes from LanguageTool's own list. Constructing one by hand throws once
+ * that list has already built it, and Australian English has no other way to be fetched.
+ */
+internal fun spellLanguage(locale: Locale): Language {
+    val code = when {
+        !locale.language.equals("en", ignoreCase = true) -> "en-US"
+        locale.country.equals("GB", ignoreCase = true) -> "en-GB"
+        locale.country.equals("CA", ignoreCase = true) -> "en-CA"
+        locale.country.equals("AU", ignoreCase = true) -> "en-AU"
+        else -> "en-US"
+    }
+    return Languages.getLanguageForShortCode(code)
+}
+
+/**
  * Spell and grammar for the composer, on this computer.
  *
- * One [JLanguageTool] for American English, built on first use and off the window's
- * thread, because building it reads the dictionaries and is slow enough to hitch a
- * keystroke. It is not safe to share across checks, so checks take a lock. The
- * constructor of [AmericanEnglish] may run only once, and LanguageTool's own registry
- * already ran it while loading the language list, so a second `AmericanEnglish()`
- * throws. [AmericanEnglish.getInstance] is that existing language.
+ * One [JLanguageTool], built on first use and off the window's thread, because building
+ * it reads the dictionaries and is slow enough to hitch a keystroke. It is not safe to
+ * share across checks, so checks take a lock. The language comes from [spellLanguage].
+ * A change in Language, Region and Time builds a new checker, because the one already
+ * built keeps the dictionary it started with.
  *
  * Nothing here turns on remote rules or n-gram data. The ordinary constructor leaves
- * both off, and the American speller is installed even without a language model.
+ * both off.
  */
 internal object SpellCheck {
     private val gate = Mutex()
 
     @Volatile
     private var tool: JLanguageTool? = null
+
+    /** The class name of the language [tool] was built with, so a locale change rebuilds it. */
+    @Volatile
+    private var toolCode: String? = null
 
     /** Builds the checker if it has not been built yet. Safe to call when a composer opens. */
     suspend fun warm() {
@@ -304,15 +330,17 @@ internal object SpellCheck {
      *
      * [grammar] false keeps spelling only, which is what the subject line asks for.
      * [dictionary] and [ignored] are skipped for this check and are not written into the
-     * shared checker, because the next check may have a different list. A failure of the
-     * checker returns nothing: a missing dictionary should not take the composer down.
-     * Blank text returns nothing without building the checker.
+     * shared checker, because the next check may have a different list. [locale] chooses
+     * British, Canadian, Australian or American English. See [spellLanguage]. A failure
+     * of the checker returns nothing: a missing dictionary should not take the composer
+     * down. Blank text returns nothing without building the checker.
      */
     suspend fun check(
         text: String,
         grammar: Boolean = true,
         dictionary: Collection<String> = emptyList(),
         ignored: Collection<String> = emptyList(),
+        locale: Locale = Regional.locale(),
     ): List<Issue> {
         if (text.isBlank()) return emptyList()
         return withContext(Dispatchers.Default) {
@@ -322,7 +350,7 @@ internal object SpellCheck {
             val skip = spansToSkip(text, words)
             val masked = maskSkipped(text, skip)
             val matches = try {
-                val lt = engine()
+                val lt = engine(locale)
                 gate.withLock {
                     coroutineContext.ensureActive()
                     lt.check(masked)
@@ -337,10 +365,18 @@ internal object SpellCheck {
         }
     }
 
-    private suspend fun engine(): JLanguageTool {
-        tool?.let { return it }
+    private suspend fun engine(locale: Locale = Regional.locale()): JLanguageTool {
+        val language = spellLanguage(locale)
+        val code = language.javaClass.name
+        val ready = tool
+        if (ready != null && toolCode == code) return ready
         return gate.withLock {
-            tool ?: JLanguageTool(AmericanEnglish.getInstance()).also { tool = it }
+            val current = tool
+            if (current != null && toolCode == code) return@withLock current
+            JLanguageTool(language).also {
+                toolCode = code
+                tool = it
+            }
         }
     }
 }

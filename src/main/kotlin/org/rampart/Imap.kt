@@ -529,7 +529,7 @@ internal class Imap private constructor(
         draftsMailboxId: String,
         replacing: String?,
     ): String {
-        val message = buildMessage(Session.getInstance(Properties()), draft, identity, emptyList())
+        val message = buildMessage(Session.getInstance(Properties()), draft, identity, emptyList(), forDraft = true)
         message.setFlag(Flags.Flag.DRAFT, true)
         val id = append(draftsMailboxId, message)
         // After the new one is safely there. A draft saved twice is an annoyance; a draft
@@ -870,11 +870,17 @@ internal class Imap private constructor(
             // RFC822.SIZE comes with the envelope fetch, so this costs nothing extra.
             size = runCatching { message.size.toLong() }.getOrNull()?.coerceAtLeast(0L) ?: 0L,
             listId = listIdOf(runCatching { message.getHeader("List-Id")?.firstOrNull() }.getOrNull()),
-            // To and Cc ride in the ENVELOPE already fetched, so this is not another request.
+            // To, Cc and Bcc ride in the ENVELOPE already fetched, so this is not another
+            // request. Bcc is usually empty on mail you received. On mail you sent it is
+            // the only place a blind copy is written, and leaving it out drops that person.
             recipients = runCatching {
-                listOf(Message.RecipientType.TO, Message.RecipientType.CC).flatMap { type ->
+                fun addresses(type: Message.RecipientType) =
                     message.getRecipients(type).orEmpty().mapNotNull { (it as? InternetAddress)?.address }
-                }.map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct()
+                storedRecipients(
+                    addresses(Message.RecipientType.TO),
+                    addresses(Message.RecipientType.CC),
+                    addresses(Message.RecipientType.BCC),
+                )
             }.getOrDefault(emptyList()),
         )
     }
@@ -1070,6 +1076,10 @@ internal fun bodyFromHeaders(headers: List<Pair<String, String>>): Body {
         serverVerdicts = VERDICT_HEADERS.mapNotNull { name -> first(name)?.let { name to it } }.toMap(),
         deliveredTo = values("Delivered-To").flatMap(::addressesFrom),
         originalTo = values("X-Original-To").flatMap(::addressesFrom),
+        answeredTo = answeredAddresses(values(ANSWERED_TO)),
+        answeredCc = answeredAddresses(values(ANSWERED_CC)),
+        answeredDeliveredTo = answeredAddresses(values(ANSWERED_DELIVERED_TO)),
+        answeredOriginalTo = answeredAddresses(values(ANSWERED_ORIGINAL_TO)),
     )
 }
 

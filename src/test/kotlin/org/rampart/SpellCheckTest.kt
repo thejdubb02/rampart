@@ -1,5 +1,6 @@
 package org.rampart
 
+import java.util.Locale
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -137,6 +138,26 @@ class SpellCheckTest {
             found.kind == IssueKind.SPELLING && text.substring(found.range) == "mistke"
         })
         assertTrue(issue.suggestions.any { it.equals("mistake", ignoreCase = true) })
+    }
+
+    @Test
+    fun `the dictionary follows the language and region`() {
+        assertEquals("BritishEnglish", spellLanguage(Locale.UK).javaClass.simpleName)
+        assertEquals("CanadianEnglish", spellLanguage(Locale.CANADA).javaClass.simpleName)
+        assertEquals("AustralianEnglish", spellLanguage(Locale.forLanguageTag("en-AU")).javaClass.simpleName)
+        assertEquals("AmericanEnglish", spellLanguage(Locale.US).javaClass.simpleName)
+        assertEquals("AmericanEnglish", spellLanguage(Locale.ENGLISH).javaClass.simpleName)
+        assertEquals("AmericanEnglish", spellLanguage(Locale.GERMAN).javaClass.simpleName)
+        assertEquals("AmericanEnglish", spellLanguage(Locale.CANADA_FRENCH).javaClass.simpleName)
+    }
+
+    @Test
+    fun `colour is a word in British English and a misspelling in American`() = runBlocking {
+        val text = "The colour is blue."
+        val british = SpellCheck.check(text, grammar = false, locale = Locale.UK)
+        assertTrue(british.none { it.kind == IssueKind.SPELLING && text.substring(it.range) == "colour" })
+        val american = SpellCheck.check(text, grammar = false, locale = Locale.US)
+        assertTrue(american.any { it.kind == IssueKind.SPELLING && text.substring(it.range) == "colour" })
     }
 
     private fun kept(text: String, dictionary: Collection<String> = emptyList()): String =

@@ -1,9 +1,12 @@
 package org.rampart
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import java.nio.file.Files
 import java.time.Instant
 import kotlin.test.Test
@@ -124,6 +127,48 @@ class PersonHistoryTest {
     }
 
     @Test
+    fun `a near miss is not this person, in the counts or the dates`() {
+        val bob = "bob@example.org"
+        val hits = listOf(
+            PersonHit("jimbob@example.org", emptyList(), "2020-01-01T00:00:00Z"),
+            PersonHit("bob@example.org", emptyList(), "2024-05-01T00:00:00Z"),
+            PersonHit("me@example.org", listOf("jimbob@example.org"), "2021-01-01T00:00:00Z"),
+            PersonHit("me@example.org", listOf("bob@example.org"), "2024-06-01T00:00:00Z"),
+        )
+        assertEquals(
+            PersonStats(received = 1, sent = 1, first = "2024-05-01T00:00:00Z", last = "2024-06-01T00:00:00Z"),
+            exactPersonStats(hits, listOf(bob), onFirstPage = true),
+        )
+        assertNull(exactPersonStats(hits, listOf(bob), onFirstPage = false).last)
+    }
+
+    @Test
+    fun `a blind copy is part of who the message went to`() {
+        val onlyBcc = buildJsonObject {
+            putJsonArray("bcc") {
+                add(buildJsonObject { put("name", "Bob"); put("email", "Bob@Example.org") })
+            }
+        }
+        assertEquals(listOf("bob@example.org"), recipientsIn(onlyBcc))
+        val repeated = buildJsonObject {
+            putJsonArray("to") { add(buildJsonObject { put("email", "bob@example.org") }) }
+            putJsonArray("cc") { add(buildJsonObject { put("email", "Bob@Example.org") }) }
+            putJsonArray("bcc") { add(buildJsonObject { put("email", "sam@example.org") }) }
+        }
+        assertEquals(listOf("bob@example.org", "sam@example.org"), recipientsIn(repeated))
+        assertTrue("bcc" in emailGetProperties)
+    }
+
+    @Test
+    fun `a person who was only blind copied is in the copy`() = withStore { store ->
+        val recipients = storedRecipients(emptyList(), emptyList(), listOf("Bob@Example.org"))
+        store.put("sent", listOf(row("bcc1", 10, from = "me@example.org", to = recipients)))
+        val bob = listOf("bob@example.org")
+        assertEquals(listOf("bcc1"), store.personPage(bob, 100, 0).map { it.id })
+        assertEquals(PersonStats(received = 0, sent = 1, first = at(10), last = at(10)), store.personStats(bob))
+    }
+
+    @Test
     fun `an unreachable server is answered from the copy, and says so`() = withStore { store ->
         store.put("inbox", listOf(row("in1", 10)))
         // Nothing listens on port 1, so the request fails the way an offline one does.
@@ -157,11 +202,17 @@ class PersonHistoryTest {
             server.reset()
             val page = jmap.personPage(listOf("sender5@example.org"), 0, 100, withStats = true)
             assertEquals(1, server.apiTrips.get(), "page, counts and first date in one round trip")
-            assertEquals(6, server.methods.get())
+            assertEquals(4, server.methods.get())
             // The fake server ignores the filter and hands back m0 to m99, so the rows kept are
             // exactly the ones really from sender5, and not sender50 to sender59.
             assertEquals(listOf("m5"), page.rows.map { it.id })
             assertEquals(100, page.consumed)
+            // The same server reports a total of 50,000 for every query. The count has to
+            // come from the messages themselves: sender5 is every 200th id in the capped batch.
+            val stats = page.stats ?: PersonStats(received = -1)
+            val expected = (0 until PERSON_STAT_LIMIT).count { it % 200 == 5 }
+            assertEquals(expected, stats.received)
+            assertEquals(0, stats.sent)
             server.reset()
             jmap.personPage(listOf("sender5@example.org"), 100, 100, withStats = false)
             assertEquals(2, server.methods.get(), "later pages are only the page")

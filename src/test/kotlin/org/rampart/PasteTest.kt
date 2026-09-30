@@ -12,11 +12,12 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.runBlocking
 
 /**
  * Paste and drop decide what to attach before any window is involved.
  * A test that only checks a function returned something is not one of these:
- * each one pins the file, the picture, or the decision to leave text alone.
+ * each one pins the file, the picture, or the text.
  */
 class PasteTest {
 
@@ -141,10 +142,10 @@ class PasteTest {
     }
 
     @Test
-    fun `a clipboard with text is left for the field, even beside a picture`() {
+    fun `a clipboard with text is text, even beside a picture`() {
         val image = BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB)
         assertEquals(
-            PasteOffer.Pass,
+            PasteOffer.Text("See you Tuesday."),
             pasteOffer(
                 Clip(
                     mapOf(
@@ -154,6 +155,27 @@ class PasteTest {
                 ),
             ),
         )
+    }
+
+    @Test
+    fun `a clipboard flavor is read off the caller thread`() = runBlocking {
+        val caller = Thread.currentThread()
+        var seen: Thread? = null
+        val offer = offerFromClipboard(
+            Clip(mapOf(DataFlavor.stringFlavor to {
+                seen = Thread.currentThread()
+                "See you Tuesday."
+            })),
+        )
+        assertEquals(PasteOffer.Text("See you Tuesday."), offer)
+        assertTrue(seen != null && seen != caller)
+    }
+
+    @Test
+    fun `pasted text replaces the selection and leaves the caret after it`() {
+        assertEquals(PastedText("Hello there.", 11), pastedInto("Hello.", 5, 5, " there"))
+        assertEquals(PastedText("Hello.", 5), pastedInto("Hello world.", 5, 11, ""))
+        assertEquals(PastedText("Hi", 2), pastedInto("Hello", 5, 1, "i"))
     }
 
     @Test

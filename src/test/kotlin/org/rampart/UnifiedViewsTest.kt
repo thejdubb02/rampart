@@ -125,6 +125,20 @@ class UnifiedViewsTest {
     }
 
     @Test
+    fun `the unread total leaves out a shared inbox that is switched out`() {
+        val mine = "me@example.com@mail.example.com"
+        val sales = sharedKey("me@example.com", "mail.example.com", "g")
+        fun inbox(unread: Int) = listOf(Mailbox("in", "Inbox", "inbox", unread, unreadThreads = unread))
+        val boxes = mapOf(mine to inbox(2), sales to inbox(4))
+        assertEquals(6, unifiedInboxUnread(boxes, emptyMap()))
+        val (key, value) = includeChange(sales, included = false)
+        assertEquals(2, unifiedInboxUnread(boxes, mapOf(key to value!!)))
+        // Your own inbox still counts when something tries to switch it out.
+        assertEquals(6, unifiedInboxUnread(boxes, mapOf(includeKey(mine) to "no")))
+        assertEquals(2, unifiedInboxUnread(boxes, mapOf(key to value, includeKey(mine) to "no")))
+    }
+
+    @Test
     fun `each view has its own pseudo folder that no server folder can be`() {
         UnifiedView.entries.forEach { view ->
             assertEquals(view, UnifiedView.of(view.mailbox().id))

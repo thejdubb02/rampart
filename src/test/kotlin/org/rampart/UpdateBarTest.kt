@@ -69,4 +69,22 @@ class UpdateBarTest {
         // A failure is read from the message alone, not templated around the version.
         assertEquals("could not reach it", UpdateBarState.Failed("0.1.174", "could not reach it").label)
     }
+
+    @Test
+    fun `finding a newer version does not claim it is already downloaded`() {
+        assertEquals(UpdateBarState.Hidden, Updates.stateAfterNewer(UpdateBarState.Hidden, "0.1.176"))
+        val failed = UpdateBarState.Failed("0.1.174", "The update did not go in.")
+        assertEquals(failed, Updates.stateAfterNewer(failed, "0.1.176"))
+    }
+
+    @Test
+    fun `a version already waiting is not fetched again, and a failure is`() {
+        assertFalse(Updates.shouldPrefetch(UpdateBarState.Waiting("0.1.176"), "0.1.176"))
+        assertTrue(Updates.shouldPrefetch(UpdateBarState.Hidden, "0.1.176"))
+        assertTrue(Updates.shouldPrefetch(UpdateBarState.Failed("0.1.176", "no"), "0.1.176"))
+        assertTrue(Updates.shouldPrefetch(UpdateBarState.Waiting("0.1.174"), "0.1.176"))
+        assertFalse(Updates.shouldPrefetch(UpdateBarState.Staging("0.1.176"), "0.1.176"))
+        assertFalse(Updates.shouldPrefetch(UpdateBarState.Hidden, null))
+        assertFalse(Updates.shouldPrefetch(UpdateBarState.Hidden, "  "))
+    }
 }
