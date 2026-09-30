@@ -97,6 +97,9 @@ internal class SyncSource(
  */
 internal val SYNCED_SETTINGS: Map<String, SyncShape> = mapOf(
     "theme" to SyncShape.TEXT,
+    // Null, with no theme, is System. It has to travel, or the other computer cannot
+    // tell "follow this computer" from "never chosen".
+    "dark" to SyncShape.TEXT,
     "customThemes" to SyncShape.LIST_OF_OBJECTS,
     "iconPack" to SyncShape.TEXT,
     "sidebarIcons" to SyncShape.TEXT,
@@ -111,10 +114,13 @@ internal val SYNCED_SETTINGS: Map<String, SyncShape> = mapOf(
     "hoverActions" to SyncShape.LIST_OF_TEXT,
     "savedSearches" to SyncShape.LIST_OF_OBJECTS,
     "order" to SyncShape.TEXT,
+    "orderAppliesToAll" to SyncShape.TEXT,
     "markReadDelay" to SyncShape.TEXT,
     "archiveBy" to SyncShape.TEXT,
     "messageMode" to SyncShape.TEXT,
     "messageScale" to SyncShape.TEXT,
+    "fontSize" to SyncShape.TEXT,
+    "animations" to SyncShape.TEXT,
     "undoSeconds" to SyncShape.TEXT,
     "undoBarSeconds" to SyncShape.TEXT,
     "signatureAboveQuote" to SyncShape.TEXT,

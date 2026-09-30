@@ -29,6 +29,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -48,6 +49,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
@@ -158,14 +160,24 @@ internal fun AdminWindow() {
     val connection = AdminConsole.connection ?: return
     val scheme = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
+    // A second window does not inherit the first one's locals. The font scale here is
+    // already the system scale times the chosen size, so it is copied, not multiplied again.
+    val fontScale = LocalDensity.current.fontScale
+    val animations = LocalAnimationsEnabled.current
     Window(
         onCloseRequest = { AdminConsole.open = false },
         title = "Rampart server admin",
         state = rememberWindowState(size = DpSize(1180.dp, 800.dp)),
     ) {
-        MaterialTheme(colorScheme = scheme, typography = typography) {
-            Surface(Modifier.fillMaxSize()) {
-                AdminConsolePane(connection)
+        val base = LocalDensity.current
+        CompositionLocalProvider(
+            LocalDensity provides androidx.compose.ui.unit.Density(base.density, fontScale),
+            LocalAnimationsEnabled provides animations,
+        ) {
+            MaterialTheme(colorScheme = scheme, typography = typography) {
+                Surface(Modifier.fillMaxSize()) {
+                    AdminConsolePane(connection)
+                }
             }
         }
     }

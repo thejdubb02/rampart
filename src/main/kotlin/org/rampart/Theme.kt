@@ -52,6 +52,27 @@ internal val Archivo = FontFamily(
     Font("font/Archivo-700.ttf", FontWeight.Bold),
 )
 
+/**
+ * How large the whole interface is drawn, apart from the message itself.
+ *
+ * Message bodies have their own scale. This one multiplies the operating system's font
+ * scale, so a person who already set a larger system font still gets it, and Medium
+ * changes nothing.
+ */
+internal enum class UiFont(val key: String, val label: String, val scale: Float) {
+    SMALL("small", "Small", 0.85f),
+    MEDIUM("medium", "Medium", 1f),
+    LARGE("large", "Large", 1.15f),
+    ;
+
+    companion object {
+        /** A missing or unknown value is Medium, which is the size the window already had. */
+        fun of(key: String?): UiFont =
+            entries.firstOrNull { it.key.equals(key, ignoreCase = true) || it.name.equals(key, ignoreCase = true) }
+                ?: MEDIUM
+    }
+}
+
 /** Material's scale, in Archivo, tightened where mail is read rather than skimmed. */
 internal val RampartTypography: Typography = Typography().let { base ->
     fun androidx.compose.ui.text.TextStyle.f(size: TextUnit? = null, weight: FontWeight? = null) =

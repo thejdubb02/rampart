@@ -518,6 +518,7 @@ internal fun MessageList(
                     // thousand messages in it costs the same as one with twenty. What that
                     // folder still needs is the next page, which is what `onNeedMore` is.
                     items(rowsInOrder, key = { rowToken(it) }) { message ->
+                        Column(Modifier.rowChange()) {
                         MessageRow(
                             message = message,
                             selected = rowToken(message) == selected?.let(::rowToken) || rowToken(message) in picked,
@@ -531,6 +532,7 @@ internal fun MessageList(
                             onSelect = pick,
                         )
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        }
                     }
                     if (loadingMore) {
                         item {
@@ -724,9 +726,13 @@ private fun MessageRow(
                 .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent),
         )
         val (who, _) = displaySender(message.from, message.fromEmail)
-        if (density == Density.COMPACT) {
+        // Extra compact is the same one line as Compact, with less padding. A second layout
+        // would only add the avatar and the preview that this density exists to remove.
+        if (density == Density.COMPACT || density == Density.EXTRA_COMPACT) {
+            val startPad = if (density == Density.EXTRA_COMPACT) 6.dp else 10.dp
+            val endPad = if (density == Density.EXTRA_COMPACT) 8.dp else 14.dp
             Row(
-                Modifier.fillMaxWidth().padding(start = 10.dp, end = 14.dp, top = topPad, bottom = bottomPad),
+                Modifier.fillMaxWidth().padding(start = startPad, end = endPad, top = topPad, bottom = bottomPad),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(Modifier.size(7.dp)) {

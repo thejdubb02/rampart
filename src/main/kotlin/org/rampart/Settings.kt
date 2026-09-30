@@ -17,6 +17,15 @@ import kotlinx.serialization.json.put
 /** Where the window was and how big, so reopening puts it back. */
 data class SavedWindow(val x: Int, val y: Int, val width: Int, val height: Int, val maximized: Boolean)
 
+/** Missing or not a boolean means on: a new install keeps the motion it has always had. */
+internal fun animationsOn(stored: Boolean?): Boolean = stored ?: true
+
+/**
+ * Missing means on, which is one order for every folder, as the list has always worked.
+ * Anything that is not a boolean is treated the same as missing.
+ */
+internal fun orderAppliesEverywhere(stored: Boolean?): Boolean = stored ?: true
+
 /**
  * Preferences, kept apart from [Accounts] on purpose: that file is meant to be written by
  * someone else and handed over, and one person's theme and window size have no business
@@ -71,7 +80,7 @@ object Settings {
     }
 
     /**
-     * How tightly packed the message list is: "compact", "normal", or "spacious".
+     * How tightly packed the message list is: "compact", "extra-compact", "normal", or "spacious".
      */
     fun density(): String? = read()["density"]?.jsonPrimitive?.contentOrNull
 
@@ -93,11 +102,25 @@ object Settings {
     fun setTableSort(value: String) = write { put("tableSort", JsonPrimitive(value)) }
 
     /**
-     * What the light/dark switch was set to before themes existed, and nothing writes it any
-     * more. It is still read so that an existing install that had been switched to dark opens
-     * dark rather than snapping back to whatever the operating system says.
+     * Light, dark, or follow the computer.
+     *
+     * Null means System: nothing was chosen, so the window follows the operating system and
+     * changes when it does. True is dark, false is light. A named theme still wins until
+     * System is chosen on purpose, which clears both this and the theme.
      */
     fun dark(): Boolean? = read()["dark"]?.jsonPrimitive?.booleanOrNull
+
+    /**
+     * The named theme and the light/dark choice, written together.
+     *
+     * A null theme or a null dark value removes that key. System is both removed: nothing
+     * stored, so the window follows the computer. Writing them separately could leave a
+     * theme without a choice, or a choice without the theme it belongs to.
+     */
+    fun setAppearance(themeKey: String?, dark: Boolean?) = write {
+        if (themeKey == null) remove("theme") else put("theme", JsonPrimitive(themeKey))
+        if (dark == null) remove("dark") else put("dark", JsonPrimitive(dark))
+    }
 
     /** On by default: a mail client that does not tell you about mail is a folder browser. */
     fun notifyOnArrival(): Boolean = read()["notify"]?.jsonPrimitive?.booleanOrNull ?: true
@@ -177,6 +200,17 @@ object Settings {
         ?.let { name -> Order.entries.firstOrNull { it.name == name } } ?: Order.NEWEST
 
     internal fun setOrder(value: Order) = write { put("order", JsonPrimitive(value.name)) }
+
+    /**
+     * Whether the chosen order applies to every folder.
+     *
+     * On by default, which is how the list has always worked. Off, the choice is for the
+     * Inbox only and every other folder stays newest first. A missing value is on, so an
+     * older settings file does not suddenly sort Sent a different way.
+     */
+    fun orderAppliesToAll(): Boolean = orderAppliesEverywhere(read()["orderAppliesToAll"]?.jsonPrimitive?.booleanOrNull)
+
+    fun setOrderAppliesToAll(value: Boolean) = write { put("orderAppliesToAll", JsonPrimitive(value)) }
 
     /**
      * How long an open message waits before it counts as read, in milliseconds.
@@ -637,6 +671,26 @@ object Settings {
     fun messageScale(): Float = read()["messageScale"]?.jsonPrimitive?.floatOrNull ?: 1.0f
 
     fun setMessageScale(value: Float) = write { put("messageScale", JsonPrimitive(value)) }
+
+    /**
+     * How large the whole window is: "small", "medium", or "large".
+     *
+     * Separate from [messageScale], which only scales the message. Missing or unknown reads
+     * as medium, the size the window already had.
+     */
+    fun fontSize(): String? = text("fontSize")
+
+    fun setFontSize(key: String) = write { put("fontSize", JsonPrimitive(UiFont.of(key).key)) }
+
+    /**
+     * Whether panels, menus and the list animate.
+     *
+     * On by default. A missing or non-boolean value is on, so an older file keeps the
+     * motion it has always had.
+     */
+    fun animations(): Boolean = animationsOn(read()["animations"]?.jsonPrimitive?.booleanOrNull)
+
+    fun setAnimations(value: Boolean) = write { put("animations", JsonPrimitive(value)) }
 
     /**
      * Senders whose pictures may be fetched from the web. Domains, not addresses: see

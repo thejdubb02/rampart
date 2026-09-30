@@ -96,12 +96,35 @@ internal class ComputerPlace(private val choices: ComputerChoices) : SettingPlac
             Local(
                 entry(
                     "theme", "Theme",
-                    "The colours of the whole window. Some are light and some are dark; there is no separate dark mode switch, a dark theme is the dark mode.",
+                    "The colours of the whole window. Light, Dark and System choose which way it goes. System follows this computer. A named theme is that theme.",
                     SettingKind.OneOf(choices.themes), "Themes",
                     "dark mode light mode night appearance colours colors palette look",
                 ),
                 { Settings.theme()?.let { JsonPrimitive(it) } ?: JsonNull },
-                { v -> Settings.setTheme(v.text()) },
+                { v ->
+                    val key = v.text()
+                    val picked = (THEMES + Settings.customThemes()).firstOrNull { it.key == key }
+                    if (picked == null) Settings.setTheme(key) else Settings.setAppearance(key, picked.dark)
+                },
+            ),
+            oneOf(
+                "themeMode", "System appearance",
+                "Light, Dark, or System. System follows this computer and changes when the computer does.",
+                "Themes", "light dark system follow computer appearance night",
+                listOf(SettingOption("light", "Light"), SettingOption("dark", "Dark"), SettingOption("system", "System")),
+                {
+                    val key = Settings.theme()
+                    val dark = Settings.dark()
+                    val known = (THEMES + Settings.customThemes()).firstOrNull { it.key == key }
+                    themeModeKey(if (known == null) null else key, dark, known?.dark == true)
+                },
+                { v ->
+                    when (v) {
+                        "light" -> applyThemeMode(ThemeMode.LIGHT)
+                        "dark" -> applyThemeMode(ThemeMode.DARK)
+                        else -> applyThemeMode(ThemeMode.SYSTEM)
+                    }
+                },
             ),
             oneOf(
                 "icons", "Icons", "The icon pack, kept apart from the theme so either can change without the other.",
@@ -118,10 +141,24 @@ internal class ComputerPlace(private val choices: ComputerChoices) : SettingPlac
             ),
             oneOf(
                 "density", "Density", "How tightly packed the message list is drawn.",
-                "Themes", "density message list compact spacious normal appearance",
+                "Themes", "density message list compact extra compact spacious normal appearance",
                 Density.entries.map { SettingOption(it.key, it.label) },
                 { Settings.density()?.let { Density.of(it).key } ?: Density.NORMAL.key },
                 Settings::setDensity,
+            ),
+            oneOf(
+                "fontSize", "Font size",
+                "How large the whole window is drawn. Message text has its own size.",
+                "Themes", "font size text small medium large interface appearance",
+                UiFont.entries.map { SettingOption(it.key, it.label) },
+                { UiFont.of(Settings.fontSize()).key },
+                { v -> Settings.setFontSize(UiFont.of(v).key) },
+            ),
+            onOff(
+                "animations", "Enable animations",
+                "Off, and panels, menus and list changes happen at once.",
+                "Themes", "animation motion transition appearance",
+                Settings::animations, Settings::setAnimations,
             ),
             oneOf(
                 "listLayout", "List layout", "How each message is drawn in the list: the normal rows, a table, or cards.",
@@ -173,6 +210,12 @@ internal class ComputerPlace(private val choices: ComputerChoices) : SettingPlac
                 "order", "Sort order", "The order of the message list.",
                 "Reading and archiving", "sort order list newest oldest", Order.entries.map { SettingOption(it.name, it.label) },
                 { Settings.order().name }, { v -> Order.entries.firstOrNull { it.name == v }?.let(Settings::setOrder) },
+            ),
+            onOff(
+                "orderAppliesToAll", "Apply sort to all folders",
+                "Off keeps the chosen order for the Inbox only. Every other folder stays newest first.",
+                "Themes", "sort order folders inbox newest",
+                Settings::orderAppliesToAll, Settings::setOrderAppliesToAll,
             ),
             Local(
                 entry(

@@ -59,3 +59,27 @@ internal fun <T> nextInList(list: List<T>, index: Int, leaving: (T) -> Boolean =
 
 /** A subject with its reply and forward prefixes taken off, lowercased for comparison. */
 internal fun bareSubject(subject: String): String = subject.replace(PREFIX, "").trim().lowercase()
+
+/**
+ * Whether the list on screen is an inbox.
+ *
+ * The merged inbox counts: it is given the inbox role. A search, a tag, or one person's
+ * history is not an inbox even when the folder behind it is, because those lists are not
+ * the Inbox. The other combined views have no role, so they are not an inbox either.
+ */
+internal fun listIsInbox(
+    folderRole: String?,
+    searching: Boolean,
+    viewingTag: Boolean,
+    viewingPerson: Boolean,
+): Boolean = !searching && !viewingTag && !viewingPerson && folderRole == "inbox"
+
+/**
+ * The order the list is actually drawn in.
+ *
+ * Apply-to-all is how the list has always worked. Off, the chosen order is for the Inbox
+ * only, and every other folder stays newest first: Sent is where someone looks for the
+ * last thing they sent.
+ */
+internal fun orderForList(chosen: Order, inbox: Boolean, applyToAll: Boolean): Order =
+    if (applyToAll || inbox) chosen else Order.NEWEST

@@ -118,6 +118,13 @@ internal fun SettingsPane(
     onMessageScale: (Float) -> Unit = {},
     /** Told when the message list density changes, so the list updates immediately. */
     onDensity: (Density) -> Unit = {},
+    /**
+     * Re-read theme mode, font size and animations. The window holds those above this pane,
+     * so a change here has to be told upwards or the rest of the window stays as it was.
+     */
+    onAppearance: () -> Unit = {},
+    /** The Inbox-only sort switch. The list holds it, the same way it holds the order. */
+    onOrderAll: (Boolean) -> Unit = {},
     /** The sidebar icon colouring, so the choice and the sidebar stay on the same value. */
     sidebarIcons: SidebarIcons = SidebarIcons.COLOUR,
     /** Told when that choice changes, so the sidebar repaints without a restart. */
@@ -229,7 +236,7 @@ internal fun SettingsPane(
                             )
                             "themes" -> ThemesPage(
                                 onTheme, iconPack, onIconPack, onTintRowsByTag, onLoader, onTrackingServer, onDensity,
-                                sidebarIcons, onSidebarIcons,
+                                sidebarIcons, onSidebarIcons, onAppearance, onOrderAll,
                             )
                             "identities" -> IdentitiesPage(
                                 accounts, account, onAccount, identities, signatureError, onSignature, onPickSignatureImage,
@@ -454,6 +461,8 @@ private fun ThemesPage(
     onDensity: (Density) -> Unit = {},
     sidebarIcons: SidebarIcons = SidebarIcons.COLOUR,
     onSidebarIcons: (SidebarIcons) -> Unit = {},
+    onAppearance: () -> Unit = {},
+    onOrderAll: (Boolean) -> Unit = {},
 ) {
     val current = LocalRampartTheme.current
     var customThemes by remember { mutableStateOf(Settings.customThemes()) }
@@ -461,36 +470,71 @@ private fun ThemesPage(
     var editingExisting by remember { mutableStateOf(false) }
     var restoreAfterEditing by remember { mutableStateOf<Theme?>(null) }
     var themeMessage by remember { mutableStateOf<String?>(null) }
+    var mode by remember { mutableStateOf(shownThemeMode(Settings.theme(), Settings.dark(), current.dark)) }
+    // Picking a palette leaves System. The radio has to say so, or it keeps claiming the
+    // window is following the computer after a theme was chosen.
+    fun pick(theme: Theme) {
+        mode = if (theme.dark) ThemeMode.DARK else ThemeMode.LIGHT
+        onTheme(theme)
+    }
 
     editing?.let { starting ->
         ThemeEditor(
             starting = starting,
             existing = editingExisting,
-            onPreview = onTheme,
+            onPreview = ::pick,
             onSave = { saved ->
                 customThemes = (customThemes.filterNot {
                     it.key == starting.key || it.key == saved.key
                 } + saved).sortedBy { it.label.lowercase() }
                 Settings.setCustomThemes(customThemes)
                 editing = null
-                onTheme(saved)
+                pick(saved)
             },
             onDelete = {
                 customThemes = customThemes.filterNot { it.key == starting.key }
                 Settings.setCustomThemes(customThemes)
                 editing = null
                 val fallback = restoreAfterEditing?.takeIf { it.key != starting.key } ?: THEMES.first()
-                onTheme(fallback)
+                pick(fallback)
             },
             onCancel = {
                 editing = null
-                restoreAfterEditing?.let(onTheme)
+                restoreAfterEditing?.let(::pick)
             },
         )
         return
     }
 
     Section("Theme", "Ported from Clique, so the ones you already picked there are here.")
+    listOf(
+        ThemeMode.LIGHT to "Light",
+        ThemeMode.DARK to "Dark",
+        ThemeMode.SYSTEM to "System",
+    ).forEach { (option, label) ->
+        Row(
+            Modifier.fillMaxWidth().clickable {
+                mode = option
+                applyThemeMode(option)
+                onAppearance()
+            }.padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(selected = option == mode, onClick = {
+                mode = option
+                applyThemeMode(option)
+                onAppearance()
+            })
+            Spacer(Modifier.width(8.dp))
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+    Text(
+        "System follows this computer, and changes when the computer does.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.outline,
+    )
+    Spacer(Modifier.height(12.dp))
     // Not lazy in any useful sense: there are eighteen of these and the column above
     // already scrolls. The grid is here for the wrapping, so the height has to be given,
     // and a fixed row height times the number of rows is it.
@@ -504,7 +548,7 @@ private fun ThemesPage(
         modifier = Modifier.fillMaxWidth().height((rows * 104).dp),
     ) {
         items(shownThemes, key = { it.key }) { theme ->
-            ThemeCard(theme, selected = theme.key == current.key) { onTheme(theme) }
+            ThemeCard(theme, selected = theme.key == current.key) { pick(theme) }
         }
     }
 
@@ -530,7 +574,7 @@ private fun ThemesPage(
                 editingExisting = false
                 val name = selectedCustom.label + " copy"
                 editing = selectedCustom.copy(key = customThemeKey(name), label = name)
-                onTheme(selectedCustom.copy(key = customThemeKey(name), label = name))
+                pick(selectedCustom.copy(key = customThemeKey(name), label = name))
             }) { Text("Duplicate") }
         }
         OutlinedButton(onClick = {
@@ -540,12 +584,37 @@ private fun ThemesPage(
                         customThemes = (customThemes.filterNot { it.key == imported.key } + imported)
                             .sortedBy { it.label.lowercase() }
                         Settings.setCustomThemes(customThemes)
-                        onTheme(imported)
+                        pick(imported)
                         themeMessage = null
                     }
                 }
                 .onFailure { themeMessage = it.message ?: "The theme could not be imported." }
         }) { Text("Import") }
+    }
+
+    Spacer(Modifier.height(22.dp))
+    Section(
+        "Font size",
+        "How large the whole window is. A message has its own size, on the Reading page.",
+    )
+    var font by remember { mutableStateOf(UiFont.of(Settings.fontSize())) }
+    UiFont.entries.forEach { option ->
+        Row(
+            Modifier.fillMaxWidth().clickable {
+                font = option
+                Settings.setFontSize(option.key)
+                onAppearance()
+            }.padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(selected = option == font, onClick = {
+                font = option
+                Settings.setFontSize(option.key)
+                onAppearance()
+            })
+            Spacer(Modifier.width(8.dp))
+            Text(option.label, style = MaterialTheme.typography.bodyMedium)
+        }
     }
 
     Spacer(Modifier.height(22.dp))
@@ -571,6 +640,58 @@ private fun ThemesPage(
             Spacer(Modifier.width(8.dp))
             Text(option.label, style = MaterialTheme.typography.bodyMedium)
         }
+    }
+
+    Spacer(Modifier.height(18.dp))
+    var orderAll by remember { mutableStateOf(Settings.orderAppliesToAll()) }
+    Section(
+        "Message list order",
+        "Off keeps the order you chose for the Inbox only. Every other folder stays newest first.",
+    )
+    Row(
+        Modifier.fillMaxWidth().clickable {
+            orderAll = !orderAll
+            Settings.setOrderAppliesToAll(orderAll)
+            onOrderAll(orderAll)
+        }.padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Switch(
+            checked = orderAll,
+            onCheckedChange = {
+                orderAll = it
+                Settings.setOrderAppliesToAll(it)
+                onOrderAll(it)
+            },
+        )
+        Spacer(Modifier.width(12.dp))
+        Text("Apply to all folders", style = MaterialTheme.typography.bodyMedium)
+    }
+
+    Spacer(Modifier.height(18.dp))
+    var animations by remember { mutableStateOf(Settings.animations()) }
+    Section(
+        "Animations",
+        "Off, and panels, menus and the list change at once.",
+    )
+    Row(
+        Modifier.fillMaxWidth().clickable {
+            animations = !animations
+            Settings.setAnimations(animations)
+            onAppearance()
+        }.padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Switch(
+            checked = animations,
+            onCheckedChange = {
+                animations = it
+                Settings.setAnimations(it)
+                onAppearance()
+            },
+        )
+        Spacer(Modifier.width(12.dp))
+        Text("Enable animations", style = MaterialTheme.typography.bodyMedium)
     }
 
     Spacer(Modifier.height(22.dp))

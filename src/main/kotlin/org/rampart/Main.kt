@@ -1,6 +1,9 @@
 package org.rampart
 
 import kotlinx.serialization.json.JsonObject
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -67,6 +70,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import org.jetbrains.skia.Image
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density as ComposeDensity
 import androidx.compose.ui.res.loadSvgPainter
 import androidx.compose.ui.res.useResource
 import androidx.compose.ui.input.key.Key
@@ -272,9 +276,18 @@ private fun ApplicationScope.Rampart() {
         state = windowState,
     ) {
         val followSystem = isSystemInDarkTheme()
-        // Settings.dark() is the pre-themes switch. Reading it here is what stops an
-        // existing install opening light again the first time it runs a build with themes.
-        var theme by remember { mutableStateOf(themeFor(Settings.theme(), Settings.dark() ?: followSystem)) }
+        // The stored choice, not a theme remembered once. System is a null theme and a null
+        // dark preference, and it has to be worked out again when the computer changes, or
+        // it would only be right at the moment the window opened.
+        var themeKey by remember { mutableStateOf(Settings.theme()) }
+        var darkPref by remember { mutableStateOf(Settings.dark()) }
+        var customThemes by remember { mutableStateOf(Settings.customThemes()) }
+        var uiFont by remember { mutableStateOf(UiFont.of(Settings.fontSize())) }
+        var animationsOn by remember { mutableStateOf(Settings.animations()) }
+        // A theme being previewed before it is in the saved list. Cleared when the stored
+        // choice is read again, so a change from another computer is not hidden behind it.
+        var pinned by remember { mutableStateOf<Theme?>(null) }
+        val theme = pinned ?: appearanceTheme(themeKey, darkPref, followSystem, THEMES + customThemes)
         var pack by remember { mutableStateOf(iconPack(Settings.iconPack())) }
         // The whole window, not just the part Compose draws. A black strip above a purple
         // theme is the one piece of the app that never matched the rest of it.
@@ -302,15 +315,38 @@ private fun ApplicationScope.Rampart() {
             }
         }
         // Two axes, on purpose. Somebody who likes the dark palette and wants heavier
-        // glyphs should not have to choose between them.
+        // glyphs should not have to choose between them. The font scale multiplies the
+        // operating system's own, so Medium changes nothing and a larger system font still
+        // applies. sp grows with it. The message is drawn by its own engine and does not.
+        val baseDensity = LocalDensity.current
+        fun refreshAppearance() {
+            themeKey = Settings.theme()
+            darkPref = Settings.dark()
+            customThemes = Settings.customThemes()
+            uiFont = UiFont.of(Settings.fontSize())
+            animationsOn = Settings.animations()
+            pinned = null
+        }
         CompositionLocalProvider(
             LocalRampartTheme provides theme,
             LocalIconPack provides pack,
+            LocalDensity provides ComposeDensity(baseDensity.density, baseDensity.fontScale * uiFont.scale),
+            LocalAnimationsEnabled provides animationsOn,
         ) {
-            MaterialTheme(colorScheme = theme.scheme(), typography = RampartTypography) {
+            MaterialTheme(
+                colorScheme = theme.scheme(),
+                typography = RampartTypography,
+            ) {
                 Surface(Modifier.fillMaxSize()) {
                     App(
-                        onTheme = { theme = it; Settings.setTheme(it.key) },
+                        onTheme = { picked ->
+                            Settings.setAppearance(picked.key, picked.dark)
+                            themeKey = picked.key
+                            darkPref = picked.dark
+                            customThemes = Settings.customThemes()
+                            pinned = picked
+                        },
+                        onAppearance = ::refreshAppearance,
                         icons = pack,
                         onIcons = { pack = it; Settings.setIconPack(it.key) },
                         onQuit = ::quit,
@@ -374,6 +410,8 @@ private fun App(
     onUnread: (Int) -> Unit = {},
     /** See [Reader], which is what actually needs this. */
     windowSize: () -> DpSize = { DefaultWindowSize },
+    /** Theme mode, font size and animations live on the window, above this. */
+    onAppearance: () -> Unit = {},
 ) {
     var sessions by remember { mutableStateOf<List<Session>>(emptyList()) }
     var adding by remember { mutableStateOf(false) }
@@ -438,6 +476,7 @@ private fun App(
                     onAddAccount = { adding = true },
                     icons = icons, onIcons = onIcons, onUnread = onUnread,
                     windowSize = windowSize,
+                    onAppearance = onAppearance,
                 )
             }
         }
@@ -541,6 +580,8 @@ private fun Reader(
      * this is that state's `size`, handed down rather than re-asked for.
      */
     windowSize: () -> DpSize = { DefaultWindowSize },
+    /** Theme, font size and animations are held by the window. This asks it to read them again. */
+    onAppearance: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     fun phoneAlert(title: String, message: String) {
@@ -680,6 +721,7 @@ private fun Reader(
     var notifyOnArrival by remember { mutableStateOf(Settings.notifyOnArrival()) }
     var notifyOnOpen by remember { mutableStateOf(Settings.notifyOnOpen()) }
     var order by remember { mutableStateOf(Settings.order()) }
+    var orderAll by remember { mutableStateOf(Settings.orderAppliesToAll()) }
     // Not remembered between runs on purpose: opening the app into a folder that is hiding
     // most of itself, with no memory of having asked for that, reads as lost mail.
     var quick by remember { mutableStateOf(QuickFilters()) }
@@ -2101,8 +2143,11 @@ private fun Reader(
     ) { settingsOpen = false; contactsOpen = false; dashboardOpen = false; calendarOpen = false }
     // Settings another computer changed, redrawn the way Rook's confirmed cards are.
     SettingsSyncFollows(sessions) { changed ->
-        if ("settings.theme" in changed || "settings.customThemes" in changed) {
-            (THEMES + Settings.customThemes()).firstOrNull { it.key == Settings.theme() }?.let(onTheme)
+        if (
+            "settings.theme" in changed || "settings.customThemes" in changed || "settings.dark" in changed ||
+            "settings.fontSize" in changed || "settings.animations" in changed
+        ) {
+            onAppearance()
         }
         if ("settings.iconPack" in changed) onIcons(iconPack(Settings.iconPack()))
         if ("settings.sidebarIcons" in changed) sidebarIcons = SidebarIcons.of(Settings.sidebarIcons())
@@ -2114,6 +2159,7 @@ private fun Reader(
         if ("settings.tintRowsByAccount" in changed || "settings.accountColours" in changed) AccountTintState.reload()
         if ("settings.undoBarSeconds" in changed) undoBarSeconds = Settings.undoBarSeconds()
         if ("settings.order" in changed) order = Settings.order()
+        if ("settings.orderAppliesToAll" in changed) orderAll = Settings.orderAppliesToAll()
         if ("settings.messageMode" in changed) messageMode = Settings.messageMode()
         if ("settings.messageScale" in changed) messageScale = Settings.messageScale()
         if ("settings.savedSearches" in changed) savedSearches = Settings.savedSearches()
@@ -2793,8 +2839,16 @@ private fun Reader(
      * chosen from the list the reader is looking at. The next row, or the one
      * above when this was the last, or nothing when the list is now empty.
      */
+    // The order on screen, which is not always the one that was chosen. Off, "apply to
+    // all folders" keeps that choice for the Inbox and leaves every other list newest first.
+    fun listOrder() = orderForList(
+        order,
+        listIsInbox(here?.second?.role, showingResults, viewingTag != null, viewingPerson != null),
+        orderAll,
+    )
+
     fun advancePast(leaving: (Summary) -> Boolean) {
-        val shown = sorted(emails, order)
+        val shown = sorted(emails, listOrder())
         val at = shown.indexOfFirst { selected?.sameMail(it) == true }
         val open = selected
         if (at < 0) {
@@ -3751,8 +3805,7 @@ private fun Reader(
             // are read again here, as the Settings pages' own callbacks would have.
             for (line in card.lines) {
                 when (line.id) {
-                    "rampart.theme" -> (THEMES + Settings.customThemes())
-                        .firstOrNull { it.key == Settings.theme() }?.let(onTheme)
+                    "rampart.theme", "rampart.themeMode", "rampart.fontSize", "rampart.animations" -> onAppearance()
                     "rampart.icons" -> onIcons(iconPack(Settings.iconPack()))
                     "rampart.sidebarIcons" -> sidebarIcons = SidebarIcons.of(Settings.sidebarIcons())
                     "rampart.loader" -> loader = Loader.of(Settings.loader())
@@ -3763,6 +3816,7 @@ private fun Reader(
                     "rampart.notifyOnArrival" -> notifyOnArrival = Settings.notifyOnArrival()
                     "rampart.notifyOnOpen" -> notifyOnOpen = Settings.notifyOnOpen()
                     "rampart.order" -> order = Settings.order()
+                    "rampart.orderAppliesToAll" -> orderAll = Settings.orderAppliesToAll()
                     "rampart.messageMode" -> messageMode = Settings.messageMode()
                     "rampart.messageScale" -> messageScale = Settings.messageScale()
                 }
@@ -5875,6 +5929,8 @@ private fun Reader(
                     quotas = quotas,
                     onTintRowsByTag = { tintRows = it },
                     onDensity = { density = it },
+                    onAppearance = onAppearance,
+                    onOrderAll = { orderAll = it },
                     sidebarIcons = sidebarIcons,
                     onSidebarIcons = { sidebarIcons = it },
                     onUndoBarSeconds = { undoBarSeconds = it },
@@ -6068,7 +6124,7 @@ private fun Reader(
                     },
                     picked = picked,
                     onRefresh = { scope.launch { refreshNow() } },
-                    order = order,
+                    order = listOrder(),
                     onOrder = { order = it; Settings.setOrder(it) },
                     rowActions = rowActions,
                     scheduled = scheduledSends.associate { it.draftId to it.sendAt },
@@ -6382,19 +6438,29 @@ private fun Reader(
          * Full screen is one button away for a long message, because a panel is the wrong
          * shape for anything with a table in it.
          */
-        composing?.let { writing ->
+        // Kept for the fade out. Without it the panel would vanish before the exit could run.
+        // Off, the fade snaps, which is the same as the panel appearing and disappearing at once.
+        val panelWriting = composing
+        var heldCompose by remember { mutableStateOf(panelWriting) }
+        if (panelWriting != null) heldCompose = panelWriting
+        val writing = panelWriting ?: heldCompose
+        if (writing != null) {
             // Clamped against the live window on every draw, not only while a drag is in
             // progress: a window shrunk since the size was chosen (or since a previous run)
             // should not reopen a panel that no longer fits, without needing the drag itself
             // to have run first.
             val panelSize = clampComposeSize(DpSize(composeWidth, composeHeight), windowSize())
+            AnimatedVisibility(
+                visible = panelWriting != null,
+                enter = fadeIn(motionTween(160)),
+                exit = fadeOut(motionTween(120)),
+                modifier = Modifier.align(if (composeFull) Alignment.Center else Alignment.BottomEnd),
+            ) {
             Box(
-                Modifier
-                    .align(if (composeFull) Alignment.Center else Alignment.BottomEnd)
-                    .then(
-                        if (composeFull) Modifier.fillMaxSize()
-                        else Modifier.padding(16.dp).width(panelSize.width).height(panelSize.height),
-                    ),
+                Modifier.then(
+                    if (composeFull) Modifier.fillMaxSize()
+                    else Modifier.padding(16.dp).width(panelSize.width).height(panelSize.height),
+                ),
             ) {
                 ComposerFrame(full = composeFull) {
                     // A new session is a new composer, even when its draft equals the last one.
@@ -6450,6 +6516,7 @@ private fun Reader(
                         )
                     }
                 }
+            }
             }
         }
     }

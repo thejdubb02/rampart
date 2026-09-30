@@ -375,6 +375,75 @@ fun themeFor(key: String?, systemDark: Boolean): Theme =
     (THEMES + Settings.customThemes()).firstOrNull { it.key == key }
         ?: THEMES.first { it.dark == systemDark }
 
+/** Light, dark, or whatever the operating system is set to. */
+internal enum class ThemeMode { LIGHT, DARK, SYSTEM }
+
+/**
+ * The stored light/dark choice.
+ *
+ * Null is System. That is what a missing [Settings.dark] already meant: nothing stored,
+ * follow the computer. A named theme still wins over this until System is chosen on purpose.
+ */
+internal fun themeModeOf(dark: Boolean?): ThemeMode = when (dark) {
+    true -> ThemeMode.DARK
+    false -> ThemeMode.LIGHT
+    null -> ThemeMode.SYSTEM
+}
+
+/**
+ * Which of Light, Dark and System to show.
+ *
+ * A named theme is that theme, light or dark, even when no separate choice was stored.
+ * Otherwise the control would say System next to a palette the person already picked.
+ */
+internal fun shownThemeMode(themeKey: String?, dark: Boolean?, themeIsDark: Boolean): ThemeMode =
+    if (themeKey != null) {
+        if (themeIsDark) ThemeMode.DARK else ThemeMode.LIGHT
+    } else {
+        themeModeOf(dark)
+    }
+
+/** "light", "dark" or "system", for a choice stored as one of those three words. */
+internal fun themeModeKey(themeKey: String?, dark: Boolean?, themeIsDark: Boolean): String = when (
+    shownThemeMode(themeKey, dark, themeIsDark)
+) {
+    ThemeMode.LIGHT -> "light"
+    ThemeMode.DARK -> "dark"
+    ThemeMode.SYSTEM -> "system"
+}
+
+/**
+ * The palette to draw.
+ *
+ * A stored key wins, including one that was made or imported, so System does not throw
+ * away a palette until the person actually picks System. With nothing stored, the built-in
+ * light or dark pair follows [systemDark], and a stored dark preference that disagrees
+ * with the computer still wins. The themes are passed in so this can run on every frame
+ * without reading the settings file.
+ */
+internal fun appearanceTheme(key: String?, dark: Boolean?, systemDark: Boolean, themes: List<Theme>): Theme =
+    themes.firstOrNull { it.key == key } ?: THEMES.first { it.dark == (dark ?: systemDark) }
+
+/**
+ * Writes Light, Dark or System.
+ *
+ * System clears both the theme and the dark preference, which is the only way the next
+ * open follows the computer. Light or Dark records that choice, and switches to the
+ * built-in palette of that kind only when the one on screen is the other kind. A dark
+ * character theme stays when Dark is picked.
+ */
+internal fun applyThemeMode(mode: ThemeMode) {
+    when (mode) {
+        ThemeMode.SYSTEM -> Settings.setAppearance(null, null)
+        ThemeMode.LIGHT, ThemeMode.DARK -> {
+            val wantDark = mode == ThemeMode.DARK
+            val stored = (THEMES + Settings.customThemes()).firstOrNull { it.key == Settings.theme() }
+            val key = if (stored != null && stored.dark == wantDark) stored.key else THEMES.first { it.dark == wantDark }.key
+            Settings.setAppearance(key, wantDark)
+        }
+    }
+}
+
 /**
  * The theme in force. A local rather than a parameter because the two places that need the
  * theme itself, as opposed to the colours Material already carries, are a corner decoration

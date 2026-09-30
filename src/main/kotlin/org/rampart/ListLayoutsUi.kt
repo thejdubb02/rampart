@@ -204,8 +204,10 @@ private fun MessageTable(
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             LazyColumn(Modifier.fillMaxSize(), state = scroll) {
                 items(rows, key = { rowToken(it) }) { message ->
-                    TableRow(message, isSelected(message), widths, rowActions, onSelect)
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    Column(Modifier.rowChange()) {
+                        TableRow(message, isSelected(message), widths, rowActions, onSelect)
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    }
                 }
                 if (loadingMore) item { MoreComing() }
             }
@@ -364,7 +366,9 @@ private fun MessageCards(
 ) {
     LazyColumn(Modifier.fillMaxSize(), state = scroll) {
         items(emails, key = { rowToken(it) }) { message ->
-            MessageCard(message, isSelected(message), rowActions, onSelect)
+            Box(Modifier.rowChange()) {
+                MessageCard(message, isSelected(message), rowActions, onSelect)
+            }
         }
         if (loadingMore) item { MoreComing() }
     }
