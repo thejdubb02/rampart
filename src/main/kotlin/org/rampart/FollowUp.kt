@@ -1,5 +1,6 @@
 package org.rampart
 
+import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneOffset
@@ -169,19 +170,19 @@ internal enum class FollowUpWhen(val label: String) {
     NEXT_WEEK("Next week"),
     ;
 
-    fun dueAt(now: ZonedDateTime): ZonedDateTime = when (this) {
+    fun dueAt(now: ZonedDateTime, weekStart: DayOfWeek = Regional.firstDayOfWeek()): ZonedDateTime = when (this) {
         TOMORROW -> SnoozeUntil.TOMORROW.dueAt(now)
         IN_THREE_DAYS -> SnoozeUntil.TOMORROW.dueAt(now.plusDays(2)).withZoneSameInstant(now.zone)
-        NEXT_WEEK -> SnoozeUntil.NEXT_WEEK.dueAt(now)
+        NEXT_WEEK -> SnoozeUntil.NEXT_WEEK.dueAt(now, weekStart = weekStart)
     }
 }
 
 /** When a follow-up is due, as a person would say it, in [now]'s zone. */
-internal fun followUpText(due: Instant?, now: ZonedDateTime): String {
+internal fun followUpText(due: Instant?, now: ZonedDateTime, region: Region = Regional.current()): String {
     if (due == null) return "Follow up, no date"
     if (!due.isAfter(now.toInstant())) return "Follow up now"
     // The snooze wording, which already says "back at", "back tomorrow at" and so on.
-    return "Follow up " + snoozeText(due, now).removePrefix("back ")
+    return "Follow up " + snoozeText(due, now, region).removePrefix("back ")
 }
 
 /** Whether [message] was sent by the person, which is when "only if no reply" means anything. */
@@ -210,10 +211,6 @@ internal fun answeredBySomeoneElse(flagged: Summary, thread: List<Summary>, own:
             instantOf(m.receivedAt)?.isAfter(sent) == true
     }
 }
-
-private fun instantOf(text: String): Instant? =
-    runCatching { Instant.parse(text) }.getOrNull()
-        ?: runCatching { java.time.OffsetDateTime.parse(text).toInstant() }.getOrNull()
 
 /** The flagged messages that are due now, the earliest first. Undated ones are not due. */
 internal fun dueFollowUps(messages: List<Summary>, now: Instant): List<Summary> =

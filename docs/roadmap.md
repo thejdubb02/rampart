@@ -1083,7 +1083,7 @@ Spark, Mailspring, Canary and Superhuman users rely on daily, ordered by real us
 | Unified inbox that still sends from the right address | Built, with a warning above Send when replying from a different address than the mail came to (RAM-107) |
 | Modern sign-in (OAuth for Gmail and Microsoft) | Built (RAM-39); needs a client ID registered with Google and with Microsoft before it can be used |
 | Exchange / Microsoft 365 native (EWS or Graph) | **Missing.** IMAP and JMAP only |
-| Offline cache | Bodies cached; attachments offline built, not released (RAM-110, branch `claude/follow-up`) |
+| Offline cache | Bodies and attachments cached offline (RAM-110, released 2026-09-30) |
 | Threads, three panes, density, dark mode | Built |
 | Fast local search with operators (from:, has:attachment, dates) | Built |
 | Attachments: drag and drop into the composer, preview in place | Built: preview in place by default (images, PDF), files dropped or pasted onto the composer attach, pasted screenshots go in inline (RAM-109) |
@@ -1118,8 +1118,8 @@ mbox and .eml built; **Outlook PST missing**).
 vs newsletters), PST import, and Exchange. Exchange is the largest by far and is only
 worth it if Rampart is aimed at offices; it is logged, not scheduled.
 
-**Follow-up flags and attachments offline (RAM-110) were started on 2026-09-29, on the
-branch `claude/follow-up`: not released, and not yet checked against a live server.**
+**Follow-up flags and attachments offline (RAM-110) were built on 2026-09-29 and released
+on 2026-09-30. Not yet checked against a live server.**
 
 - *Follow up*, from the row menu and the reader: tomorrow, in 3 days or next week (the
   snooze's own 09:00), or a typed date and time. Kept on the message as keywords, so every

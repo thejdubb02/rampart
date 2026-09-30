@@ -15,6 +15,18 @@ import kotlin.test.assertTrue
 class FollowUpTest {
 
     private val london = ZoneId.of("Europe/London")
+
+    /** Day first and 24-hour, as the snooze tests pin it, so the wording does not follow this computer. */
+    private val words = regionFrom(
+        language = "en",
+        listDate = "smart",
+        dateOrder = "dmy",
+        timeFormat = "24",
+        timeZone = "Europe/London",
+        weekStart = "monday",
+        systemLocale = java.util.Locale.UK,
+        systemZone = london,
+    )
     private val newYork = ZoneId.of("America/New_York")
     private val tokyo = ZoneId.of("Asia/Tokyo")
 
@@ -152,10 +164,10 @@ class FollowUpTest {
         val three = FollowUpWhen.IN_THREE_DAYS.dueAt(wednesday)
         assertEquals(ZonedDateTime.of(2026, 9, 19, 9, 0, 0, 0, london), three)
 
-        val nextWeek = FollowUpWhen.NEXT_WEEK.dueAt(wednesday)
+        val nextWeek = FollowUpWhen.NEXT_WEEK.dueAt(wednesday, DayOfWeek.MONDAY)
         assertEquals(DayOfWeek.MONDAY, nextWeek.dayOfWeek)
         assertEquals(ZonedDateTime.of(2026, 9, 21, 9, 0, 0, 0, london), nextWeek)
-        assertEquals(SnoozeUntil.NEXT_WEEK.dueAt(wednesday), nextWeek)
+        assertEquals(SnoozeUntil.NEXT_WEEK.dueAt(wednesday, weekStart = DayOfWeek.MONDAY), nextWeek)
     }
 
     @Test
@@ -169,7 +181,7 @@ class FollowUpTest {
         val tomorrowBefore = FollowUpWhen.TOMORROW.dueAt(ZonedDateTime.of(2026, 10, 24, 20, 0, 0, 0, london))
         assertEquals(Instant.parse("2026-10-25T09:00:00Z"), tomorrowBefore.toInstant())
 
-        val nextWeek = FollowUpWhen.NEXT_WEEK.dueAt(ZonedDateTime.of(2026, 10, 22, 10, 0, 0, 0, london))
+        val nextWeek = FollowUpWhen.NEXT_WEEK.dueAt(ZonedDateTime.of(2026, 10, 22, 10, 0, 0, 0, london), DayOfWeek.MONDAY)
         assertEquals(Instant.parse("2026-10-26T09:00:00Z"), nextWeek.toInstant())
     }
 
@@ -287,7 +299,7 @@ class FollowUpTest {
     @Test
     fun `the wording follows the snooze's`() {
         val now = ZonedDateTime.of(2026, 9, 16, 14, 30, 0, 0, london)
-        assertEquals("Follow up tomorrow at 09:00", followUpText(FollowUpWhen.TOMORROW.dueAt(now).toInstant(), now))
+        assertEquals("Follow up tomorrow at 09:00", followUpText(FollowUpWhen.TOMORROW.dueAt(now).toInstant(), now, words))
         assertEquals("Follow up now", followUpText(now.minusMinutes(1).toInstant(), now))
         assertEquals("Follow up, no date", followUpText(null, now))
     }
