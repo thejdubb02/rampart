@@ -687,9 +687,13 @@ private fun Reader(
     /** What the bottom bar says about updates. See [UpdateBarState]. */
     var barState by remember {
         mutableStateOf<UpdateBarState>(
-            Updates.checkPreviousUpdateError(Settings.lastStart())?.let { error ->
-                UpdateBarState.Failed(version = Updates.current.orEmpty(), message = error)
-            } ?: UpdateBarState.Hidden,
+            if (!Updates.canUpdate()) {
+                UpdateBarState.Hidden
+            } else {
+                Updates.checkPreviousUpdateError(Settings.lastStart())?.let { error ->
+                    UpdateBarState.Failed(version = Updates.current.orEmpty(), message = error)
+                } ?: UpdateBarState.Hidden
+            },
         )
     }
     /**
@@ -1394,26 +1398,27 @@ private fun Reader(
         update = (result as? UpdateCheckResult.Newer)?.version
         updateCheckFailure = (result as? UpdateCheckResult.Failed)?.reason
         Diagnostics.event(Metric.UPDATE_CHECK, updateCheckCategory(result))
-        if (result is UpdateCheckResult.Newer) {
-            barState = Updates.stateAfterNewer(barState, result.version)
-        }
     }
 
     /*
-     * Asked once the window is up, and then every half hour, because a window that stays
-     * open for a day would otherwise never hear about a build published after it started.
-     * Windows fetches the package itself in the background; this is only what puts the
-     * restart button on screen.
+     * The first check waits a minute, so opening the window does no update traffic, then
+     * every half hour. A window left open all day would otherwise never hear about a build
+     * published after it started. Windows fetches the package itself in the background;
+     * this only decides when the version line can offer it.
      *
      * Whatever GitHub calls the latest release is what gets installed, however many builds
      * have gone out in between. There is no stepping through versions: the update manifest
      * names one current package and Windows fetches that.
+     *
+     * A development build has nothing to install over, so this loop does not run there.
      */
     LaunchedEffect(Unit) {
         Settings.setLastStart(System.currentTimeMillis())
+        if (!Updates.canUpdate()) return@LaunchedEffect
+        delay(Updates.FIRST_CHECK_DELAY_MS)
         while (true) {
             if (!barState.busy) checkForUpdate()
-            delay(30 * 60_000L)
+            delay(Updates.CHECK_INTERVAL_MS)
         }
     }
 
@@ -1431,6 +1436,7 @@ private fun Reader(
      * ready. This is what fetches it, and only a fetch that lands sets the bar to waiting.
      */
     LaunchedEffect(update) {
+        if (!Updates.canUpdate()) return@LaunchedEffect
         val version = update ?: return@LaunchedEffect
         if (!Updates.shouldPrefetch(barState, version)) return@LaunchedEffect
         val staged = withContext(Dispatchers.IO) { Updates.stage() }
@@ -1451,14 +1457,16 @@ private fun Reader(
      * rather than a bug in this function.
      */
     suspend fun installLatest(from: String) {
+        // Waiting is the only state that means this version is already on disk.
+        val stagedVersion = (barState as? UpdateBarState.Waiting)?.version
         barState = UpdateBarState.Staging(from)
         val fresh = withContext(Dispatchers.IO) { Updates.newerVersion() }
         val target = Updates.targetVersion(from, fresh)
-        if (target != from) {
+        if (stagedVersion != target) {
             val staged = withContext(Dispatchers.IO) { Updates.stage() }
             Diagnostics.event(Metric.UPDATE_STAGE, stageOutcome(staged))
             if (!staged) {
-                barState = Updates.afterFailure(target, Updates.lastProblem)
+                barState = Updates.clickFailure(target, Updates.lastProblem)
                 return
             }
         }
@@ -1466,9 +1474,10 @@ private fun Reader(
         if (!withContext(Dispatchers.IO) { Updates.restartToUpdate() }) {
             // A genuine success never reaches here: Windows kills this process mid-call, so
             // FAILED is the only outcome this call site can ever actually record for
-            // update.apply. See [Updates.restartToUpdate]'s own KDoc.
+            // update.apply. See [Updates.restartToUpdate]'s own KDoc. The running version
+            // stays in place, and the message is what the bar shows.
             Diagnostics.event(Metric.UPDATE_APPLY, UpdateApplyCategory.FAILED)
-            barState = Updates.afterFailure(target, Updates.lastProblem)
+            barState = Updates.clickFailure(target, Updates.lastProblem)
         }
     }
 

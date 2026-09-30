@@ -50,6 +50,13 @@ object Updates {
     /** The package's name in the manifest, which is how Windows finds it to update. */
     private const val PACKAGE = "Rampart"
 
+    /**
+     * Cold start does no update traffic. The first check waits, then [CHECK_INTERVAL_MS]
+     * repeats it for as long as the window stays open.
+     */
+    internal const val FIRST_CHECK_DELAY_MS = 60_000L
+    internal const val CHECK_INTERVAL_MS = 30 * 60_000L
+
     private val http: HttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
         .followRedirects(HttpClient.Redirect.NORMAL)
@@ -57,6 +64,12 @@ object Updates {
 
     /** Set by the packaged launcher. Null when running from a development build. */
     val current: String? = System.getProperty("app.version")?.takeIf { it.isNotBlank() }
+
+    /**
+     * A development build, or any copy without the packaged launcher beside it, has
+     * nothing to install over. Those builds never offer an update.
+     */
+    fun canUpdate(): Boolean = current != null && updater() != null
 
     /**
      * Why the last attempt did not work, in a sentence somebody can act on, or null.
@@ -550,16 +563,14 @@ object Updates {
         (fresh as? UpdateCheckResult.Newer)?.version ?: staged
 
     /**
-     * What the bar should show after a stage or install attempt has returned false.
+     * What the bar shows when a click did not install.
      *
-     * [NOT_READY] is not a failure: it means the release is still landing, and the honest
-     * answer is to wait and stay clickable rather than to alarm somebody about a state that
-     * clears itself on its own within a minute. Everything else is shown as what it is, and
-     * the bar stays clickable either way so it can be tried again.
+     * A click asked to apply now, so [NOT_READY] is a failure here too: the new version
+     * is not on disk, and the bar must not say it is ready. The message is shown as
+     * given. The running version stays where it is, and clicking tries again.
      */
-    internal fun afterFailure(version: String, problem: String?): UpdateBarState =
-        if (problem == NOT_READY) UpdateBarState.Waiting(version)
-        else UpdateBarState.Failed(version, problem ?: "The update did not go in.")
+    internal fun clickFailure(version: String, problem: String?): UpdateBarState.Failed =
+        UpdateBarState.Failed(version, problem?.takeIf { it.isNotBlank() } ?: "The update did not go in.")
 
     /**
      * Whether the package for [version] still needs fetching.
@@ -573,18 +584,6 @@ object Updates {
         if (version.isNullOrBlank()) return false
         if (state.busy) return false
         return (state as? UpdateBarState.Waiting)?.version != version
-    }
-
-    /**
-     * What the bar shows when a check finds [version].
-     *
-     * The check only records that a newer build exists. The bar says it is ready after
-     * the package has been fetched, and not before: saying so here is what left the
-     * download until the moment of the restart.
-     */
-    internal fun stateAfterNewer(state: UpdateBarState, version: String): UpdateBarState {
-        if (version.isEmpty()) return state
-        return state
     }
 }
 
@@ -626,7 +625,7 @@ internal val UpdateBarState.busy: Boolean
 internal val UpdateBarState.label: String
     get() = when (this) {
         UpdateBarState.Hidden -> ""
-        is UpdateBarState.Waiting -> "Rampart $version is ready"
+        is UpdateBarState.Waiting -> "Update to $version"
         is UpdateBarState.Staging -> "Fetching Rampart $version"
         is UpdateBarState.Installing -> "Installing Rampart $version"
         is UpdateBarState.Failed -> message

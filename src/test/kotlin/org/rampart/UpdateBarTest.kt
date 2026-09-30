@@ -3,6 +3,7 @@ package org.rampart
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -33,21 +34,21 @@ class UpdateBarTest {
     }
 
     @Test
-    fun `a release still landing keeps the bar waiting rather than reporting a failure`() {
-        val outcome = Updates.afterFailure("0.1.174", Updates.NOT_READY)
-        assertEquals(UpdateBarState.Waiting("0.1.174"), outcome)
+    fun `a click while the release is still landing is a failure, not a ready update`() {
+        val outcome = Updates.clickFailure("0.1.174", Updates.NOT_READY)
+        assertEquals(UpdateBarState.Failed("0.1.174", Updates.NOT_READY), outcome)
     }
 
     @Test
-    fun `a real refusal is shown as a failure that can be tried again`() {
-        val outcome = Updates.afterFailure("0.1.174", "Windows would not stage the update.")
+    fun `a click that fails is shown as a failure that can be tried again`() {
+        val outcome = Updates.clickFailure("0.1.174", "Windows would not stage the update.")
         assertEquals(UpdateBarState.Failed("0.1.174", "Windows would not stage the update."), outcome)
     }
 
     @Test
-    fun `a refusal with nothing said still reads as a failure, not silence`() {
-        val outcome = Updates.afterFailure("0.1.174", null)
-        assertTrue(outcome is UpdateBarState.Failed)
+    fun `a click that fails without a reason still reads as a failure, not silence`() {
+        val outcome = Updates.clickFailure("0.1.174", null)
+        assertEquals(UpdateBarState.Failed("0.1.174", "The update did not go in."), outcome)
         assertTrue(outcome.message.isNotBlank())
     }
 
@@ -63,7 +64,7 @@ class UpdateBarTest {
     @Test
     fun `the label names the version everywhere except hidden and failed`() {
         assertEquals("", UpdateBarState.Hidden.label)
-        assertTrue("0.1.174" in UpdateBarState.Waiting("0.1.174").label)
+        assertEquals("Update to 0.1.300", UpdateBarState.Waiting("0.1.300").label)
         assertTrue("0.1.174" in UpdateBarState.Staging("0.1.174").label)
         assertTrue("0.1.174" in UpdateBarState.Installing("0.1.174").label)
         // A failure is read from the message alone, not templated around the version.
@@ -71,10 +72,15 @@ class UpdateBarTest {
     }
 
     @Test
-    fun `finding a newer version does not claim it is already downloaded`() {
-        assertEquals(UpdateBarState.Hidden, Updates.stateAfterNewer(UpdateBarState.Hidden, "0.1.176"))
-        val failed = UpdateBarState.Failed("0.1.174", "The update did not go in.")
-        assertEquals(failed, Updates.stateAfterNewer(failed, "0.1.176"))
+    fun `the first check waits a minute and later checks are half an hour apart`() {
+        assertEquals(60_000L, Updates.FIRST_CHECK_DELAY_MS)
+        assertEquals(30 * 60_000L, Updates.CHECK_INTERVAL_MS)
+    }
+
+    @Test
+    fun `a build with no running version cannot update`() {
+        assertNull(Updates.current)
+        assertFalse(Updates.canUpdate())
     }
 
     @Test

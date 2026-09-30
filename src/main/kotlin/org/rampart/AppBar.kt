@@ -1,10 +1,8 @@
 package org.rampart
 
 import androidx.compose.foundation.background
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.keyframes
-import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -298,21 +296,24 @@ private fun Bar(
 /**
  * The running version, just above the accounts.
  *
- * When an update is ready, a download arrow is shown beside the label. Clicking either
- * triggers the install. During install, a spinner appears in place of the arrow.
+ * Once an update is staged, the line reads "Update to <version>" and a click installs
+ * it and restarts. During install, a spinner takes the place of the arrow. A development
+ * build shows the plain version and nothing to press.
  */
 @Composable
 private fun VersionLabel(updateState: UpdateBarState, onUpdate: () -> Unit) {
     val running = Updates.current
-    if (running == null && updateState is UpdateBarState.Hidden) return
-    val text = running ?: "dev"
-    val tooltip = when (updateState) {
-        is UpdateBarState.Waiting -> "Version ${updateState.version} is ready. Click to restart and update."
+    val canUpdate = remember { Updates.canUpdate() }
+    val offered = if (canUpdate) updateState else UpdateBarState.Hidden
+    if (running == null && offered is UpdateBarState.Hidden) return
+    val text = if (offered is UpdateBarState.Waiting) offered.label else (running ?: "dev")
+    val tooltip = when (offered) {
+        is UpdateBarState.Waiting -> "Click to install and restart"
         is UpdateBarState.Staging, is UpdateBarState.Installing -> "Updating"
-        is UpdateBarState.Failed -> updateState.message
+        is UpdateBarState.Failed -> offered.message
         UpdateBarState.Hidden -> null
     }
-    val clickable = updateState is UpdateBarState.Waiting || updateState is UpdateBarState.Failed
+    val clickable = offered is UpdateBarState.Waiting || offered is UpdateBarState.Failed
     val content = @Composable {
         Row(
             modifier = Modifier
@@ -331,7 +332,7 @@ private fun VersionLabel(updateState: UpdateBarState, onUpdate: () -> Unit) {
                 // A waiting update is a pill in the accent colour, so it reads as something
                 // to press rather than a label that happens to have an icon beside it.
                 .then(
-                    if (updateState is UpdateBarState.Waiting) {
+                    if (offered is UpdateBarState.Waiting) {
                         Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f))
                     } else {
                         Modifier
@@ -344,21 +345,21 @@ private fun VersionLabel(updateState: UpdateBarState, onUpdate: () -> Unit) {
             Text(
                 text,
                 style = MaterialTheme.typography.labelSmall,
-                color = if (updateState is UpdateBarState.Waiting) {
+                color = if (offered is UpdateBarState.Waiting) {
                     MaterialTheme.colorScheme.primary
                 } else {
                     MaterialTheme.colorScheme.outline
                 },
                 maxLines = 1,
             )
-            when (updateState) {
+            when (offered) {
                 is UpdateBarState.Waiting -> {
                     Spacer(Modifier.width(2.dp))
                     Icon(
                         RampartIcons.Download,
-                        contentDescription = "Version ${updateState.version} is ready. Click to restart and update.",
+                        contentDescription = "Click to install and restart",
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(11.dp).updateBob(),
+                        modifier = Modifier.size(11.dp).updateBob(offered.version),
                     )
                 }
                 is UpdateBarState.Staging, is UpdateBarState.Installing -> {
@@ -369,7 +370,7 @@ private fun VersionLabel(updateState: UpdateBarState, onUpdate: () -> Unit) {
                     Spacer(Modifier.width(2.dp))
                     Icon(
                         RampartIcons.Download,
-                        contentDescription = updateState.message,
+                        contentDescription = offered.message,
                         tint = MaterialTheme.colorScheme.error,
                         modifier = Modifier.size(11.dp),
                     )
@@ -893,25 +894,25 @@ internal fun FilesPanel(session: Session?, onOpen: (String?) -> Unit) {
 }
 
 /**
- * The arrow nods down every couple of seconds while an update waits, so it is noticed
- * without flashing. Moved in the draw layer only, so nothing is laid out again, and still
- * when animations are switched off.
+ * A few nods when an update first becomes ready, then the arrow stays still.
+ * The coloured label is what remains visible after that. Moved in the draw
+ * layer only, so nothing is laid out again, and still when animations are off.
  */
 @Composable
-private fun Modifier.updateBob(): Modifier {
-    if (!LocalAnimationsEnabled.current) return this
-    val bob by rememberInfiniteTransition(label = "update").animateFloat(
-        initialValue = 0f,
-        targetValue = 0f,
-        animationSpec = infiniteRepeatable(
-            keyframes {
-                durationMillis = 2400
-                0f at 0
-                2.5f at 300
-                0f at 600
-            },
-        ),
-        label = "bob",
-    )
-    return graphicsLayer { translationY = bob * density }
+private fun Modifier.updateBob(version: String): Modifier {
+    val enabled = LocalAnimationsEnabled.current
+    val bob = remember(version) { Animatable(0f) }
+    LaunchedEffect(version, enabled) {
+        if (!enabled) {
+            bob.snapTo(0f)
+            return@LaunchedEffect
+        }
+        repeat(3) {
+            bob.animateTo(2.5f, tween(300))
+            bob.animateTo(0f, tween(300))
+        }
+    }
+    if (!enabled) return this
+    val offset = bob.value
+    return graphicsLayer { translationY = offset * density }
 }
