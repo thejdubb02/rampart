@@ -1977,7 +1977,7 @@ internal fun draftOf(
     attachments: List<Attachment> = emptyList(),
 ): Draft {
     val html = body?.html?.takeIf { it.isNotBlank() }
-    val restored = if (html == null) Restored(body?.text.orEmpty(), "", "") else restoreHtmlBody(html, body?.text)
+    val restored = if (html == null) plainRestored(body?.text.orEmpty()) else restoreHtmlBody(html, body?.text)
     return Draft(
         from = from,
         to = body?.to.orEmpty().joinToString(", "),
@@ -1995,6 +1995,24 @@ internal fun draftOf(
 }
 
 private data class Restored(val body: String, val textSignature: String, val htmlSignature: String)
+
+/**
+ * A plain-text draft's own sign-off, found the same way [restoreHtmlBody] finds one written
+ * as HTML, so a draft with no HTML part leaves the composer in the same state as one with:
+ * the separator and the sign-off stay in [Restored.body] exactly as they were saved, and a
+ * copy goes into [Restored.textSignature].
+ *
+ * Without this, [Draft.textSignature] stayed blank on a reopened plain-text draft even
+ * though its body plainly carried one, which is not what [Draft.textSignature] is supposed
+ * to mean: it is meant to be a Draft's own record of the sign-off sitting in its body, the
+ * same as an HTML draft's is. A message an agent drafts through the mailbox tool is exactly
+ * this shape: text/plain, with the signature appended as plain text rather than through the
+ * composer, so this is the common case for a draft nobody wrote in Rampart, not an edge one.
+ */
+private fun plainRestored(text: String): Restored {
+    val signature = signatureOutsideQuote(text)?.text.orEmpty()
+    return Restored(text, signature, "")
+}
 
 /**
  * The sign-off pulled back out of a stored draft, and the message as markup.

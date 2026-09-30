@@ -102,6 +102,61 @@ class DraftTest {
         assertTrue(opened.body.contains("-- \nJustin"), opened.body)
     }
 
+    /**
+     * The shape of a draft the mailbox MCP tool writes: text/plain, a greeting and two
+     * paragraphs, then the identity's sign-off after a "-- " line, with no HTML part at all.
+     * Reopening it and editing only the top must not touch the sign-off, and the text that
+     * actually goes out has to still carry it.
+     */
+    @Test
+    fun aPlainTextDraftKeepsItsSignatureThroughOpenEditAndSend() {
+        val from = "justin@willhitestrategy.com"
+        val signature = "Justin Willhite\nWillhite Strategy Group"
+        val text = "Hi Bonnie,\n\nPara one.\n\nPara two.\n\nBest regards,\n\n-- \n$signature"
+        val opened = draftOf(summary, Body(null, text), from)
+        val identity = Identity("1", "Justin", from, signature, "")
+        val initial = draftOpening(opened, listOf(identity), aboveQuote = false)
+        assertEquals(signature, initial.textSignature)
+
+        val edited = initial.copy(body = initial.body.replace("Para one.", "Para one, edited."))
+        val outgoing = markupToPlain(edited.body)
+        assertTrue(outgoing.contains("Best regards,"), outgoing)
+        assertEquals(1, Regex(Regex.escape(signature)).findAll(outgoing).count(), outgoing)
+    }
+
+    /** Reopening a signed draft is not an edit: the identity's own copy must not join it. */
+    @Test
+    fun aReopenedPlainDraftIsNotSignedTwiceWhenTheIdentitysSignatureMatches() {
+        val from = "justin@willhitestrategy.com"
+        val signature = "Justin Willhite\nWillhite Strategy Group"
+        val text = "Hi Bonnie,\n\nThanks.\n\n-- \n$signature"
+        val opened = draftOf(summary, Body(null, text), from)
+        val identity = Identity("1", "Justin", from, signature, "")
+        val initial = draftOpening(opened, listOf(identity), aboveQuote = false)
+        assertEquals(text, initial.body, "opening must not rewrite what was already signed")
+        assertEquals(signature, initial.textSignature)
+        assertEquals(1, initial.body.lineSequence().count { it == "-- " })
+    }
+
+    /**
+     * The identity's signature on the server can change after the draft was written. The
+     * draft keeps the one it was actually written with, the same way a reopened HTML draft
+     * does ([anUntouchedReopenedDraftIsNotRewritten]): swapping in whatever the identity says
+     * now would rewrite a message the account holder already signed off on.
+     */
+    @Test
+    fun aReopenedPlainDraftKeepsItsOwnSignatureWhenTheIdentitysHasChanged() {
+        val from = "justin@willhitestrategy.com"
+        val written = "Justin Willhite\nWillhite Strategy Group"
+        val text = "Hi Bonnie,\n\nThanks.\n\n-- \n$written"
+        val opened = draftOf(summary, Body(null, text), from)
+        val identity = Identity("1", "Justin", from, "Justin Willhite\nWillhite Strategy Group\nNew tagline", "")
+        val initial = draftOpening(opened, listOf(identity), aboveQuote = false)
+        assertEquals(text, initial.body, "the draft's own sign-off is not swapped for the identity's current one")
+        assertEquals(written, initial.textSignature)
+        assertEquals(1, initial.body.lineSequence().count { it == "-- " })
+    }
+
     @Test
     fun aDraftIsNotAReply() {
         val draft = draftOf(summary, Body(null, ""), "justin@willhitestrategy.com")
