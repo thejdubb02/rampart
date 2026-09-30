@@ -54,13 +54,18 @@ internal data class Asked(
 
 internal object Chat {
     /**
-     * How much of the conversation goes back each turn.
+     * How much of the conversation goes back each turn, capped by count and by estimated
+     * tokens. A character count lets one long thread blow the model's window and the
+     * spend ceiling.
      *
      * Every turn re-sends the history, so a panel left open all day is a bill that grows
      * with the square of how much it is used. The oldest go first, and the system prompt
      * is never one of them.
      */
     const val KEEP = 16
+
+    /** Estimated tokens of history sent back each turn. See [recent]. */
+    const val HISTORY_TOKENS = 12_000
 
     /** The most of the open message's text sent along with a question, in characters. */
     const val OPEN_TEXT = 6000
@@ -287,8 +292,32 @@ internal object Chat {
         return parts.map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n\n")
     }
 
-    /** The history that goes back up, oldest dropped, the app's own action lines included. */
-    fun recent(said: List<Said>): List<Said> = said.takeLast(KEEP)
+    /**
+     * The history that goes back up, oldest first, the app's own action lines included.
+     *
+     * Capped by count and by estimated tokens. A character count lets one long thread
+     * blow the model's window and the spend ceiling. The newest line always goes, cut
+     * when it alone is over the token budget, so a turn never goes up empty.
+     */
+    fun recent(said: List<Said>): List<Said> {
+        val kept = mutableListOf<Said>()
+        var tokens = 0
+        for (line in said.asReversed()) {
+            val piece = if (kept.isEmpty() && tokensOf(line.text) > HISTORY_TOKENS) {
+                line.copy(text = line.text.take(HISTORY_TOKENS * 4))
+            } else {
+                line
+            }
+            val cost = tokensOf(piece.text)
+            if (kept.isNotEmpty() && (kept.size >= KEEP || tokens + cost > HISTORY_TOKENS)) break
+            kept += piece
+            tokens += cost
+        }
+        return kept.asReversed()
+    }
+
+    /** Rough tokens, four characters each, so the history cap does not need a tokenizer. */
+    internal fun tokensOf(text: String): Int = (text.length + 3) / 4
 
     private val lenient = Json { ignoreUnknownKeys = true; isLenient = true }
 }
@@ -327,10 +356,10 @@ internal interface MailTools {
  * transcript, including the model's tool calls and what the app answered, because a panel
  * that acts and shows only the final sentence is one nobody can audit.
  *
- * [ROUNDS] is a ceiling rather than a target. A model that has not finished after four
+ * [ROUNDS] is a ceiling rather than a target. A model that has not finished after eight
  * tools is looping, and the person gets told that rather than a bill.
  */
-internal const val ROUNDS = 4
+internal const val ROUNDS = 8
 
 internal fun converse(
     config: AssistantConfig,
@@ -372,7 +401,15 @@ internal fun converse(
         added += Said("call", reply.text.trim())
         added += Said("result", carryOut(asked, shown, tools, settings, calendar, tasks, filters, mailChanges))
     }
-    added += Said("result", "That went round in circles, so it stopped.")
+    val done = added.filter { it.role == "call" }.mapNotNull { Chat.asked(it.text)?.tool?.takeIf(String::isNotEmpty) }
+    added += Said(
+        "result",
+        if (done.isEmpty()) {
+            "It stopped after $ROUNDS steps without doing anything."
+        } else {
+            "It stopped after $ROUNDS steps without finishing. Done so far: ${done.joinToString(", ")}. Nothing else was done."
+        },
+    )
     return added
 }
 

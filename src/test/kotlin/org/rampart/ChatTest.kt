@@ -74,7 +74,34 @@ class ChatTest {
         val long = (1..40).map { Said("user", "line $it") }
         val kept = Chat.recent(long)
         assertEquals(Chat.KEEP, kept.size)
+        assertEquals("line ${40 - Chat.KEEP + 1}", kept.first().text)
         assertEquals("line 40", kept.last().text)
+    }
+
+    /** A handful of long reads is under the line cap and still over the token cap. */
+    @Test
+    fun `huge lines are dropped by the token budget even under the count cap`() {
+        val chunk = "a".repeat(Chat.HISTORY_TOKENS * 2 + 1)
+        val lines = listOf(
+            Said("user", "old $chunk"),
+            Said("user", "mid $chunk"),
+            Said("assistant", "new $chunk"),
+        )
+        assertTrue(lines.size < Chat.KEEP)
+        val kept = Chat.recent(lines)
+        assertEquals(listOf(lines.last()), kept)
+    }
+
+    /** One enormous newest line still goes up, cut so it fits the token budget. */
+    @Test
+    fun `one oversized newest line is kept but cut`() {
+        val older = Said("user", "earlier")
+        val huge = "START" + "b".repeat(Chat.HISTORY_TOKENS * 4)
+        val kept = Chat.recent(listOf(older, Said("assistant", huge)))
+        assertEquals(1, kept.size)
+        assertEquals(Chat.HISTORY_TOKENS * 4, kept.single().text.length)
+        assertEquals(huge.take(Chat.HISTORY_TOKENS * 4), kept.single().text)
+        assertTrue(kept.single().text.startsWith("START"))
     }
 
     /** The model is told what it can do, and what it cannot talk itself out of. */
@@ -202,7 +229,11 @@ class ChatTest {
             converse(config, null, "test", emptyList(), MessageAllowances(), Recorder(), { _, _ -> calls++ })
         }
         assertEquals(ROUNDS, calls)
-        assertContains(said.last().text, "round in circles")
+        val names = List(ROUNDS) { "search" }.joinToString(", ")
+        assertEquals(
+            "It stopped after $ROUNDS steps without finishing. Done so far: $names. Nothing else was done.",
+            said.last().text,
+        )
     }
 
     /** Two calls in one reply must not reach a tool. The person sees the words, not the JSON. */
