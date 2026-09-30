@@ -78,7 +78,7 @@ class FilterToolsTest {
                 key = null,
                 system = "test",
                 history = listOf(Said("user", "make a filter that archives DMARC reports")),
-                shown = mutableSetOf(),
+                shown = MessageAllowances(),
                 tools = QuietMail,
                 record = { _, _ -> },
                 filters = filters,

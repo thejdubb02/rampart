@@ -819,7 +819,9 @@ private fun Reader(
     // message already on screen instead of the one after next.
     var messageMode by remember { mutableStateOf(Settings.messageMode()) }
     var messageScale by remember { mutableStateOf(Settings.messageScale()) }
-    var said by remember { mutableStateOf<List<Said>>(emptyList()) }
+    // A transcript belongs to the account whose mail it describes. In All inboxes the
+    // selected row changes this key, so no history follows the person into another account.
+    var rookConversations by remember { mutableStateOf(RookConversations()) }
     var trackingBadges by remember(sessions) {
         mutableStateOf(trackingBadgesOf(sessions.flatMap { it.store?.tracking().orEmpty() }))
     }
@@ -837,13 +839,18 @@ private fun Reader(
      * nobody asked about: an action can only name an id that came out of a search run
      * here. Cleared with the transcript, because a new conversation has been shown nothing.
      */
-    val chatShown = remember { mutableSetOf<String>() }
-    var rookAccount by remember { mutableStateOf<String?>(null) }
-    // Setting changes Rook has asked for. Only a Confirm press in the panel writes one.
-    var settingCards by remember { mutableStateOf(ChangeDesk()) }
+    val chatShown = remember { mutableMapOf<String, MessageAllowances>() }
+    // Every pending card is kept under the account where Rook made it. Switching an All
+    // inbox row therefore switches cards as well as words and allowed ids.
+    var settingCards by remember { mutableStateOf<Map<String, ChangeDesk>>(emptyMap()) }
     // Filters Rook has asked for. Only a Save press in the panel writes one, and it writes
     // to the account stored on the card, which is the account Rook was working in.
-    var filterCards by remember { mutableStateOf(FilterDesk()) }
+    var filterCards by remember { mutableStateOf<Map<String, FilterDesk>>(emptyMap()) }
+    var mailChangeCards by remember { mutableStateOf<Map<String, MailChangeDesk>>(emptyMap()) }
+    fun appendRook(key: String, lines: List<Said>) {
+        rookConversations = rookConversations.append(key, lines)
+    }
+    fun appendRook(key: String, line: Said) = appendRook(key, listOf(line))
     /** A filter description waiting to be allowed out, the same ask the Filters page makes. */
     var filterConsent by remember { mutableStateOf<FilterConsent?>(null) }
     /*
@@ -2985,7 +2992,8 @@ private fun Reader(
                             }
                         }
                         if (notifyOnOpen) notices.forEach { (title, body) -> notify(title, body) }
-                        if (rookActivity.isNotEmpty()) said = said + rookActivity.map { Said("assistant", it) }
+                        val rookKey = selected?.let { accountOf(it) } ?: settingsAccount()
+                        if (rookActivity.isNotEmpty() && rookKey != null) appendRook(rookKey, rookActivity.map { Said("assistant", it) })
                         trackingBadges = trackingBadgesOf(sessions.flatMap { it.store?.tracking().orEmpty() })
                         if (Settings.ntfyTrackedOpen() && !TrackingClient.companionPushes) {
                             notices.forEach { (title, body) -> phoneAlert(title, body) }
@@ -3600,18 +3608,17 @@ private fun Reader(
         // The open message's account first, so Rook in the unified inbox acts where the
         // person is looking rather than on whichever account signed in first.
         val key = selected?.let { accountOf(it) } ?: settingsAccount() ?: return
-        rookAccount = key
         val config = Assistant.config()
         Assistant.whyNot(Assistant.CHAT, config)?.let {
-            said = said + Said("result", it)
+            appendRook(key, Said("result", it))
             return
         }
-        said = said + Said("user", question)
+        appendRook(key, Said("user", question))
         chatThinking = true
-        val history = said
+        val history = rookConversations.said(key)
         val folders = mailboxes[key].orEmpty().map { it.name }
         val who = sessions.firstOrNull { it.key == key }?.account?.email.orEmpty()
-        val desk = settingCards
+        val desk = settingCards[key] ?: ChangeDesk()
         val here = sessions.firstOrNull { it.key == key }
         val known = identities[key].orEmpty()
         val signedIn = sessions.map { it.account.email }
@@ -3622,7 +3629,8 @@ private fun Reader(
         // without having to search for it first, and may act on it like a search result.
         val open = selected?.takeIf { accountOf(it) == key }
         val openText = open?.let { cardFor(it).body }?.let(::rookTextOf).orEmpty()
-        open?.let { chatShown += it.id }
+        val allowances = chatShown.getOrPut(key, ::MessageAllowances)
+        open?.let(allowances::showOpen)
         // Only the open message can be linked from a task Rook proposes. See TaskFromMail.kt.
         val tasks = taskToolsFor(
             here?.jmap,
@@ -3630,7 +3638,9 @@ private fun Reader(
             open?.let { taskLinkOf(it, cardFor(it).body) },
         )
         // Cheap to build: nothing is read, and no rule is made, until Rook asks for a filter.
-        val filterDesk = filterCards
+        val filterDesk = filterCards[key] ?: FilterDesk()
+        val mailDesk = mailChangeCards[key] ?: MailChangeDesk()
+        val mailChanges = MailChangeTools(key, who, allowances, mailDesk.nextNumber)
         val filterTools = filterToolsFor(
             here?.jmap,
             key,
@@ -3655,7 +3665,7 @@ private fun Reader(
                                 open?.let { "\n\n" + Chat.openMessage(it, openText) }.orEmpty() +
                                 rookFileContext(attached),
                             history = history,
-                            shown = chatShown,
+                            shown = allowances,
                             tools = toolsFor(key),
                             record = { tokensIn, tokensOut ->
                                 Assistant.record(Assistant.CHAT, tokensIn, tokensOut, config)
@@ -3664,15 +3674,19 @@ private fun Reader(
                             calendar = calendar,
                             tasks = tasks,
                             filters = filterTools,
+                            mailChanges = mailChanges,
                         )
                     } finally {
                         drafted += settings.drafted
                     }
                 }.getOrElse { listOf(Said("result", it.message ?: "The model could not be reached.")) }
             }
-            said = said + added
-            settingCards = settingCards.add(drafted)
-            filterCards = filterCards.add(key, filterTools.proposed)
+            appendRook(key, added)
+            settingCards = settingCards + (key to ((settingCards[key] ?: ChangeDesk()).add(drafted)))
+            filterCards = filterCards + (key to ((filterCards[key] ?: FilterDesk()).add(key, filterTools.proposed)))
+            var changedDesk = mailChangeCards[key] ?: MailChangeDesk()
+            mailChanges.proposed.forEach { changedDesk = changedDesk.add(it) }
+            mailChangeCards = mailChangeCards + (key to changedDesk)
             // The account is stamped here, not inside the tool: the tool does not know which
             // account the window will save to, and a later switch must not move the rule.
             filterTools.consent?.let { pending ->
@@ -3684,27 +3698,54 @@ private fun Reader(
         }
     }
 
+    /** Confirm is the sole path from a Rook mail card to a mailbox write. */
+    fun confirmMailChange(key: String, number: Int) {
+        val desk = mailChangeCards[key] ?: return
+        val card = desk.card(number)?.takeIf { it.status == CardStatus.WAITING && it.account == key } ?: return
+        mailChangeCards = mailChangeCards + (key to desk.start(number))
+        scope.launch {
+            val failure = withContext(Dispatchers.IO) {
+                runCatching { applyMailChange(card, toolsFor(key)) }
+                    .getOrElse { it.message ?: "The mail could not be changed." }
+            }
+            val latest = mailChangeCards[key] ?: MailChangeDesk()
+            mailChangeCards = mailChangeCards + (key to latest.finish(number, failure))
+            appendRook(
+                key,
+                Said("result", failure?.let { "The card was not applied: $it" } ?: "Confirmed: ${card.action.lowercase()} for ${card.messages.size} messages."),
+            )
+        }
+    }
+
+    /** Cancel closes the proposal and has no route to [MailTools]. */
+    fun cancelMailChange(key: String, number: Int) {
+        val desk = mailChangeCards[key] ?: return
+        val card = desk.card(number)?.takeIf { it.status == CardStatus.WAITING && it.account == key } ?: return
+        mailChangeCards = mailChangeCards + (key to desk.dismiss(number))
+        appendRook(key, Said("result", "Cancelled ${card.action.lowercase()}. Nothing changed."))
+    }
+
     /**
      * Confirm, pressed on one of Rook's setting cards: the only path by which a change it
      * asked for is written. [applyCard] checks the card again before writing, and the
      * outcome goes into the transcript so Rook knows on its next turn.
      */
-    fun confirmCard(number: Int) {
-        val card = settingCards.card(number)?.takeIf { it.status == CardStatus.WAITING } ?: return
+    fun confirmCard(key: String, number: Int) {
+        val desk = settingCards[key] ?: return
+        val card = desk.card(number)?.takeIf { it.status == CardStatus.WAITING } ?: return
         // The account Rook was working in when it drafted the card, not whichever the
         // settings page would pick, so a change meant for one account never lands on another.
-        val key = rookAccount ?: settingsAccount()
         val here = sessions.firstOrNull { it.key == key }
         val known = key?.let { identities[it] }.orEmpty()
         val signedIn = sessions.map { it.account.email }
-        settingCards = settingCards.start(number)
+        settingCards = settingCards + (key to desk.start(number))
         scope.launch {
             val failure = withContext(Dispatchers.IO) {
                 runCatching { applyCard(card, liveSettingsMap(here, known, signedIn)) }
                     .getOrElse { it.message ?: "The change could not be made." }
             }
-            settingCards = settingCards.finish(number, failure)
-            said = said + Said("result", failure?.let { "Card $number was not applied: $it" } ?: "Confirmed and changed: ${card.summary}.")
+            settingCards = settingCards + (key to ((settingCards[key] ?: ChangeDesk()).finish(number, failure)))
+            appendRook(key, Said("result", failure?.let { "Card $number was not applied: $it" } ?: "Confirmed and changed: ${card.summary}."))
             if (failure != null) return@launch
             // The window holds some settings in memory so a change shows at once. Those
             // are read again here, as the Settings pages' own callbacks would have.
@@ -3783,12 +3824,16 @@ private fun Reader(
             outcome.fold(
                 onSuccess = {
                     val text = it.text.trim()
-                    said = said + Said("assistant", text)
+                    selected?.let { message -> accountOf(message) }?.let { account ->
+                        appendRook(account, Said("assistant", text))
+                    }
                 },
                 onFailure = {
                     val err = it.message ?: "The model could not be reached."
                     summariseError = err
-                    said = said + Said("result", err)
+                    selected?.let { message -> accountOf(message) }?.let { account ->
+                        appendRook(account, Said("result", err))
+                    }
                 },
             )
         }
@@ -3807,7 +3852,7 @@ private fun Reader(
         if (summarising) return
         Assistant.whyNot(Assistant.SUMMARISE, config, key, currentFolderName(key))?.let {
             summariseError = it
-            said = said + Said("result", it)
+            appendRook(key, Said("result", it))
             return
         }
         summariseError = null
@@ -4059,15 +4104,16 @@ private fun Reader(
      * asked for is written. The write is the Filters page's own save, for the account
      * stored on the card. The outcome goes into the transcript so Rook knows next turn.
      */
-    fun saveFilterCard(number: Int) {
-        val card = filterCards.card(number)?.takeIf { it.status == CardStatus.WAITING } ?: return
+    fun saveFilterCard(key: String, number: Int) {
+        val desk = filterCards[key] ?: return
+        val card = desk.card(number)?.takeIf { it.status == CardStatus.WAITING } ?: return
         val here = sessions.firstOrNull { it.key == card.account }
         if (here == null) {
-            filterCards = filterCards.start(number).finish(number, "That account is no longer signed in, so the filter was not saved.")
-            said = said + Said("result", "The filter \"${card.rule.name}\" was not saved: that account is no longer signed in.")
+            filterCards = filterCards + (key to desk.start(number).finish(number, "That account is no longer signed in, so the filter was not saved."))
+            appendRook(key, Said("result", "The filter \"${card.rule.name}\" was not saved: that account is no longer signed in."))
             return
         }
-        filterCards = filterCards.start(number)
+        filterCards = filterCards + (key to desk.start(number))
         scope.launch {
             val failure = withContext(Dispatchers.IO) {
                 try {
@@ -4077,12 +4123,12 @@ private fun Reader(
                     whyFailed(e)
                 }
             }
-            filterCards = filterCards.finish(number, failure)
-            said = said + Said(
+            filterCards = filterCards + (key to ((filterCards[key] ?: FilterDesk()).finish(number, failure)))
+            appendRook(key, Said(
                 "result",
                 if (failure == null) "Saved the filter \"${card.rule.name}\"."
                 else "The filter \"${card.rule.name}\" was not saved: $failure",
-            )
+            ))
             if (failure == null && settingsOpen && filterAccount == card.account) {
                 runCatching { loadFilters(card.account) }
             }
@@ -4090,10 +4136,11 @@ private fun Reader(
     }
 
     /** Cancel on a filter card. The rule is dropped and nothing is written. */
-    fun cancelFilterCard(number: Int) {
-        val card = filterCards.card(number)?.takeIf { it.status == CardStatus.WAITING } ?: return
-        filterCards = filterCards.dismiss(number)
-        said = said + Said("result", "The filter \"${card.rule.name}\" was not saved.")
+    fun cancelFilterCard(key: String, number: Int) {
+        val desk = filterCards[key] ?: return
+        val card = desk.card(number)?.takeIf { it.status == CardStatus.WAITING } ?: return
+        filterCards = filterCards + (key to desk.dismiss(number))
+        appendRook(key, Said("result", "The filter \"${card.rule.name}\" was not saved."))
     }
 
     /**
@@ -4106,13 +4153,13 @@ private fun Reader(
         filterConsent = null
         val here = sessions.firstOrNull { it.key == pending.account }
         if (here == null) {
-            said = said + Said("result", "That account is no longer signed in, so no filter was made.")
+            appendRook(pending.account, Said("result", "That account is no longer signed in, so no filter was made."))
             return
         }
         val config = Assistant.config()
         val name = shortAccountName(here.account.name, here.account.email)
         val foldersNow = mailboxes[pending.account].orEmpty().map { it.name }
-        val desk = filterCards
+        val desk = filterCards[pending.account] ?: FilterDesk()
         val tools = filterToolsFor(
             here.jmap,
             pending.account,
@@ -4132,8 +4179,8 @@ private fun Reader(
                         whyFailed(e)
                     }
                 }
-                said = said + Said("result", answer)
-                filterCards = filterCards.add(pending.account, tools.proposed)
+                appendRook(pending.account, Said("result", answer))
+                filterCards = filterCards + (pending.account to ((filterCards[pending.account] ?: FilterDesk()).add(pending.account, tools.proposed)))
                 tools.consent?.let { again ->
                     if (filterConsent == null) filterConsent = again.copy(account = pending.account)
                 }
@@ -5399,18 +5446,25 @@ private fun Reader(
             },
             panel = { tool ->
                 when (tool) {
-                    SideTool.ROOK -> ChatPane(
-                        said = said,
+                    SideTool.ROOK -> {
+                        val key = selected?.let { accountOf(it) } ?: settingsAccount().orEmpty()
+                        val accountSaid = rookConversations.said(key)
+                        val accountSettings = settingCards[key] ?: ChangeDesk()
+                        val accountFilters = filterCards[key] ?: FilterDesk()
+                        val accountMail = mailChangeCards[key] ?: MailChangeDesk()
+                        ChatPane(
+                        said = accountSaid,
                         thinking = chatThinking || summarising || actionJob.running,
                         unavailable = Assistant.whyNot(Assistant.CHAT),
                         onSend = { ask(it) },
                         onClear = {
-                            said = emptyList()
+                            rookConversations = rookConversations.clear(key)
                             // A new conversation has been shown nothing, so it may act on
                             // nothing until it looks something up again.
-                            chatShown.clear()
-                            settingCards = settingCards.clear()
-                            filterCards = filterCards.clear()
+                            chatShown[key]?.clear()
+                            settingCards = settingCards + (key to accountSettings.clear())
+                            filterCards = filterCards + (key to accountFilters.clear())
+                            mailChangeCards = mailChangeCards + (key to accountMail.clear())
                             filterConsent = null
                         },
                         onClose = { AppBar.close(SideTool.ROOK) },
@@ -5419,12 +5473,15 @@ private fun Reader(
                         agreed = chatAgreed,
                         onAgree = { Assistant.agree(Assistant.CHAT); chatAgreed = true },
                         onTyping = { typing = it },
-                        cards = settingCards.cards,
-                        onConfirmCard = { confirmCard(it) },
-                        onDismissCard = { settingCards = settingCards.dismiss(it) },
-                        filterCards = filterCards.cards,
-                        onSaveFilter = { saveFilterCard(it) },
-                        onCancelFilter = { cancelFilterCard(it) },
+                        cards = accountSettings.cards,
+                        onConfirmCard = { confirmCard(key, it) },
+                        onDismissCard = { settingCards = settingCards + (key to accountSettings.dismiss(it)) },
+                        mailCards = accountMail.cards,
+                        onConfirmMail = { confirmMailChange(key, it) },
+                        onCancelMail = { cancelMailChange(key, it) },
+                        filterCards = accountFilters.cards,
+                        onSaveFilter = { saveFilterCard(key, it) },
+                        onCancelFilter = { cancelFilterCard(key, it) },
                         hasOpenMessage = selected != null,
                         summarising = summarising,
                         actionItemsRunning = actionJob.running,
@@ -5435,7 +5492,7 @@ private fun Reader(
                                 else {
                                     {
                                         AppBar.show(SideTool.ROOK)
-                                        said = said + Said("user", "Summarise this thread")
+                                        appendRook(key, Said("user", "Summarise this thread"))
                                         summarise(sel, key, cfg, viewFirst = false)
                                     }
                                 }
@@ -5448,7 +5505,7 @@ private fun Reader(
                                 else {
                                     {
                                         AppBar.show(SideTool.ROOK)
-                                        said = said + Said("user", "Action items in this thread")
+                                        appendRook(key, Said("user", "Action items in this thread"))
                                         val why = Assistant.whyNot(Assistant.ACTIONS, cfg, key, currentFolderName(key))
                                         val forThread = sel.threadId.ifBlank { sel.id }
                                         startActionItems(
@@ -5471,12 +5528,12 @@ private fun Reader(
                                                         }
                                                     }
                                                 }
-                                                said = said + Said("assistant", text)
+                                                appendRook(key, Said("assistant", text))
                                             },
                                             onFailure = { (title, detail) ->
                                                 if (selected?.let { it.threadId.ifBlank { it.id } } != forThread) return@startActionItems
                                                 val err = if (detail != null) "$title $detail" else title
-                                                said = said + Said("result", err)
+                                                appendRook(key, Said("result", err))
                                             },
                                         ) {
                                             summariseTurns(key, sel)
@@ -5505,6 +5562,7 @@ private fun Reader(
                             RookPanelExtras(key?.let { session(it).jmap }, key, typed, enabled, insert)
                         },
                     )
+                    }
                     SideTool.CALENDAR -> {
                         val key = (here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key)
                         val open = sessions.firstOrNull { it.key == key }
@@ -6424,7 +6482,7 @@ private fun Reader(
             onSend = { allowFilterWords() },
             onCancel = {
                 filterConsent = null
-                said = said + Said("result", "The person did not allow describing filters in words, so no filter was made.")
+                appendRook(pending.account, Said("result", "The person did not allow describing filters in words, so no filter was made."))
             },
         )
     }
