@@ -157,16 +157,17 @@ private fun reportStartupFailure(thrown: Throwable) {
         JOptionPane.ERROR_MESSAGE,
     )
     if (repair == JOptionPane.YES_OPTION) {
-        // Success ends with -ForceTargetApplicationShutdown ending this process, same as
-        // every other call to this from the update bar. Reaching the line after it is the
-        // failure case, and lastProblem is already a sentence by the time it is reached.
-        Updates.restartToUpdate()
-        JOptionPane.showMessageDialog(
-            null,
-            Updates.lastProblem ?: "The reinstall did not go in.",
-            "Rampart",
-            JOptionPane.ERROR_MESSAGE,
-        )
+        // Hands the staged manifest to Windows App Installer, which updates Rampart
+        // and starts it again. The error dialog is only for a handoff that did not
+        // open. lastProblem is already a sentence by then.
+        if (!Updates.restartToUpdate()) {
+            JOptionPane.showMessageDialog(
+                null,
+                Updates.lastProblem ?: "The reinstall did not go in.",
+                "Rampart",
+                JOptionPane.ERROR_MESSAGE,
+            )
+        }
     }
     kotlin.system.exitProcess(1)
 }
@@ -685,17 +686,7 @@ private fun Reader(
     var contactsError by remember { mutableStateOf<String?>(null) }
     var signatureError by remember { mutableStateOf<String?>(null) }
     /** What the bottom bar says about updates. See [UpdateBarState]. */
-    var barState by remember {
-        mutableStateOf<UpdateBarState>(
-            if (!Updates.canUpdate()) {
-                UpdateBarState.Hidden
-            } else {
-                Updates.checkPreviousUpdateError(Settings.lastStart())?.let { error ->
-                    UpdateBarState.Failed(version = Updates.current.orEmpty(), message = error)
-                } ?: UpdateBarState.Hidden
-            },
-        )
-    }
+    var barState by remember { mutableStateOf<UpdateBarState>(UpdateBarState.Hidden) }
     /**
      * What [ChangelogDialog] is showing, or null while it is closed. Worked out once, when
      * this composable is first entered, from whatever is already known synchronously
@@ -1413,7 +1404,6 @@ private fun Reader(
      * A development build has nothing to install over, so this loop does not run there.
      */
     LaunchedEffect(Unit) {
-        Settings.setLastStart(System.currentTimeMillis())
         if (!Updates.canUpdate()) return@LaunchedEffect
         delay(Updates.FIRST_CHECK_DELAY_MS)
         while (true) {
@@ -1423,16 +1413,16 @@ private fun Reader(
     }
 
     /*
-     * Fetched as soon as there is one, quietly, while the app carries on.
+     * The manifest is fetched as soon as a newer version is known, quietly, while the app
+     * carries on. Opening it is what a click does, and that is when Windows App Installer
+     * takes over.
      *
-     * A mail client is open for days, so the moment somebody finally agrees to restart is
-     * the worst possible moment to begin a download. Once this has run, pressing the button
-     * swaps files that are already on the machine, and closing Rampart without pressing
-     * anything installs it anyway.
+     * A mail client is open for days, so the moment somebody finally agrees to update is
+     * the worst possible moment to begin a download.
      *
      * Once per version. A fetch that failed is not retried in a loop: the next half-hourly
      * check finds the same version, and nothing here is allowed to become a machine that
-     * downloads a package over and over. The check itself must not say the package is
+     * downloads a manifest over and over. The check itself must not say the package is
      * ready. This is what fetches it, and only a fetch that lands sets the bar to waiting.
      */
     LaunchedEffect(update) {
@@ -1445,16 +1435,17 @@ private fun Reader(
     }
 
     /**
-     * What a click on the bar means: check what is actually newest right now, fetch it
-     * first if that turns out not to be what is already on disk, then hand it to Windows.
+     * What a click on the bar means: check what is actually newest right now, fetch the
+     * manifest first if that turns out not to be what is already on disk, then hand the
+     * file to Windows App Installer.
      *
      * The re-check is the whole point of this function. [from] may have been staged hours
-     * or days ago, and "regardless of how many versions behind you are" means a click must
-     * never quietly install something that stopped being current while it sat waiting; see
-     * [Updates.targetVersion]. A working install is never observed from here: Windows kills
-     * this process to swap the files in, partway through the wait inside
-     * [Updates.restartToUpdate], so nothing after that call runs, which is the success case
-     * rather than a bug in this function.
+     * or days ago, and a click must never quietly install something that stopped being
+     * current while it sat waiting; see [Updates.targetVersion].
+     *
+     * App Installer keeps its own window up and closes Rampart itself when the update
+     * proceeds. This function keeps running, so a cancelled window leaves the bar
+     * clickable again instead of stuck on installing.
      */
     suspend fun installLatest(from: String) {
         // Waiting is the only state that means this version is already on disk.
@@ -1472,12 +1463,12 @@ private fun Reader(
         }
         barState = UpdateBarState.Installing(target)
         if (!withContext(Dispatchers.IO) { Updates.restartToUpdate() }) {
-            // A genuine success never reaches here: Windows kills this process mid-call, so
-            // FAILED is the only outcome this call site can ever actually record for
-            // update.apply. See [Updates.restartToUpdate]'s own KDoc. The running version
-            // stays in place, and the message is what the bar shows.
             Diagnostics.event(Metric.UPDATE_APPLY, UpdateApplyCategory.FAILED)
             barState = Updates.clickFailure(target, Updates.lastProblem)
+        } else {
+            // App Installer has its own window now. Rampart stays open, so a cancelled
+            // window can be asked again from the same bar.
+            barState = UpdateBarState.Waiting(target)
         }
     }
 
@@ -6117,12 +6108,10 @@ private fun Reader(
                     onAddAccount = onAddAccount,
                     /*
                      * The same re-check-and-restage flow the bottom bar's own click runs,
-                     * not a bare `restartToUpdate()`. Before the bar existed this button
-                     * called that directly and then quit itself, which is now wrong twice
-                     * over: `restartToUpdate()` alone can install a version that went stale
-                     * while it sat staged, and quitting here raced the install, since the
-                     * process that is actually supposed to end this one is PowerShell's own
-                     * `-ForceTargetApplicationShutdown`, not a call made from inside it.
+                     * not a bare `restartToUpdate()`. A click has to ask what is newest
+                     * first, because a manifest staged earlier can have stopped being
+                     * current. Windows App Installer closes Rampart when the update
+                     * proceeds, so this button does not quit on its own.
                      */
                     onRestart = {
                         val from = when (val current = barState) {

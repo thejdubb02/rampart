@@ -1,11 +1,13 @@
 package org.rampart
 
+import java.awt.Desktop
 import java.net.URI
-import java.nio.file.Files
-import java.nio.file.Path
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.net.http.HttpTimeoutException
+import java.nio.file.Files
+import java.nio.file.Path
 import java.time.Duration
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
@@ -47,9 +49,6 @@ object Updates {
     private const val APPINSTALLER =
         "https://github.com/thejdubb02/rampart/releases/latest/download/rampart.appinstaller"
 
-    /** The package's name in the manifest, which is how Windows finds it to update. */
-    private const val PACKAGE = "Rampart"
-
     /**
      * Cold start does no update traffic. The first check waits, then [CHECK_INTERVAL_MS]
      * repeats it for as long as the window stays open.
@@ -74,14 +73,19 @@ object Updates {
     /**
      * Why the last attempt did not work, in a sentence somebody can act on, or null.
      *
-     * It used to be nothing at all. Both PowerShell commands swallowed their own errors and
-     * the process output was never read, so a failed update produced a card saying Windows
-     * would fetch it in the background whether or not anything had been staged, and there
-     * was no way to find out otherwise.
+     * Set when the manifest cannot be fetched, or when Windows will not open App Installer.
+     * Cleared when a fetch or a handoff succeeds.
      */
     @Volatile
     var lastProblem: String? = null
         private set
+
+    /** The manifest saved by the last [stage] that found a newer build, or null. */
+    @Volatile
+    private var stagedManifest: Path? = null
+
+    /** One directory for that file, created the first time a fetch needs it. */
+    private val manifestDir: Path by lazy { Files.createTempDirectory("rampart-update") }
 
     /** Said when the release exists but its files are not being served yet. See [manifestReady]. */
     internal const val NOT_READY =
@@ -226,311 +230,83 @@ object Updates {
     }
 
     /**
-     * What to run to replace this copy with the published one and start it again.
+     * Downloads the release manifest and remembers it only when it names a version
+     * newer than the one running. Blocks, so it belongs on a background thread.
      *
-     * Windows will not replace a package while it is running, which is what
-     * ForceTargetApplicationShutdown is for. If the install fails, Rampart is started again
-     * anyway rather than leaving somebody with no app, and because the version will not have
-     * changed its own check offers the update again within seconds. A failure that corrects
-     * itself is better than a marker file nobody reads.
+     * The saved file is what Windows App Installer opens later. Nothing here starts
+     * a process: the download happens while someone is reading their mail, and the
+     * app stays open.
      *
-     * The package family name is asked for rather than written down: it carries a hash of
-     * the signing identity, and a hardcoded one would silently stop matching the day that
-     * key is replaced.
+     * A development build returns false without asking the network.
      */
-    internal fun updateCommand(): List<String> = listOf(
-        "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command",
-        // Single quotes and concatenation rather than an interpolated double-quoted string.
-        // The whole script crosses Java's Windows argument quoting as one argument, and a
-        // double quote inside it is the thing most likely not to survive the trip.
-        //
-        // The catch writes the exception's message rather than swallowing it. A refusal
-        // used to leave nothing to read, which is how "Windows will fetch it in the
-        // background instead" got said about an install that was never staged: there was
-        // no way to tell that failure apart from one that had actually gone in.
-        "try { Add-AppxPackage -AppInstallerFile '$APPINSTALLER' -ForceTargetApplicationShutdown " +
-            "-ErrorAction Stop } catch { Write-Output \$_.Exception.Message }; " +
-            "\$f = (Get-AppxPackage -Name $PACKAGE).PackageFamilyName; " +
-            "Start-Process ('shell:appsFolder\\' + \$f + '!$PACKAGE')",
-    )
-
-    /**
-     * Fetches the published package and leaves it waiting, without disturbing the copy that
-     * is running.
-     *
-     * The reason this exists: an update used to be fetched at the moment somebody pressed
-     * the button, so pressing it meant a minute of waiting with the app shut. People leave
-     * a mail client open for days, and the one moment they are willing to lose it is not
-     * the moment to start a download. Fetched quietly instead, as soon as there is one, so
-     * the button has nothing left to do but swap the files.
-     *
-     * `DeferRegistrationWhenPackagesAreInUse` is what makes it safe to do while the app is
-     * open: Windows stages the new version and applies it when the app is next closed. So
-     * doing nothing at all still ends with the update installed, which is the behaviour
-     * somebody who never presses the button should get.
-     *
-     * The flag is not on every Windows this might run on, so a second attempt without it
-     * follows. That one can refuse while the app is in use, and refusing is fine: nothing
-     * is staged, the button falls back to fetching at the time it is pressed, and what is
-     * lost is the head start rather than the update.
-     *
-     * Nothing here can close the app. Neither call carries a shutdown flag, which is the
-     * property that makes a background fetch acceptable in the first place.
-     */
-    internal fun stageCommand(): List<String> = listOf(
-        "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command",
-        "try { Add-AppxPackage -AppInstallerFile '$APPINSTALLER' " +
-            "-DeferRegistrationWhenPackagesAreInUse -ErrorAction Stop; exit 0 } catch { }; " +
-            "try { Add-AppxPackage -AppInstallerFile '$APPINSTALLER' -ErrorAction Stop; exit 0 } " +
-            "catch { exit 1 }",
-    )
-
-    /**
-     * Runs that fetch and says whether the package is now waiting. Blocks, so it belongs on
-     * a background thread.
-     *
-     * A fetch that has not finished in half an hour is abandoned rather than left holding a
-     * thread for the rest of the session. There is nothing to report when that happens: the
-     * button still works, and the next check starts it again.
-     */
-    /**
-     * One outcome of running a PowerShell install step: the exit code and everything it
-     * printed, or [timedOut] when it was still running after the time given to it and was
-     * killed rather than waited on further.
-     */
-    private data class Ran(val exitCode: Int, val output: String, val timedOut: Boolean)
-
-    /**
-     * Runs one of the two install commands and reports what happened, without deciding what
-     * it means: [stage] and [restartToUpdate] disagree about that, in particular about
-     * whether reaching a return at all is itself the failure (see the KDoc on
-     * [restartToUpdate]), so that judgement stays with each caller.
-     *
-     * Null, with [lastProblem] already set, when nothing ran at all: not a packaged build,
-     * the manifest is not being served yet, or the network could not be reached.
-     *
-     * **Into a file, not down a pipe.** Both ways of reading a pipe hang here. A pipe holds
-     * a few tens of kilobytes. Wait for the process first and a refusal long enough to fill
-     * it leaves PowerShell blocked on a write nobody is reading while this side waits for an
-     * exit that cannot come. Read the pipe first instead and a process that hangs without
-     * closing its output blocks the read for ever, which quietly skips past the timeout
-     * below. A file has neither end of that: the process writes as much as it likes to
-     * somewhere with no reader, the timeout is the only thing that decides how long this
-     * waits, and the output is read afterwards when there is nothing left to deadlock
-     * against. Deleted on every path, including the one where starting the process throws,
-     * because a file left behind every failed attempt is a slow leak in the temp directory.
-     */
-    private fun runPowerShell(command: List<String>, timeoutMinutes: Long): Ran? = try {
-        updater() ?: return null
-        // Asked before PowerShell is started at all. A manifest that is not being served yet
-        // is a reason to come back in a minute, not a failed install, and running the command
-        // anyway turns the first into the second.
-        when (reachable()) {
-            true -> Unit
-            false -> {
-                lastProblem = NOT_READY
-                return null
-            }
-            null -> {
-                lastProblem = "Rampart could not reach the download."
-                return null
-            }
-        }
-        val log = Files.createTempFile("rampart-update", ".log")
-        try {
-            val process = ProcessBuilder(command)
-                .redirectErrorStream(true)
-                .redirectOutput(log.toFile())
-                .start()
-            if (!process.waitFor(timeoutMinutes, java.util.concurrent.TimeUnit.MINUTES)) {
-                process.destroyForcibly()
-                Ran(exitCode = -1, output = "", timedOut = true)
-            } else {
-                // Read rather than thrown away. What Windows refused for is the only thing
-                // that makes a failure here fixable by anybody.
-                val said = runCatching { Files.readString(log) }.getOrDefault("").trim()
-                Ran(process.exitValue(), said, timedOut = false)
-            }
-        } finally {
-            runCatching { Files.deleteIfExists(log) }
-        }
-    } catch (e: Exception) {
-        lastProblem = whyFailed(e)
-        null
-    }
-
     fun stage(): Boolean {
-        val ran = runPowerShell(stageCommand(), timeoutMinutes = 30) ?: return false
-        return when {
-            ran.timedOut -> {
-                lastProblem = "The download did not finish."
-                false
-            }
-            ran.exitCode == 0 -> {
+        val running = current ?: return false
+        updater() ?: return false
+        return try {
+            val response = http.send(
+                HttpRequest.newBuilder(URI.create(APPINSTALLER))
+                    .timeout(Duration.ofSeconds(15))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString(),
+            )
+            val body = response.body()
+            val version = parseManifestVersion(body)
+            if (response.statusCode() == 200 && version != null && isNewer(version, running)) {
+                val file = manifestDir.resolve("rampart.appinstaller")
+                Files.writeString(file, body)
+                stagedManifest = file
                 lastProblem = null
                 true
-            }
-            else -> {
-                lastProblem = ran.output.lines().firstOrNull { it.isNotBlank() }
-                    ?: "Windows would not stage the update and did not say why."
+            } else {
+                lastProblem = NOT_READY
                 false
             }
+        } catch (e: Exception) {
+            lastProblem = if (e is HttpTimeoutException) {
+                "The download did not finish."
+            } else {
+                "Rampart could not reach the download."
+            }
+            false
         }
     }
 
-    internal var isWindows: () -> Boolean = {
-        System.getProperty("os.name", "").lowercase().contains("win")
-    }
-
-    internal var exitHandler: () -> Unit = {
-        kotlin.system.exitProcess(0)
-    }
-
-    internal fun generateTaskName(): String =
-        "RampartUpdate_" + java.util.UUID.randomUUID().toString().replace("-", "")
-
-    internal fun updateScriptText(
-        appinstaller: String = APPINSTALLER,
-        packageName: String = PACKAGE,
-        taskName: String,
-    ): String = buildString {
-        appendLine("\$family = (Get-AppxPackage -Name '$packageName').PackageFamilyName")
-        appendLine("\$deadline = (Get-Date).AddSeconds(30)")
-        appendLine("while ((Get-Date) -lt \$deadline) {")
-        appendLine("    \$procs = Get-Process | Where-Object { \$_.PackageFamilyName -eq \$family -or \$_.ProcessName -eq '$packageName' }")
-        appendLine("    if (-not \$procs) { break }")
-        appendLine("    Start-Sleep -Milliseconds 500")
-        appendLine("}")
-        appendLine("\$logDir = [System.IO.Path]::Combine(\$env:LOCALAPPDATA, '$packageName')")
-        appendLine("if (-not (Test-Path -Path \$logDir)) {")
-        appendLine("    New-Item -ItemType Directory -Path \$logDir -Force | Out-Null")
-        appendLine("}")
-        appendLine("\$logFile = [System.IO.Path]::Combine(\$logDir, 'update.log')")
-        appendLine("try {")
-        appendLine("    Add-AppxPackage -AppInstallerFile '$appinstaller' -ForceTargetApplicationShutdown -ErrorAction Stop")
-        appendLine("} catch {")
-        appendLine("    [System.IO.File]::WriteAllText(\$logFile, \$_.Exception.Message)")
-        appendLine("}")
-        appendLine("Start-Process ('shell:appsFolder\\' + \$family + '!$packageName')")
-        appendLine("schtasks /Delete /TN '$taskName' /F")
-        appendLine("Remove-Item -LiteralPath \$PSCommandPath -ErrorAction SilentlyContinue")
-    }
-
-    /*
-     * The action runs the script through -EncodedCommand. The task scheduler hands /TR to
-     * powershell without a shell, so single quotes around a path would be read as part of the
-     * name, and double quotes would have to survive Java's Windows argument quoting and then
-     * schtasks' own parsing. Base64 has neither quotes nor spaces, so nothing can go wrong in
-     * between. /IT runs it in the signed-in user's session, which is where the relaunched
-     * window has to appear; tested on a real install on 2026-09-29.
-     */
-    internal fun createTaskCommand(taskName: String, scriptPath: String): List<String> = listOf(
-        "schtasks", "/Create", "/SC", "ONCE", "/ST", "00:00", "/TN", taskName,
-        "/TR", "powershell -nop -ep bypass -w hidden -enc " +
-            encodedCommand("& '" + scriptPath.replace("'", "''") + "'"),
-        "/IT", "/F",
-    )
-
-    /** PowerShell's -EncodedCommand form: base64 of the UTF-16LE text. */
-    internal fun encodedCommand(command: String): String =
-        java.util.Base64.getEncoder().encodeToString(command.toByteArray(Charsets.UTF_16LE))
-
-    internal fun runTaskCommand(taskName: String): List<String> = listOf(
-        "schtasks", "/Run", "/TN", taskName,
-    )
-
-    internal fun updateLogPath(): Path {
-        val localAppData = System.getenv("LOCALAPPDATA")?.takeIf { it.isNotBlank() }
-        val base = if (localAppData != null) {
-            Path.of(localAppData, PACKAGE)
-        } else {
-            val userHome = System.getProperty("user.home", ".")
-            Path.of(userHome, "AppData", "Local", PACKAGE)
-        }
-        return base.resolve("update.log")
-    }
-
     /**
-     * Checks if update.log has an error recorded after the previous start.
-     * Reads the message and removes the log so it is shown only once.
-     */
-    internal fun checkPreviousUpdateError(lastStart: Long, logFile: Path = updateLogPath()): String? = runCatching {
-        if (!Files.isRegularFile(logFile)) return null
-        val modTime = Files.getLastModifiedTime(logFile).toMillis()
-        if (modTime <= lastStart) return null
-        val message = Files.readString(logFile).trim()
-        runCatching { Files.deleteIfExists(logFile) }
-        message.takeIf { it.isNotBlank() }
-    }.getOrNull()
-
-    /**
-     * Installs the published version and restarts into it. Returns false when this is not a
-     * packaged copy, when the manifest is not being served yet, or when the swap did not
-     * happen; [lastProblem] says which, in a sentence rather than a code.
+     * Opens the staged manifest in Windows App Installer. Returns false when this is
+     * not a packaged copy, when the manifest is not a newer build, or when Windows
+     * could not open the file. [lastProblem] says which.
      *
-     * On Windows, this launches the install via a scheduled task outside the MSIX
-     * app container, so that shutting down Rampart does not kill the installer.
-     * Rampart exits itself cleanly after triggering the task. On non-Windows platforms,
-     * this falls back to running the update command directly.
+     * App Installer shows its own update window, closes Rampart, and starts the new
+     * version. This returns as soon as that window has been asked to open, so Rampart
+     * is still running on a true result. A cancelled window can be asked again.
      */
     fun restartToUpdate(): Boolean {
-        updater() ?: return false
-        when (reachable()) {
-            true -> Unit
-            false -> {
-                lastProblem = NOT_READY
+        if (current == null || updater() == null) return false
+        if (stagedManifest == null && !stage()) return false
+        val file = stagedManifest ?: return false
+        return try {
+            if (!Desktop.isDesktopSupported()) {
+                lastProblem = "Windows could not open its App Installer."
                 return false
             }
-            null -> {
-                lastProblem = "Rampart could not reach the download."
+            val desktop = Desktop.getDesktop()
+            if (!desktop.isSupported(Desktop.Action.OPEN)) {
+                lastProblem = "Windows could not open its App Installer."
                 return false
             }
-        }
-
-        if (isWindows()) {
-            return restartToUpdateWindows()
-        }
-
-        val ran = runPowerShell(updateCommand(), timeoutMinutes = 3) ?: return false
-        lastProblem = if (ran.timedOut) {
-            "The install did not finish. Rampart is still on the version you had."
-        } else {
-            ran.output.lines().firstOrNull { it.isNotBlank() }
-                ?: "The install did not go in. Rampart is still on the version you had."
-        }
-        return false
-    }
-
-    private fun restartToUpdateWindows(): Boolean = try {
-        val taskName = generateTaskName()
-        val scriptText = updateScriptText(APPINSTALLER, PACKAGE, taskName)
-        val scriptFile = Files.createTempFile("rampart-update-", ".ps1")
-        Files.writeString(scriptFile, scriptText)
-
-        val createCmd = createTaskCommand(taskName, scriptFile.toAbsolutePath().toString())
-        val createProc = ProcessBuilder(createCmd).redirectErrorStream(true).start()
-        val created = createProc.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)
-        if (!created || createProc.exitValue() != 0) {
-            val err = if (created) createProc.inputStream.bufferedReader().readText().trim() else ""
-            lastProblem = err.ifBlank { "Could not register update task." }
-            runCatching { Files.deleteIfExists(scriptFile) }
-            false
-        } else {
-            val runCmd = runTaskCommand(taskName)
-            val runProc = ProcessBuilder(runCmd).redirectErrorStream(true).start()
-            val ran = runProc.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)
-            if (!ran || runProc.exitValue() != 0) {
-                val err = if (ran) runProc.inputStream.bufferedReader().readText().trim() else ""
-                lastProblem = err.ifBlank { "Could not start update task." }
-                false
+            desktop.open(file.toFile())
+            lastProblem = null
+            true
+        } catch (e: Exception) {
+            val detail = e.message?.trim()?.takeIf { it.isNotBlank() }
+            lastProblem = if (detail == null) {
+                "Windows could not open its App Installer."
             } else {
-                exitHandler()
-                true
+                "Windows could not open its App Installer. $detail"
             }
+            false
         }
-    } catch (e: Exception) {
-        lastProblem = whyFailed(e)
-        false
     }
 
     /**
@@ -606,8 +382,7 @@ internal sealed class UpdateBarState {
      *  install something that stopped being current while it sat staged. */
     data class Staging(val version: String) : UpdateBarState()
 
-    /** Handed to Windows. The app is expected to close during this and come back as
-     *  [version]; still being here after a while means the swap did not happen. */
+    /** The staged manifest is being handed to Windows App Installer. */
     data class Installing(val version: String) : UpdateBarState()
 
     /** [message] is why the last attempt did not work. Clicking tries again for [version]. */

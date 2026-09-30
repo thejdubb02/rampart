@@ -11,7 +11,7 @@ import kotlin.test.assertTrue
  * and what the bar shows once a stage or install attempt has answered.
  *
  * Everything here runs with no network and no Compose, which is the point: a click's
- * outcome should be provable without a Windows box to run PowerShell on.
+ * outcome should be provable without a Windows box.
  */
 class UpdateBarTest {
     @Test
