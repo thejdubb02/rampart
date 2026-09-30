@@ -91,6 +91,27 @@ object Settings {
 
     fun setListLayout(key: String) = write { put("listLayout", JsonPrimitive(key)) }
 
+    /**
+     * Where the list and the message sit: "split", "focused" or "bottom".
+     *
+     * Missing, blank or unknown is split, the arrangement the window has always
+     * used. See [mailLayoutKey].
+     */
+    fun mailLayout(): String = mailLayoutKey(read()["mailLayout"]?.jsonPrimitive?.contentOrNull)
+
+    fun setMailLayout(key: String) = write { put("mailLayout", JsonPrimitive(mailLayoutKey(key))) }
+
+    /**
+     * How tall the message is when it sits under the list, in dp.
+     *
+     * Remembered the way a side panel's width is: it belongs to this screen, so
+     * it stays on this computer and is not part of the settings that sync.
+     * Missing means [READING_DEFAULT], the height a new install opens at.
+     */
+    fun readingPaneHeight(): Float = read()["readingPaneHeight"]?.jsonPrimitive?.floatOrNull ?: READING_DEFAULT
+
+    fun setReadingPaneHeight(value: Float) = write { put("readingPaneHeight", JsonPrimitive(value)) }
+
     /** The table view's dragged column widths, as [ColumnWidths.encoded] writes them. */
     fun tableColumns(): String? = read()["tableColumns"]?.jsonPrimitive?.contentOrNull
 

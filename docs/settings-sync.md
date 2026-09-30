@@ -35,7 +35,8 @@ An explicit allowlist, `SYNCED_SETTINGS` and `SYNCED_ASSISTANT` in `SettingsSync
 `Settings.kt` from now on until somebody adds it to the list on purpose.
 
 Synced, from `settings.json`: `theme`, `customThemes`, `iconPack`, `loader`, `density`,
-`tintRowsByTag`, `tagColours`, `tintRowsByAccount`, `hoverActions`, `savedSearches`,
+`mailLayout`, `tintRowsByTag`, `tagColours`, `tintRowsByAccount`, `hoverActions`,
+`savedSearches`,
 `order`, `markReadDelay`, `archiveBy`,
 `messageMode`, `messageScale`, `undoSeconds`, `undoBarSeconds`, `signatureAboveQuote`,
 `confirmBeforeSend`, `defaultReplyAll`, `exactIdentitiesOnly`, `subAddressDelimiter`,
@@ -51,7 +52,8 @@ Never synced, and why:
 - **Secrets.** Passwords and Rook's key are in the operating system's store, not in either
   file, so they were never candidates; the allowlist makes sure of it anyway.
 - **Anything about this screen or this computer:** the window, the composer's size, side
-  panel widths, the collapsed sidebar and folded sections, notifications and close to tray.
+  panel widths, the reading pane's height, the collapsed sidebar and folded sections,
+  notifications and close to tray.
 - **Anything that decides where data goes:** the open tracking and diagnostics companions,
   ntfy and Gotify, and Rook's mode, model and endpoint. A file on the server must never be
   able to change where this machine sends anything. Rook's endpoint can also be a model on

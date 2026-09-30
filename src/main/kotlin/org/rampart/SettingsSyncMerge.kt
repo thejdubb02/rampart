@@ -75,8 +75,9 @@ internal class SyncSource(
  *
  * Left out on purpose, with the reason, so the next person does not add them by habit:
  *
- * - Window position and size, compose window size, side panel widths, the collapsed
- *   sidebar and folded sections: they fit one screen and are wrong on the next.
+ * - Window position and size, compose window size, side panel widths, the reading
+ *   pane's height, the collapsed sidebar and folded sections: they fit one screen
+ *   and are wrong on the next.
  * - Notifications and close to tray: whether this computer should interrupt somebody is
  *   a question about this computer.
  * - Every address Rampart sends data to (the tracking and diagnostics companions, ntfy,
@@ -105,6 +106,9 @@ internal val SYNCED_SETTINGS: Map<String, SyncShape> = mapOf(
     "sidebarIcons" to SyncShape.TEXT,
     "loader" to SyncShape.TEXT,
     "density" to SyncShape.TEXT,
+    // Where the list and the message sit. The dragged height of the bottom pane
+    // stays behind: it is about this screen, the same as a side panel's width.
+    "mailLayout" to SyncShape.TEXT,
     "tintRowsByTag" to SyncShape.TEXT,
     "tagColours" to SyncShape.MAP_OF_TEXT,
     "sharing" to SyncShape.MAP_OF_TEXT,

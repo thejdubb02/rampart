@@ -696,6 +696,13 @@ private fun ThemesPage(
 
     Spacer(Modifier.height(22.dp))
     Section(
+        "Mail layout",
+        "Where the message list and the open message sit. It changes at once, and the open message stays selected.",
+    )
+    MailLayoutChooser()
+
+    Spacer(Modifier.height(22.dp))
+    Section(
         "List layout",
         "How each message is drawn in the list. Density applies to Normal.",
     )

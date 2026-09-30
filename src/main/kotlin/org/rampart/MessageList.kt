@@ -352,6 +352,14 @@ internal fun MessageList(
     threads: ThreadContext = ThreadContext(),
     /** Drawn above the list's own heading, at the list's width. A person's history uses it. */
     header: (@Composable () -> Unit)? = null,
+    /**
+     * The list fills the width it is given.
+     *
+     * Off, it keeps the fixed width the split pane has always used. The focused
+     * list and the list above a bottom message pass true, because that pane is
+     * the whole width and a fixed strip in the middle of it would be a mistake.
+     */
+    fillWidth: Boolean = false,
     onSelect: (Summary, ctrl: Boolean, shift: Boolean) -> Unit,
 ) {
     // Table and Cards are drawn in ListLayoutsUi.kt. Normal is the path below, unchanged.
@@ -367,7 +375,9 @@ internal fun MessageList(
     val pick: (Summary, Boolean, Boolean) -> Unit = { message, ctrl, shift -> onSelect(toRaw(message), ctrl, shift) }
     val drag: ((Summary, Offset?) -> Unit)? = onDrag?.let { inner -> { message: Summary, at: Offset? -> inner(toRaw(message), at) } }
     Column(
-        Modifier.width(listPaneWidth(layout)).fillMaxHeight().background(MaterialTheme.colorScheme.surface),
+        (if (fillWidth) Modifier.fillMaxWidth() else Modifier.width(listPaneWidth(layout)))
+            .fillMaxHeight()
+            .background(MaterialTheme.colorScheme.surface),
     ) {
         header?.invoke()
         Row(

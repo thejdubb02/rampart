@@ -148,7 +148,7 @@ class SettingsSyncTest {
     @Test
     fun `the real allowlist holds nothing machine specific or secret`() {
         val never = setOf(
-            "window", "composeWidth", "composeHeight", "sidePanelWidths", "sidebarCollapsed",
+            "window", "composeWidth", "composeHeight", "sidePanelWidths", "readingPaneHeight", "sidebarCollapsed",
             "collapsedSections", "notify", "notifyOpen", "closeToTray", "trackingServer",
             "diagnosticsServer", "gotifyServer", "ntfyServer", "phoneAlertProvider",
             "diagnosticsReporting", "trackingCursor", "changelogSeen", "imageSenders",

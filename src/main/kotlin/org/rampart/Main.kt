@@ -46,6 +46,7 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -849,6 +850,28 @@ private fun Reader(
     // message already on screen instead of the one after next.
     var messageMode by remember { mutableStateOf(Settings.messageMode()) }
     var messageScale by remember { mutableStateOf(Settings.messageScale()) }
+    // The focused layout's cover. The selected row stays in [selected], so going
+    // back lands on the same one. [focusedPrev] is the row that cover was decided
+    // against, so a later move can tell "the open message changed" from "the list moved".
+    var focusedNav by remember { mutableStateOf(FocusedNav()) }
+    var focusedPrev by remember { mutableStateOf<String?>(null) }
+    // Worked out while the frame is built, not after it. Next and previous, and an
+    // archive that advances, change the selected row on their own. Waiting for a later
+    // effect would draw the list for a moment between one message and the next.
+    // Becoming the focused layout with a row already chosen opens it. A fresh launch
+    // has no row yet, so the list is what comes up. Back only clears the cover, and
+    // this leaves it cleared: the same row was already the one on screen.
+    val selectedKey = selected?.let(::rowToken)
+    val layoutNow = MailLayoutState.layout
+    var layoutSeen by remember { mutableStateOf(layoutNow) }
+    val enteringFocused = layoutNow == MailLayout.FOCUSED && layoutSeen != MailLayout.FOCUSED
+    val navForFrame = if (enteringFocused && selectedKey != null) focusedNav.opened(selectedKey) else focusedNav
+    val followedNav = focusAfterSelectionChange(navForFrame, focusedPrev, selectedKey)
+    SideEffect {
+        layoutSeen = layoutNow
+        if (focusedNav != followedNav) focusedNav = followedNav
+        if (focusedPrev != selectedKey) focusedPrev = selectedKey
+    }
     // A transcript belongs to the account whose mail it describes. In All inboxes the
     // selected row changes this key, so no history follows the person into another account.
     var rookConversations by remember { mutableStateOf(RookConversations()) }
@@ -2164,6 +2187,7 @@ private fun Reader(
         if ("settings.orderAppliesToAll" in changed) orderAll = Settings.orderAppliesToAll()
         if ("settings.messageMode" in changed) messageMode = Settings.messageMode()
         if ("settings.messageScale" in changed) messageScale = Settings.messageScale()
+        if ("settings.mailLayout" in changed) MailLayoutState.reload()
         if ("settings.savedSearches" in changed) savedSearches = Settings.savedSearches()
     }
     CalendarJumpFollows(calendarOpen) {
@@ -2475,7 +2499,12 @@ private fun Reader(
                     snapshotFlow { emails }.first { list -> list.any { it.sameMail(ref.account, ref.summary.id) } }
                 }
             }
-            selected = emails.firstOrNull { it.sameMail(ref.account, ref.summary.id) } ?: ref.summary.copy(account = ref.account)
+            val opened = emails.firstOrNull { it.sameMail(ref.account, ref.summary.id) }
+                ?: ref.summary.copy(account = ref.account)
+            selected = opened
+            // A notification is an open, the same as choosing the row. In the focused
+            // layout that covers the list. Next and previous do not, and this is not those.
+            focusedNav = focusedNav.opened(rowToken(opened))
         }
     }
 
@@ -3813,6 +3842,7 @@ private fun Reader(
                     "rampart.loader" -> loader = Loader.of(Settings.loader())
                     "rampart.density" -> density = Density.of(Settings.density())
                     "rampart.listLayout" -> ListLayoutState.reload()
+                    "rampart.mailLayout" -> MailLayoutState.reload()
                     "rampart.tintRowsByTag" -> tintRows = Settings.tintRowsByTag()
                     "rampart.undoBarSeconds" -> undoBarSeconds = Settings.undoBarSeconds()
                     "rampart.notifyOnArrival" -> notifyOnArrival = Settings.notifyOnArrival()
@@ -4964,6 +4994,16 @@ private fun Reader(
         // question mark on most layouts, so the search key below has to say it does not
         // want one or Shift+/ lands in the search box instead of the list.
         if (typing) return false
+        // Alt+Left is Back in the focused layout, the same step as the button on the
+        // message. Anywhere else the key is left alone, because it was not ours before.
+        if (
+            event.isAltPressed && !event.isCtrlPressed && !event.isShiftPressed && !event.isMetaPressed &&
+            event.key == Key.DirectionLeft &&
+            showsFocusedMessage(MailLayoutState.layout, focusedNav, selected?.let(::rowToken))
+        ) {
+            focusedNav = focusedNav.backed()
+            return true
+        }
         if (event.key == Key.Slash && event.isShiftPressed) {
             showShortcuts = true
             return true
@@ -5026,14 +5066,27 @@ private fun Reader(
             Key.S -> { actions.star?.invoke(); true }
             Key.E -> { actions.archive?.invoke(); true }
             Key.Delete, Key.Backspace -> { actions.trash?.invoke(); true }
+            Key.Enter, Key.NumPadEnter -> {
+                val key = selected?.let(::rowToken)
+                if (MailLayoutState.layout == MailLayout.FOCUSED && key != null && focusedNav.openKey != key) {
+                    focusedNav = focusedNav.opened(key)
+                    true
+                } else {
+                    false
+                }
+            }
             Key.Escape -> {
-                // Search first, then the open message. The composer sits outside
-                // this handler, and a focused search field returns above, so
-                // Escape there still belongs to them.
+                // Search first, then the focused cover, then the open message. The
+                // composer sits outside this handler, and a focused search field
+                // returns above, so Escape there still belongs to them. In the
+                // focused layout Escape goes back to the list and leaves the row
+                // selected, which is what Back does.
                 if (query.isNotEmpty()) {
                     query = ""
                     showingResults = false
                     scope.launch { reload() }
+                } else if (showsFocusedMessage(MailLayoutState.layout, focusedNav, selected?.let(::rowToken))) {
+                    focusedNav = focusedNav.backed()
                 } else if (selected != null) {
                     selected = null
                 }
@@ -5665,6 +5718,7 @@ private fun Reader(
                         onOpen = { message ->
                             settingsOpen = false; contactsOpen = false; dashboardOpen = false; calendarOpen = false
                             selected = message
+                            focusedNav = focusedNav.opened(rowToken(message))
                         },
                     )
                 },
@@ -5891,7 +5945,12 @@ private fun Reader(
                             openBriefing(today, scope, k, readerFor(k), inbox, { Secrets.mailKey(session(k).account) }, refresh)
                         }
                     },
-                    onOpen = { message -> dashboardOpen = false; today.open = false; selected = message },
+                    onOpen = { message ->
+                        dashboardOpen = false
+                        today.open = false
+                        selected = message
+                        focusedNav = focusedNav.opened(rowToken(message))
+                    },
                     onBack = { today.open = false },
                 )
             } else if (dashboardOpen) {
@@ -5915,6 +5974,7 @@ private fun Reader(
                     onOpen = { message ->
                         dashboardOpen = false
                         selected = message
+                        focusedNav = focusedNav.opened(rowToken(message))
                     },
                 )
             } else if (contactsOpen) {
@@ -6060,8 +6120,20 @@ private fun Reader(
                 return@Row
             }
             // The undo card sits over the list, not the message: the message is a native panel
-            // that paints over anything drawn on top of it.
-            Box(Modifier.fillMaxHeight()) {
+            // that paints over anything drawn on top of it. When the focused layout covers
+            // the list, the same card sits between Back and the message, still off that panel.
+            val openMessage = selected
+            MailPanes(
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                layout = MailLayoutState.layout,
+                messageOpen = showsFocusedMessage(
+                    MailLayoutState.layout,
+                    followedNav,
+                    openMessage?.let(::rowToken),
+                ),
+                batch = picked.size > 1,
+                onBack = { focusedNav = focusedNav.backed() },
+                list = { wide ->
                 MessageList(
                     emails = emails,
                     selected = selected,
@@ -6170,15 +6242,24 @@ private fun Reader(
                         }
                     } else null,
                     threads = threadContext(),
+                    fillWidth = wide,
                     onSelect = { message, ctrl, shift ->
                         val token = rowToken(message)
                         picked = pickedAfter(emails.map { rowToken(it) }, picked, anchor, token, ctrl, shift)
                         if (!shift) anchor = token
-                        if (!ctrl && !shift) { selectedForMenu = RowPress.menu; selected = message }
+                        if (!ctrl && !shift) {
+                            // A right-click is a menu, not an open. Covering the list would
+                            // hide the row the menu belongs to. Read it before it is cleared.
+                            val menu = RowPress.menu
+                            selectedForMenu = menu
+                            selected = message
+                            if (!menu) focusedNav = focusedNav.opened(token)
+                        }
                         RowPress.menu = false
                     },
                 )
-                Box(Modifier.matchParentSize(), contentAlignment = Alignment.BottomCenter) {
+                },
+                notice = {
                 // A small card floating at the bottom, like a phone's own undo notice. Not in the
                 // column above the panes, where it pushed every pane down, and not a full-width
                 // strip across the top, where it covered the toolbar you needed while it was up.
@@ -6242,10 +6323,9 @@ private fun Reader(
                         }
                     }
                 }
-                }
-            }
-            VerticalDivider()
-            if (picked.size > 1) {
+                },
+                reading = {
+                    if (picked.size > 1) {
                 Picked(
                     count = picked.size,
                     // The folder itself rather than any one message: a batch is whatever is
@@ -6312,9 +6392,8 @@ private fun Reader(
                         picked = emptySet()
                     },
                 )
-                return@Row
-            }
-            val message = selected
+                    } else {
+                        val message = openMessage
             if (message == null) {
                 Message(summary = null, body = null, onLink = { confirm = it })
             } else {
@@ -6331,7 +6410,7 @@ private fun Reader(
                 val stacked = thread.size > 1
                 val stackScroll = rememberScrollState()
                 Box(
-                    Modifier.weight(1f).fillMaxHeight().background(
+                    Modifier.fillMaxSize().background(
                         if (stacked) MaterialTheme.colorScheme.surface else Color.Transparent,
                     ),
                 ) {
@@ -6419,6 +6498,9 @@ private fun Reader(
                     }
                 }
             }
+                    }
+                },
+            )
         }
         }
         }

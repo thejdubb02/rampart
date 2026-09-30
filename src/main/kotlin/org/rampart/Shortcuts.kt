@@ -47,6 +47,8 @@ internal val SHORTCUTS: List<Shortcut> = listOf(
     Shortcut("U", "Show only unread, or everything again", "Moving around"),
     Shortcut("/", "Search", "Moving around"),
     Shortcut("Esc", "Clear the search, or close what is open", "Moving around"),
+    Shortcut("Enter", "Open the message, in the focused layout", "Moving around"),
+    Shortcut("Alt+Left", "Back to the list, in the focused layout", "Moving around"),
     Shortcut("F5", "Check for mail now", "Moving around"),
     Shortcut("R", "Reply", "Acting on a message"),
     Shortcut("A", "Reply to everyone", "Acting on a message"),

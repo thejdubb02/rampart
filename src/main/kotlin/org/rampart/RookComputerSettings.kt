@@ -168,6 +168,14 @@ internal class ComputerPlace(private val choices: ComputerChoices) : SettingPlac
                 Settings::setListLayout,
             ),
             oneOf(
+                "mailLayout", "Mail layout",
+                "Where the message list and the open message sit: side by side, the list on its own, or the message under the list.",
+                "Themes", "mail layout split pane focused list reading pane bottom appearance",
+                MailLayout.entries.map { SettingOption(it.key, it.label) },
+                { Settings.mailLayout() },
+                Settings::setMailLayout,
+            ),
+            oneOf(
                 "loader", "Loader", "What is drawn while Rampart waits for something.",
                 "Themes", "spinner loading animation appearance", choices.loaders,
                 {
