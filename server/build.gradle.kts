@@ -6,7 +6,7 @@ plugins {
 repositories { mavenCentral() }
 
 dependencies {
-    // The only one. Everything else is the JDK: com.sun.net.httpserver serves the three
+    // The only one. Everything else is the JDK: com.sun.net.httpserver serves the
     // routes and java.security does the token comparison. A framework here would be a
     // larger dependency than the program it was serving.
     implementation("io.github.willena:sqlite-jdbc:3.50.1.0")

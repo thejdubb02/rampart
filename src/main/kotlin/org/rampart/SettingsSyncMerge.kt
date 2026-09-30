@@ -116,6 +116,10 @@ internal val SYNCED_SETTINGS: Map<String, SyncShape> = mapOf(
     // buttons a row shows on hover, are how somebody likes the list and travel with them.
     "tintRowsByAccount" to SyncShape.TEXT,
     "hoverActions" to SyncShape.LIST_OF_TEXT,
+    // Whether sender pictures are wanted, and whether Junk may show one. The companion
+    // address stays on this computer: it decides where a request goes.
+    "senderPictures" to SyncShape.TEXT,
+    "senderPicturesInJunk" to SyncShape.TEXT,
     "savedSearches" to SyncShape.LIST_OF_OBJECTS,
     "order" to SyncShape.TEXT,
     "orderAppliesToAll" to SyncShape.TEXT,

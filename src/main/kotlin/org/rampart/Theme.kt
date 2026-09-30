@@ -99,10 +99,11 @@ internal val RampartTypography: Typography = Typography().let { base ->
 /**
  * Their picture if we hold one, initials in a coloured circle otherwise.
  *
- * Still nothing fetched. A real avatar service means asking a third party who you
- * correspond with, on every message, which is exactly the leak the image blocker exists to
- * prevent. [photo] only ever comes from a contact card you already have, where the picture
- * is carried inside the card and no request leaves the machine to draw it.
+ * [photo] is a contact card's picture, and it wins: it arrived with the card and drawing
+ * it sends nothing. Otherwise a sender picture already fetched through the companion,
+ * when that setting is on. A miss, a failure, or Junk (unless that is switched on) stays
+ * initials. Nothing here asks the sender's site. That request would tell them the message
+ * was opened.
  */
 @Composable
 internal fun Avatar(
@@ -112,13 +113,16 @@ internal fun Avatar(
     color: Color = avatarColor(seed),
     photo: ImageBitmap? = null,
 ) {
+    // Only when there is no contact picture, so a card we already hold does not start a fetch.
+    val fetched = if (photo == null) senderPictureOrNull(seed) else null
+    val shown = photo ?: fetched
     Box(
         modifier = Modifier.size(size).background(color, CircleShape).clip(CircleShape),
         contentAlignment = Alignment.Center,
     ) {
-        if (photo != null) {
+        if (shown != null) {
             Image(
-                photo,
+                shown,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),

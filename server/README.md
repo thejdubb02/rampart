@@ -4,9 +4,9 @@ Optional. Rampart is a mail client and works with a mailbox and nothing else; th
 the one thing a desktop app genuinely cannot do by itself, which is be somewhere on the web
 that a picture can be fetched from.
 
-Today that means **open tracking** and **diagnostics**. If you do not want either, you
-never need this and Rampart will not ask you for it again: both are visibly unavailable
-in Rampart's own settings until a companion is configured.
+Today that means **open tracking**, **diagnostics**, and **sender pictures**. If you do not
+want them, you never need this. Open tracking and sender pictures stay visibly unavailable
+until a companion is configured, and each one says why in one sentence.
 
 **There is one companion, not one per feature.** Anything Rampart adds later that needs a
 server goes in this same container, behind the same hostname and the same setting, so
@@ -27,6 +27,12 @@ and a total), aggregated by the client over a few minutes before it is ever sent
 message, a subject, a recipient, a folder's name, a search term, or which account any of it
 happened on. See `Diagnostics.kt` in the main repository for the full catalog of what gets
 measured and why an error's own text never leaves the machine it happened on.
+
+For sender pictures, it receives a domain and the SHA-256 of a lowercased address, not the
+address itself. It fetches the picture and keeps it for 7 days, misses included. The
+sender's site sees this server, not the computer that opened the message. The first fetch
+still happens when a picture is needed, so that one request has a time. Later opens within
+7 days do not ask again.
 
 ## Running it
 
@@ -81,6 +87,7 @@ Three things worth getting right:
 | `RAMPART_GOTIFY_TOKEN` | none, optional | The application token for Gotify |
 | `RAMPART_TRACKER_KEEP_DAYS` | `400` | How long a fetch or a diagnostics batch is kept before it is thrown away. One knob for both |
 | `RAMPART_TRACKER_DB` | `/data/tracker.db` | Where the database lives |
+| `RAMPART_ICON_CACHE` | `/data/icons` | Where sender pictures and misses are kept for 7 days |
 | `PORT` | `8080` | The port inside the container |
 
 The server is a handover buffer, not the record. Rampart keeps its own copy of everything
@@ -106,7 +113,16 @@ alone still works on `/diag` the same as it always did.
 | `POST /replied` | `Authorization: Bearer <token>` | Stops phone alerts after a recipient replies |
 | `GET /c/<id>/<n>` | none, by necessity | Records a classified click and redirects to its destination |
 | `POST /diag` | `Authorization: Bearer <token>` or `<diag-token>` | Aggregated diagnostics, a batch at a time. See below |
+| `GET /icon?domain=<domain>&email=<sha-256>` | `Authorization: Bearer <token>` | A sender picture, or 404. The same token as `/opens`, never the diag token |
 | `GET /health` | none, and never gate it | `ok` |
+
+`GET /icon` returns a sender picture, or 404 when there is not one. `domain` is a hostname
+and `email` is the SHA-256 of the lowercased address. The token is the same one as `/opens`.
+The diagnostics token is not accepted, which is what keeps this from being an open proxy.
+The server asks Libravatar, then the site's own icon, and it skips that second step for
+large mail providers whose logo says nothing about the person. An address, a localhost
+name, or a name that resolves to a private network is refused. Results are kept for 7 days
+in `RAMPART_ICON_CACHE`.
 
 `/o/` always answers 200 with an image, whatever the id. A 404 for an unknown id would tell
 anyone who asked which ids exist, and a mail client that gets an error draws a broken image

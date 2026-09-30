@@ -498,7 +498,7 @@ private fun ColumnScope.AccountSwitcher(
                         },
                     ),
                 ) {
-                    Avatar(account.name, account.email, AccountFace)
+                    Avatar(account.name, account.email, AccountFace, photo = photoFor(account.email))
                 }
                 if (unread > 0) {
                     // In from the corner, so the rounded button does not shave the badge.

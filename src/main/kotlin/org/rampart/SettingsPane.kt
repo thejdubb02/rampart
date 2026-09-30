@@ -695,6 +695,56 @@ private fun ThemesPage(
         Text("Enable animations", style = MaterialTheme.typography.bodyMedium)
     }
 
+    Spacer(Modifier.height(18.dp))
+    val pictureRevision = SenderPictureSignals.revision.value
+    val companionReady = Settings.trackingServer().isNotBlank()
+    Section(
+        "Sender pictures",
+        if (companionReady) {
+            "Fetched through your companion server, so the sender's site never sees this computer. Off for Junk, so a logo cannot make a phishing message look like the company it pretends to be."
+        } else {
+            "Sender pictures stay off until a companion server is set, because fetching one from the sender would tell them you opened the message."
+        },
+    )
+    if (companionReady) {
+        var pictures by remember(pictureRevision) { mutableStateOf(Settings.senderPictures()) }
+        Row(
+            Modifier.fillMaxWidth().clickable {
+                pictures = !pictures
+                Settings.setSenderPictures(pictures)
+            }.padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Switch(
+                checked = pictures,
+                onCheckedChange = {
+                    pictures = it
+                    Settings.setSenderPictures(it)
+                },
+            )
+            Spacer(Modifier.width(12.dp))
+            Text("Sender pictures", style = MaterialTheme.typography.bodyMedium)
+        }
+        var junkPictures by remember(pictureRevision) { mutableStateOf(Settings.senderPicturesInJunk()) }
+        Row(
+            Modifier.fillMaxWidth().clickable {
+                junkPictures = !junkPictures
+                Settings.setSenderPicturesInJunk(junkPictures)
+            }.padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Switch(
+                checked = junkPictures,
+                onCheckedChange = {
+                    junkPictures = it
+                    Settings.setSenderPicturesInJunk(it)
+                },
+            )
+            Spacer(Modifier.width(12.dp))
+            Text("Show pictures in Junk", style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+
     Spacer(Modifier.height(22.dp))
     Section(
         "Mail layout",
@@ -1527,7 +1577,7 @@ private fun AccountsPage(
             Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).rowHover().padding(vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Avatar(account.name, account.email, 32.dp)
+            Avatar(account.name, account.email, 32.dp, photo = photoFor(account.email))
             Spacer(Modifier.width(11.dp))
             Column(Modifier.weight(1f)) {
                 Text(

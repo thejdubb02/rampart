@@ -83,6 +83,12 @@ What needs it today:
   for the full catalog and the no-PII rules it enforces, and `server/README.md`'s "Why
   there are two tokens" for how the built-in default cannot read anyone's own open-tracking
   log back, even on the same server.
+- **Sender pictures.** The picture next to a sender is fetched by this server, not by the
+  app, so the sender's site sees the companion's address and not the reader's. It uses the
+  same address and the same token as open tracking. There is not a second server to run.
+  `GET /icon` takes a domain and a hash of the address, never the address itself. Junk
+  stays on initials unless that is switched on, because a logo there makes a phishing
+  message look like the company it pretends to be.
 
 What the companion is not, and will not become:
 

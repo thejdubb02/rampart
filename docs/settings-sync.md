@@ -36,6 +36,7 @@ An explicit allowlist, `SYNCED_SETTINGS` and `SYNCED_ASSISTANT` in `SettingsSync
 
 Synced, from `settings.json`: `theme`, `customThemes`, `iconPack`, `loader`, `density`,
 `mailLayout`, `tintRowsByTag`, `tagColours`, `tintRowsByAccount`, `hoverActions`,
+`senderPictures`, `senderPicturesInJunk`,
 `savedSearches`,
 `order`, `markReadDelay`, `archiveBy`,
 `messageMode`, `messageScale`, `undoSeconds`, `undoBarSeconds`, `signatureAboveQuote`,
@@ -43,6 +44,10 @@ Synced, from `settings.json`: `theme`, `customThemes`, `iconPack`, `loader`, `de
 `attachmentPosition`, `attachmentClickBehavior`, `trackedDomains`, `changelogSuppressed`,
 `sharing` (which shared mailboxes go into the cross-account views, and which folders feed
 All unread, All starred and All mail).
+
+`senderPictures` and `senderPicturesInJunk` are the preference only. The companion address
+stays on this computer, so a machine with no companion keeps the preference and still does
+not fetch.
 
 Synced, from `assistant.json`: `deniedFolders`, the folders Rook must never read. A
 boundary drawn on one computer is one its owner expects on the next.

@@ -2224,6 +2224,9 @@ private fun Reader(
         if ("settings.savedSearches" in changed) savedSearches = Settings.savedSearches()
         if ("settings.focusedInbox" in changed) focusedInbox = Settings.focusedInbox()
         if ("settings.focusOverrides" in changed) focusOverrides = Settings.focusOverrides()
+        if ("settings.senderPictures" in changed || "settings.senderPicturesInJunk" in changed) {
+            SenderPictureSignals.bump()
+        }
     }
     CalendarJumpFollows(calendarOpen) {
         calendarOpen = true; settingsOpen = false; contactsOpen = false; dashboardOpen = false
@@ -5485,11 +5488,20 @@ private fun Reader(
         /*
          * The pictures, decoded once per account rather than per row.
          *
-         * Only the ones carried inside a contact card or stored as a blob on the server.
-         * A card that states an external URL instead is left alone to prevent tracking.
+         * Contact cards and blobs already on the mail server. A card that states an
+         * external URL is left alone, because fetching it would tell the sender the
+         * message was opened. A sender picture, when the setting is on, comes through
+         * the companion instead, and is looked up where the avatar is drawn.
          */
         // The mail fills whatever is left after the bars. A row at the full
         // window height would run under the update bar and cut the sidebar off.
+        val pictureSignal = SenderPictureSignals.revision.value
+        val picturePolicy = remember(pictureSignal) {
+            SenderPicturePolicy(
+                enabled = Settings.senderPictures() && Settings.trackingServer().isNotBlank(),
+                showInJunk = Settings.senderPicturesInJunk(),
+            )
+        }
         Box(Modifier.weight(1f).fillMaxWidth()) {
         CompositionLocalProvider(
             LocalSenderPhotos provides senderPhotos,
@@ -5499,6 +5511,7 @@ private fun Reader(
             LocalLoader provides loader,
             LocalListDensity provides density,
             LocalSidebarIcons provides sidebarIcons,
+            LocalSenderPicturePolicy provides picturePolicy,
         ) {
         /*
          * One address book, drawn in two places: the full page, and the panel the app bar
@@ -6222,6 +6235,18 @@ private fun Reader(
             } else emails
 
             val openMessage = selected
+            // The merged inbox is not Junk. A real folder is, by its role or by the id we
+            // already use for the Junk actions, so a logo is not fetched for that mail.
+            val viewingJunk = run {
+                val account = here?.first
+                val folder = here?.second
+                if (account == null || account == ALL_ACCOUNTS || folder == null) {
+                    false
+                } else {
+                    folderIsJunk(folder.role, folder.id, folderFor("junk", mailboxes[account].orEmpty())?.id)
+                }
+            }
+            CompositionLocalProvider(LocalViewingJunk provides viewingJunk) {
             MailPanes(
                 modifier = Modifier.weight(1f).fillMaxHeight(),
                 layout = MailLayoutState.layout,
@@ -6615,6 +6640,7 @@ private fun Reader(
                     }
                 },
             )
+            }
         }
         }
         }

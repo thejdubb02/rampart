@@ -16,17 +16,21 @@ import java.util.Base64
 import java.util.concurrent.Executors
 
 /**
- * Rampart's companion, which is one container and does one thing.
+ * Rampart's companion.
  *
  * It serves a 1x1 GIF at an id the client minted, writes down that somebody fetched it,
  * and answers one authenticated question: what has been fetched since a given moment.
+ * It also fetches a sender picture, when asked with the same token, so the app does not
+ * have to ask the sender's site itself.
  *
- * **It never learns anything about the mail.** No message, no subject, no recipient, no
- * address, no password. The ids are random and mean nothing without the client that minted
- * them, which is what makes this safe to run on a cheap box with a public hostname.
+ * The tracking routes never learn anything about the mail. No message, no subject, no
+ * recipient, no address, no password. The ids are random and mean nothing without the
+ * client that minted them, which is what makes this safe to run on a cheap box with a
+ * public hostname. The picture route is the narrow exception: a domain and a hash of an
+ * address, not the address, and not the message.
  *
- * Built on the JDK's own HTTP server rather than a framework. This is three routes; a
- * framework would be a larger dependency than the program.
+ * Built on the JDK's own HTTP server rather than a framework. A framework would be a
+ * larger dependency than the program.
  */
 fun main() {
     val token = System.getenv("RAMPART_TRACKER_TOKEN").orEmpty()
@@ -69,9 +73,9 @@ fun main() {
     val pushes = Executors.newFixedThreadPool(2)
 
     val server = HttpServer.create(InetSocketAddress("0.0.0.0", port), 0)
-    // A small pool, because every handler is a single SQLite statement. The default is a
-    // single thread, which would let one slow client hold up somebody's image loading.
-    server.executor = Executors.newFixedThreadPool(8)
+    // Icon lookups wait on other servers. A larger pool, and /icon answers 503 when it
+    // is already busy, so a pixel is not stuck behind a homepage.
+    server.executor = Executors.newFixedThreadPool(16)
 
     installRoutes(server, log, token, diagToken, pushClients, pushes)
     /*
@@ -89,6 +93,7 @@ internal fun installRoutes(
     diagToken: String? = null,
     pushClients: List<PushClient> = emptyList(),
     pushes: java.util.concurrent.Executor = java.util.concurrent.Executor { it.run() },
+    icons: IconService? = null,
 ) {
     server.createContext("/o/") { exchange -> pixel(exchange, log, pushClients, pushes) }
     server.createContext("/opens") { exchange -> opens(exchange, log, token, pushClients.isNotEmpty()) }
@@ -97,6 +102,9 @@ internal fun installRoutes(
     server.createContext("/replied") { exchange -> replied(exchange, log, token) }
     server.createContext("/c/") { exchange -> click(exchange, log, pushClients, pushes) }
     server.createContext("/diag") { exchange -> diag(exchange, log, token, diagToken) }
+    // The main token only. The diag token must not unlock a route that fetches URLs.
+    val pictures = icons ?: IconService()
+    server.createContext("/icon") { exchange -> handleIcon(exchange, token, pictures) }
     server.createContext("/health") { exchange -> reply(exchange, 200, "ok".toByteArray(), "text/plain") }
 }
 
@@ -619,7 +627,8 @@ private fun callerAddress(exchange: HttpExchange): String =
         ?.takeIf { it.isNotEmpty() }
         ?: exchange.remoteAddress?.address?.hostAddress.orEmpty()
 
-private fun reply(exchange: HttpExchange, code: Int, body: ByteArray, type: String) {
+/** Internal so the icon route can answer with the same headers and the same body write. */
+internal fun reply(exchange: HttpExchange, code: Int, body: ByteArray, type: String) {
     exchange.responseHeaders.add("Content-Type", type)
     exchange.sendResponseHeaders(code, body.size.toLong())
     exchange.responseBody.use { it.write(body) }

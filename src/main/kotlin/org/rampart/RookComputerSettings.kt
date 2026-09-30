@@ -160,6 +160,18 @@ internal class ComputerPlace(private val choices: ComputerChoices) : SettingPlac
                 "Themes", "animation motion transition appearance",
                 Settings::animations, Settings::setAnimations,
             ),
+            onOff(
+                "senderPictures", "Sender pictures",
+                "Pictures for people who write to you, fetched through your companion server. Stays off until a companion server is set, because asking the sender's site would tell them you opened the message.",
+                "Themes", "sender pictures avatars photos appearance",
+                Settings::senderPictures, Settings::setSenderPictures,
+            ),
+            onOff(
+                "senderPicturesInJunk", "Show pictures in Junk",
+                "Off by default. A logo in Junk can make a phishing message look like the company it pretends to be.",
+                "Themes", "junk spam sender pictures avatars phishing appearance",
+                Settings::senderPicturesInJunk, Settings::setSenderPicturesInJunk,
+            ),
             oneOf(
                 "listLayout", "List layout", "How each message is drawn in the list: the normal rows, a table, or cards.",
                 "Themes", "layout message list table columns cards view appearance",

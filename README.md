@@ -117,10 +117,12 @@ Rampart needs a mailbox and nothing else. One feature genuinely cannot work from
 application alone, which is knowing whether a message you sent was opened, because that
 needs somewhere on the web a picture can be fetched from.
 
-That server is in [`server/`](server/), it is a container and a token, and it stores a
-random id, a timestamp, a user agent and a truncated network per fetch. It never sees a
-message, a subject, a recipient or your password. If you do not want it, open tracking is
-switched off and Rampart does not ask again.
+That server is in [`server/`](server/), it is a container and a token. Open tracking stores a
+random id, a timestamp, a user agent and a truncated network per fetch. Sender pictures use
+the same server and the same token: Rampart sends a domain and a hash of the address, and
+the server fetches the picture, so the sender's site sees the server rather than this
+computer. It never sees a message, a subject, a recipient or your password. If you do not
+want it, open tracking and sender pictures stay off and Rampart does not ask again.
 
 ## Setting it up for someone else
 

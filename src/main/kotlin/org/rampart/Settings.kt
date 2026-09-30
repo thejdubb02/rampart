@@ -415,7 +415,11 @@ object Settings {
      */
     fun trackingServer(): String = read()["trackingServer"]?.jsonPrimitive?.contentOrNull.orEmpty()
 
-    fun setTrackingServer(value: String) = write { put("trackingServer", JsonPrimitive(value.trim())) }
+    fun setTrackingServer(value: String) {
+        write { put("trackingServer", JsonPrimitive(value.trim())) }
+        // Pictures turn on with the server. The window reads that from the revision, not the file.
+        SenderPictureSignals.bump()
+    }
 
     /** The all-account default for tracking newly composed messages. */
     fun trackNewMail(): Boolean = read()["trackNewMail"]?.jsonPrimitive?.booleanOrNull ?: false
@@ -712,6 +716,37 @@ object Settings {
     fun animations(): Boolean = animationsOn(read()["animations"]?.jsonPrimitive?.booleanOrNull)
 
     fun setAnimations(value: Boolean) = write { put("animations", JsonPrimitive(value)) }
+
+    /**
+     * Whether sender pictures are wanted.
+     *
+     * Missing means on when a companion server is set, and off when it is not. The choice
+     * itself is remembered either way. Fetching still waits for a companion: a saved "on"
+     * with no server does not ask the sender's site.
+     */
+    fun senderPictures(): Boolean = senderPicturesOn(
+        read()["senderPictures"]?.jsonPrimitive?.booleanOrNull,
+        trackingServer().isNotBlank(),
+    )
+
+    fun setSenderPictures(value: Boolean) {
+        write { put("senderPictures", JsonPrimitive(value)) }
+        SenderPictureSignals.bump()
+    }
+
+    /**
+     * Whether Junk may show a sender picture.
+     *
+     * Off unless chosen. A logo in Junk lends a phishing message the look of the company
+     * it pretends to be.
+     */
+    fun senderPicturesInJunk(): Boolean =
+        read()["senderPicturesInJunk"]?.jsonPrimitive?.booleanOrNull ?: false
+
+    fun setSenderPicturesInJunk(value: Boolean) {
+        write { put("senderPicturesInJunk", JsonPrimitive(value)) }
+        SenderPictureSignals.bump()
+    }
 
     /**
      * Senders whose pictures may be fetched from the web. Domains, not addresses: see

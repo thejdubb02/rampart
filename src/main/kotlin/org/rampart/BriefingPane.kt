@@ -207,7 +207,7 @@ private fun BriefRow(line: BriefLine, onOpen: (Summary) -> Unit) {
             .padding(vertical = 6.dp, horizontal = 8.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        Avatar(line.message.from, line.message.fromEmail, 24.dp)
+        Avatar(line.message.from, line.message.fromEmail, 24.dp, photo = photoFor(line.message.fromEmail))
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Text(

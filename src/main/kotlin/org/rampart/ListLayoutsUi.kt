@@ -403,7 +403,7 @@ private fun MessageCard(
                 .padding(12.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Avatar(who.ifBlank { message.fromEmail }, message.fromEmail, 28.dp)
+                Avatar(who.ifBlank { message.fromEmail }, message.fromEmail, 28.dp, photo = photoFor(message.fromEmail))
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
