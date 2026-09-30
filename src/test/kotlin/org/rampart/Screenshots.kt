@@ -344,10 +344,8 @@ class Screenshots {
                 Sidebar(
                     accounts = ACCOUNTS,
                     here = ALL_ACCOUNTS to allInboxes(6),
-                    onSettings = {},
                     collapsed = false,
                     onToggleCollapsed = {},
-                    onAddAccount = {},
                     onWrite = {},
                     onSelect = { _, _ -> },
                     // Merged across both accounts, which is what the sidebar draws: the
@@ -526,10 +524,8 @@ class Screenshots {
             Sidebar(
                 accounts = ACCOUNTS,
                 here = ACCOUNTS[0].key to MAILBOXES[0],
-                onSettings = {},
                 collapsed = collapsed,
                 onToggleCollapsed = {},
-                onAddAccount = {},
                 onWrite = {},
                 onSelect = { _, _ -> },
             )

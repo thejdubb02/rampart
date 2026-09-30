@@ -1,11 +1,15 @@
 package org.rampart
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -13,6 +17,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -36,6 +42,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
@@ -52,9 +59,11 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.awt.Cursor
@@ -131,6 +140,18 @@ private fun digitOf(key: Key): Int? = when (key) {
 /** Wide enough for a 34dp button and its highlight, and no wider: the width is the mail's. */
 private val BarWidth = 44.dp
 
+/** The same 34dp the other buttons use. A face bigger than this would force the bar wider. */
+private val AccountSlot = 34.dp
+
+/**
+ * The picture inside that button. Rook's face on this bar is 20dp, and the glyphs are
+ * 16dp. 20dp leaves a corner of the button for the unread count without growing the slot.
+ */
+private val AccountFace = 20.dp
+
+/** How many real faces are drawn before the rest fold into a "+N" row. */
+private const val MAX_ACCOUNT_FACES = 3
+
 /** The strip on the panel's left edge that drags. Wider than the line it draws, to be findable. */
 private val EdgeWidth = 6.dp
 
@@ -144,6 +165,12 @@ private val EdgeWidth = 6.dp
 internal fun WithSideTools(
     /** Whether Rook is busy anywhere in the app, so his face moves while he works. */
     working: Boolean,
+    /** Signed-in accounts. The bar draws one face each, shared mailboxes left out. */
+    accounts: List<AccountMailboxes> = emptyList(),
+    /** Whose mail is on screen, so that face can be marked. Null on the merged inbox. */
+    currentAccount: String? = null,
+    /** The "+" under the faces. Same action the old add-account button ran. */
+    onAddAccount: () -> Unit = {},
     inDashboard: Boolean = false,
     onDashboard: () -> Unit = {},
     inSettings: Boolean = false,
@@ -168,7 +195,10 @@ internal fun WithSideTools(
             }
         }
         VerticalDivider()
-        Bar(working, inDashboard, onDashboard, inSettings, onSettings, updateState, onUpdate)
+        Bar(
+            working, inDashboard, onDashboard, inSettings, onSettings, updateState, onUpdate,
+            accounts, currentAccount, onAddAccount,
+        )
     }
 }
 
@@ -202,7 +232,13 @@ private fun PanelEdge(tool: SideTool, available: Float?) {
     }
 }
 
-/** The bar itself: one button per tool, top to bottom in [SideTool]'s order, with Dashboard, Settings and version pinned to the bottom. */
+/**
+ * The bar itself: one button per tool, top to bottom in [SideTool]'s order.
+ *
+ * Dashboard, Settings, the version and the accounts are pinned to the bottom edge.
+ * They are measured first, and a short window clips the tools above them. The
+ * accounts moved here so a long folder list can no longer scroll them away.
+ */
 @Composable
 private fun Bar(
     working: Boolean,
@@ -212,6 +248,9 @@ private fun Bar(
     onSettings: () -> Unit = {},
     updateState: UpdateBarState = UpdateBarState.Hidden,
     onUpdate: () -> Unit = {},
+    accounts: List<AccountMailboxes> = emptyList(),
+    currentAccount: String? = null,
+    onAddAccount: () -> Unit = {},
 ) {
     Column(
         Modifier.width(BarWidth).fillMaxHeight()
@@ -220,15 +259,20 @@ private fun Bar(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        SideTool.entries.forEach { tool ->
-            // Files is only for an account that keeps files, the way its old sidebar button
-            // was. The key still answers, and the panel says why there is nothing in it.
-            if (tool == SideTool.FILES && !FilesPage.offered && !AppBar.showing(tool)) return@forEach
-            // Tasks the same way, for an account with somewhere to keep one (TasksUi.kt).
-            if (tool == SideTool.TASKS && !TasksPanelState.offered && !AppBar.showing(tool)) return@forEach
-            BarButton(tool, working)
+        Column(
+            Modifier.weight(1f).clipToBounds(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            SideTool.entries.forEach { tool ->
+                // Files is only for an account that keeps files, the way its old sidebar button
+                // was. The key still answers, and the panel says why there is nothing in it.
+                if (tool == SideTool.FILES && !FilesPage.offered && !AppBar.showing(tool)) return@forEach
+                // Tasks the same way, for an account with somewhere to keep one (TasksUi.kt).
+                if (tool == SideTool.TASKS && !TasksPanelState.offered && !AppBar.showing(tool)) return@forEach
+                BarButton(tool, working)
+            }
         }
-        Spacer(Modifier.weight(1f))
         BarAction(
             icon = RampartIcons.Dashboard,
             label = "How your mail is going",
@@ -242,11 +286,12 @@ private fun Bar(
             onClick = onSettings,
         )
         VersionLabel(updateState, onUpdate)
+        AccountSwitcher(accounts, currentAccount, onAccount = onSettings, onAdd = onAddAccount)
     }
 }
 
 /**
- * The version label at the bottom of the bar.
+ * The running version, just above the accounts.
  *
  * When an update is ready, a download arrow is shown beside the label. Clicking either
  * triggers the install. During install, a spinner appears in place of the arrow.
@@ -368,6 +413,178 @@ private fun BarButton(tool: SideTool, working: Boolean) {
                     contentDescription = name,
                     tint = if (open) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
                     modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The signed-in accounts, one face per row, then the add button.
+ *
+ * They used to overlap in a row under the folders, and that row scrolled away. A
+ * vertical strip has nothing beside it to overlap, and this column does not scroll,
+ * so the faces stay put at the bottom edge.
+ *
+ * Still capped at [MAX_ACCOUNT_FACES]. Past the cap the last row shows "+N", and
+ * that account's picture is left out, so the number counts everyone without a
+ * face. Same rule as the old stack. A shared mailbox is left out too, as it was
+ * on the old row. It is a folder shared through an account, and that account
+ * already has its own face.
+ *
+ * Clicking a face still opens account settings, which is what the old stack's one
+ * click did. The account whose mail is on screen is marked the way an open tool
+ * on this bar is marked: the same light wash behind the button, and, because this
+ * one is a face, the same ring Rook's picture gets when his panel is open.
+ */
+@Composable
+private fun ColumnScope.AccountSwitcher(
+    accounts: List<AccountMailboxes>,
+    currentKey: String?,
+    onAccount: () -> Unit,
+    onAdd: () -> Unit,
+) {
+    val own = accounts.filterNot { isSharedKey(it.key) }
+    val shown = own.take(MAX_ACCOUNT_FACES)
+    val extra = own.size - shown.size
+    shown.forEachIndexed { index, account ->
+        val fold = extra > 0 && index == shown.lastIndex
+        if (fold) {
+            val folded = own.drop(index)
+            AccountFaceButton(
+                tooltip = "${folded.size} more accounts",
+                current = currentKey != null && folded.any { it.key == currentKey },
+                onClick = onAccount,
+            ) {
+                OverflowCount(folded.size)
+            }
+        } else {
+            // The inbox's unread conversations, the same number the All inboxes row adds.
+            // Every other folder keeps its own count in the folder list.
+            val unread = folderFor("inbox", account.mailboxes)?.unreadThreads ?: 0
+            val address = account.email.ifBlank { shortAccountName(account.name, account.email) }
+            AccountFaceButton(
+                tooltip = address.ifBlank { "Account" },
+                current = account.key == currentKey,
+                onClick = onAccount,
+            ) {
+                Box(
+                    Modifier.size(AccountFace).clip(CircleShape).then(
+                        if (account.key == currentKey) {
+                            Modifier.border(1.5.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                        } else {
+                            Modifier
+                        },
+                    ),
+                ) {
+                    Avatar(account.name, account.email, AccountFace)
+                }
+                if (unread > 0) {
+                    // In from the corner, so the rounded button does not shave the badge.
+                    UnreadBadge(unread, Modifier.align(Alignment.TopEnd).offset(x = (-2).dp, y = 2.dp))
+                }
+            }
+        }
+    }
+    AddAccountButton(onAdd)
+}
+
+/**
+ * One row of the account strip: the bar's button size, so the unread badge in the
+ * corner stays inside the width the bar already has.
+ */
+@Composable
+private fun AccountFaceButton(
+    tooltip: String,
+    current: Boolean,
+    onClick: () -> Unit,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    SidebarTooltip(tooltip) {
+        Box(
+            Modifier.size(AccountSlot)
+                .clip(MaterialTheme.shapes.small)
+                .background(
+                    if (current) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent,
+                )
+                .clickable(onClickLabel = "Account settings", role = Role.Button, onClick = onClick),
+            contentAlignment = Alignment.Center,
+            content = content,
+        )
+    }
+}
+
+/**
+ * What the last row shows once there are more accounts than [MAX_ACCOUNT_FACES].
+ * Coloured like a face, with the count written in it, so it reads as more accounts.
+ */
+@Composable
+private fun OverflowCount(count: Int) {
+    Box(
+        Modifier.size(AccountFace).background(MaterialTheme.colorScheme.surfaceVariant, CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            "+$count",
+            fontSize = if (count >= 10) 8.sp else 11.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
+    }
+}
+
+/**
+ * Unread conversations, sat on the corner of the button.
+ *
+ * Past 99 it says 99+. A longer number would cover the face, and the button cannot
+ * grow without widening the bar.
+ */
+@Composable
+private fun UnreadBadge(count: Int, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .defaultMinSize(minWidth = 14.dp, minHeight = 14.dp)
+            .background(MaterialTheme.colorScheme.primary, CircleShape)
+            .padding(horizontal = 3.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            if (count > 99) "99+" else count.toString(),
+            color = MaterialTheme.colorScheme.onPrimary,
+            fontWeight = FontWeight.Bold,
+            fontSize = 8.sp,
+            lineHeight = 9.sp,
+            maxLines = 1,
+        )
+    }
+}
+
+/**
+ * The add-account button under the faces.
+ *
+ * A plain "+". The icon pack is shared by every theme, and one button does not earn
+ * a member on it. The click runs the add action on its own.
+ */
+@Composable
+private fun AddAccountButton(onClick: () -> Unit) {
+    SidebarTooltip("Add another account") {
+        Box(
+            Modifier.size(AccountSlot)
+                .clip(MaterialTheme.shapes.small)
+                .clickable(onClickLabel = "Add another account", role = Role.Button, onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                Modifier.size(AccountFace)
+                    .clip(CircleShape)
+                    .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "+",
+                    fontSize = 16.sp,
+                    color = MaterialTheme.colorScheme.outline,
                 )
             }
         }

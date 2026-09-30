@@ -5357,9 +5357,18 @@ private fun Reader(
          * The app bar down the right edge, and the panel it opens beside the mail. What was
          * already here is the content, in a row of its own that gives the panel its width.
          * Labelled Row so the early returns below still leave the same block they always did.
+         *
+         * The same account list the folder column draws. The faces on the bar are that
+         * list with the shared mailboxes taken out, which is what the old stack did.
          */
+        val sidebarAccounts = sessions.map {
+            AccountMailboxes(it.key, it.account.name, it.account.email, mailboxes[it.key].orEmpty())
+        } + sharing.sidebarAccounts(mailboxes)
         WithSideTools(
             working = chatThinking || summarising || actionJob.running || composeBusy || filterBusy,
+            accounts = sidebarAccounts,
+            currentAccount = here?.first?.takeIf { it != ALL_ACCOUNTS },
+            onAddAccount = onAddAccount,
             inDashboard = dashboardOpen,
             onDashboard = {
                 dashboardOpen = !dashboardOpen
@@ -5545,9 +5554,7 @@ private fun Reader(
                         },
                     )
                 },
-                accounts = sessions.map {
-                    AccountMailboxes(it.key, it.account.name, it.account.email, mailboxes[it.key].orEmpty())
-                } + sharing.sidebarAccounts(mailboxes),
+                accounts = sidebarAccounts,
                 folderRefusal = sharing::folderRefusal,
                 unifiedViews = { narrowed ->
                     UnifiedViewRows(
@@ -5588,11 +5595,9 @@ private fun Reader(
                 },
                 dragAt = dragAt,
                 onTagBounds = { keyword, bounds -> tagBounds[keyword] = bounds },
-                onSettings = { settingsOpen = !settingsOpen; if (settingsOpen) { contactsOpen = false; dashboardOpen = false; calendarOpen = false } },
                 onDashboard = { dashboardOpen = !dashboardOpen; today.open = false; if (dashboardOpen) { contactsOpen = false; settingsOpen = false; calendarOpen = false } },
                 inDashboard = dashboardOpen,
                 inSettings = settingsOpen,
-                onAddAccount = onAddAccount,
                 collapsed = collapsed,
                 onToggleCollapsed = { collapsed = !collapsed; Settings.setSidebarCollapsed(collapsed) },
                 onViewChangelog = { changelogDialog = unseenChanges(changelog(), Settings.changelogSeen()) },

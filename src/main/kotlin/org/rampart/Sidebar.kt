@@ -41,7 +41,6 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.foundation.border
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.boundsInWindow
@@ -49,7 +48,6 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.input.key.key
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
@@ -91,9 +89,7 @@ internal fun Sidebar(
     inSettings: Boolean = false,
     inDashboard: Boolean = false,
     onToggleCollapsed: () -> Unit = {},
-    onSettings: () -> Unit,
     onDashboard: () -> Unit = {},
-    onAddAccount: () -> Unit,
     onWrite: () -> Unit,
     /** The version line at the bottom is clicked to see what changed. A no-op default so
      *  the screenshot tests, which have no changelog to open, need not pass one. */
@@ -316,150 +312,7 @@ internal fun Sidebar(
                     )
                 }
             }
-            /*
-             * Accounts scroll with the folders. The icon row under this list is fixed,
-             * so a short window scrolls the mailboxes instead of cutting those icons
-             * in half.
-             */
-            if (collapsed) {
-                items(accounts.filterNot { isSharedKey(it.key) }, key = { "face-${it.key}" }) { account ->
-                    Box(Modifier.padding(vertical = 4.dp).rowHover()) {
-                        Avatar(account.name, account.email, 26.dp)
-                    }
-                }
-            } else {
-                item(key = "account-stack") {
-                    Row(
-                        Modifier.fillMaxWidth().padding(vertical = 4.dp, horizontal = 4.dp).rowHover(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        AccountStack(accounts.filterNot { isSharedKey(it.key) }, onClick = onSettings)
-                        Spacer(Modifier.weight(1f))
-                        AddAccountFace(onClick = onAddAccount)
-                    }
-                }
-            }
         }
-    }
-}
-
-/** The face size the account stack and its "+" use, matching the old per-row avatar. */
-private val ACCOUNT_FACE_SIZE = 26.dp
-
-/** How much of one face the next one covers. */
-private val ACCOUNT_FACE_OVERLAP = 12.dp
-
-/** The ring drawn around each face, in the sidebar's own background, so an overlap reads
- *  as one face sitting in front of another rather than two circles merging into one. */
-private val ACCOUNT_FACE_RING = 2.dp
-
-/** How many real faces the stack shows before the rest are folded into a "+N" badge. */
-private const val MAX_ACCOUNT_FACES = 3
-
-/**
- * The overlapped stack of avatars that replaced a full width row per account.
- *
- * Justin's own description of what he wanted: "show both icons overlapped showing its
- * logged into two or more emails, when you click on it it takes you the email settings
- * page." One account is not a stack: its avatar is shown alone, still clickable, because
- * reaching account settings from your own picture is a pattern nobody has to be taught
- * (macOS, Slack and Google all do exactly this even when there is only one account signed
- * in), and swapping to a different control the moment a second account arrives would make
- * this change shape under somebody's finger rather than just grow.
- *
- * Capped at [MAX_ACCOUNT_FACES] real faces. A stack that keeps widening for every account
- * stops reading as "there is more than one" and starts reading as the list this replaced;
- * past the cap the last slot becomes a "+N" badge instead, the same size as a face, so the
- * stack does not change width again as further accounts are added.
- */
-@Composable
-private fun AccountStack(accounts: List<AccountMailboxes>, onClick: () -> Unit) {
-    val faceBox = ACCOUNT_FACE_SIZE + ACCOUNT_FACE_RING * 2
-    val shown = accounts.take(MAX_ACCOUNT_FACES)
-    // A plain Row would still measure each face at its full width even though later ones
-    // are drawn shifted over the one before, leaving a gap of dead space between the last
-    // visible face and whatever sits next to the stack. Sized explicitly instead, to the
-    // width the faces actually cover once overlapped, so the "+" beside it sits where it
-    // looks like it should rather than where an unshifted row would have put it.
-    val width = faceBox + (faceBox - ACCOUNT_FACE_OVERLAP) * maxOf(0, shown.size - 1)
-    Box(
-        Modifier.size(width = width, height = faceBox)
-            .clip(MaterialTheme.shapes.small)
-            .clickable(onClickLabel = "Account settings", role = Role.Button, onClick = onClick),
-    ) {
-        if (accounts.size <= 1) {
-            accounts.firstOrNull()?.let { account ->
-                Face { Avatar(account.name, account.email, ACCOUNT_FACE_SIZE) }
-            }
-        } else {
-            val overflow = accounts.size - shown.size
-            shown.forEachIndexed { index, account ->
-                Box(Modifier.offset(x = (faceBox - ACCOUNT_FACE_OVERLAP) * index)) {
-                    // The badge takes the last shown slot rather than sitting beside it, so
-                    // that account's own avatar is hidden too: the count it shows has to be
-                    // one more than the accounts past the cap, not just the accounts past it.
-                    if (overflow > 0 && index == shown.lastIndex) {
-                        Face { OverflowBadge(overflow + 1) }
-                    } else {
-                        Face { Avatar(account.name, account.email, ACCOUNT_FACE_SIZE) }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * One face in the stack, ringed in the sidebar's own background so it reads as sitting in
- * front of whatever it overlaps rather than merging into it.
- */
-@Composable
-private fun Face(content: @Composable () -> Unit) {
-    Box(
-        Modifier.size(ACCOUNT_FACE_SIZE + ACCOUNT_FACE_RING * 2)
-            .background(MaterialTheme.colorScheme.background, CircleShape),
-        contentAlignment = Alignment.Center,
-    ) { content() }
-}
-
-/**
- * What the stack's last slot shows once there are more accounts than [MAX_ACCOUNT_FACES].
- * Sized and coloured like a face rather than drawn as one, so it reads as "more" rather
- * than as somebody's unlabelled initials.
- */
-@Composable
-private fun OverflowBadge(count: Int) {
-    Box(
-        Modifier.size(ACCOUNT_FACE_SIZE).background(MaterialTheme.colorScheme.surfaceVariant, CircleShape),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            "+$count",
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-/**
- * The "add another account" affordance beside the stack. Justin asked for "a plus button
- * to login to another one or something", so a plain "+" rather than a new glyph added to
- * the icon pack: [IconPack] is a large surface shared by every theme, and a button used in
- * exactly one place does not earn a new member on it. Its hit target is its own, separate
- * from [AccountStack]'s, so clicking it calls [onClick] (the existing onAddAccount)
- * directly rather than opening Settings first.
- */
-@Composable
-private fun AddAccountFace(onClick: () -> Unit) {
-    Box(
-        Modifier.size(ACCOUNT_FACE_SIZE)
-            .clip(CircleShape)
-            .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
-            .clickable(onClickLabel = "Add another account", role = Role.Button, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text("+", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.outline)
     }
 }
 
