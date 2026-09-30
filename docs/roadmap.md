@@ -76,9 +76,10 @@ The working order for the next stretch, most important first. Card numbers are t
 3. **RAM-127, eight feature bugs** from the 2026-09-29 audit (wrong-account warning on reopen, update prefetch, calendar time zone, contact history totals and Bcc, tray badge and shared mailboxes, UI freezes on drag and paste, spell check language).
 4. ~~**RAM-126, Rook reliability.**~~ Built and released 2026-09-30: a tool call is understood wherever it sits in a reply and in the OpenAI shape, bad arguments get a sentence back, history is budgeted by estimated tokens, eight steps with an honest stop, and the panel keeps 200 lines and three finished cards. Still to do: try the same requests on DeepSeek, Gemini and an OpenAI-compatible model.
 5. **Review and ship what is built:** the account switcher in the right-hand bar (RAM-117, last part) and the focused inbox (RAM-122).
-6. **RAM-128 Appearance extras, then RAM-129 mail layouts, then RAM-27 sender pictures** (briefs ready).
-7. **RAM-110 follow-up flags and offline attachments**: the cloud session's branch never reached GitHub; get it pushed or rebuild from the card.
-8. **RAM-44** the fifty thousand message test, **RAM-39** Gmail and Microsoft sign-in (needs client IDs registered), **RAM-72** a failed deferred update, **RAM-113** confirm the update icon on a real click.
+6. ~~**RAM-128 Appearance extras, RAM-129 mail layouts, RAM-27 sender pictures.**~~ All released by 2026-09-30, sender pictures in 0.1.437 through the companion server. Also released that day: three split themes with a dark window and a light reading page (RAM-134, 0.1.436) and the add-on catalogue for themes and templates (RAM-135, 0.1.438, content at github.com/thejdubb02/rampart-catalogue).
+7. **RAM-135, the catalogue's next kinds**, in the card's order: filter recipes, assistant shortcuts (full text shown before adding), AI provider presets, then icon packs once they are files. Also: split themes' focused-layout Back bar still draws dark.
+8. **RAM-110 follow-up flags and offline attachments**: the cloud session's branch never reached GitHub; get it pushed or rebuild from the card.
+9. **RAM-44** the fifty thousand message test, **RAM-39** Gmail and Microsoft sign-in (needs client IDs registered), **RAM-72** a failed deferred update, **RAM-113** confirm the update icon on a real click.
 
 Waiting on a decision from Justin: RAM-111 (may Rook run on open, or only on a button press).
 
