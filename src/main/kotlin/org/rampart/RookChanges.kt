@@ -27,6 +27,29 @@ import java.util.Locale
 
 internal enum class CardStatus { WAITING, APPLYING, DONE, FAILED, DISMISSED }
 
+/** Done, failed, or dismissed. Waiting and applying are still the person's to act on. */
+internal val CardStatus.settled: Boolean
+    get() = this == CardStatus.DONE || this == CardStatus.FAILED || this == CardStatus.DISMISSED
+
+/**
+ * Finished cards a desk keeps.
+ *
+ * Older ones leave when a new card is added, so a panel left open does not keep every
+ * card it has ever finished.
+ */
+internal const val KEPT_SETTLED = 3
+
+/**
+ * Drops finished cards past the newest [KEPT_SETTLED]. The list is oldest first.
+ * Waiting and applying cards are never dropped.
+ */
+internal fun <T> List<T>.withoutOldSettled(status: (T) -> CardStatus): List<T> {
+    val settled = filter { status(it).settled }
+    if (settled.size <= KEPT_SETTLED) return this
+    val drop = settled.dropLast(KEPT_SETTLED).toSet()
+    return filter { it !in drop }
+}
+
 /** One setting on a card. The values are already checked against what the setting takes. */
 internal data class ChangeLine(
     val id: String,
@@ -57,18 +80,37 @@ internal data class ChangeCard(
  *
  * Immutable, so the window holds one in a state variable and swaps it, and a transition that
  * does not apply (confirming a card that is not waiting) returns the same desk unchanged.
+ * Adding a card drops finished cards past the newest [KEPT_SETTLED]. Waiting and applying
+ * cards stay, and a dropped card's number is not handed out again.
  */
-internal data class ChangeDesk(val cards: List<ChangeCard> = emptyList()) {
-    val nextNumber: Int get() = (cards.maxOfOrNull { it.number } ?: 0) + 1
+internal data class ChangeDesk(
+    val cards: List<ChangeCard> = emptyList(),
+    /** Highest number handed out. Dropping old cards must not make [nextNumber] go backwards. */
+    val lastNumber: Int = cards.maxOfOrNull { it.number } ?: 0,
+) {
+    val nextNumber: Int get() = lastNumber + 1
 
     val waiting: List<ChangeCard> get() = cards.filter { it.status == CardStatus.WAITING }
 
     fun card(number: Int): ChangeCard? = cards.firstOrNull { it.number == number }
 
-    /** New cards from a turn. A number already on the desk is never reused or replaced. */
-    fun add(drafts: List<ChangeCard>): ChangeDesk =
-        copy(cards = cards + drafts.filter { d -> cards.none { it.number == d.number } }
-            .map { it.copy(status = CardStatus.WAITING, outcome = null) })
+    /**
+     * New cards from a turn. A number already handed out is never reused, including one
+     * whose card has since left the desk.
+     */
+    fun add(drafts: List<ChangeCard>): ChangeDesk {
+        val fresh = drafts.filter { d -> cards.none { it.number == d.number } }
+            .map { it.copy(status = CardStatus.WAITING, outcome = null) }
+        if (fresh.isEmpty()) return settle()
+        val high = fresh.maxOf { it.number }
+        return copy(cards = cards + fresh, lastNumber = maxOf(lastNumber, high)).settle()
+    }
+
+    /** Drops finished cards past the newest [KEPT_SETTLED]. Waiting and applying stay. */
+    fun settle(): ChangeDesk {
+        val kept = cards.withoutOldSettled { it.status }
+        return if (kept === cards) this else copy(cards = kept)
+    }
 
     /** Waiting to applying, which is what Confirm does. Anything else is left as it is. */
     fun start(number: Int): ChangeDesk = move(number, CardStatus.WAITING) { it.copy(status = CardStatus.APPLYING) }

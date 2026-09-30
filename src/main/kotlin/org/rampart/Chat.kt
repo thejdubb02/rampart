@@ -54,6 +54,13 @@ internal data class Asked(
 
 internal object Chat {
     /**
+     * Lines of one account's transcript the panel keeps.
+     *
+     * A panel open all day otherwise holds every line forever and gets slow to draw.
+     */
+    internal const val SHOWN = 200
+
+    /**
      * How much of the conversation goes back each turn, capped by count and by estimated
      * tokens. A character count lets one long thread blow the model's window and the
      * spend ceiling.
@@ -314,6 +321,19 @@ internal object Chat {
             tokens += cost
         }
         return kept.asReversed()
+    }
+
+    /**
+     * The lines the panel draws.
+     *
+     * Past [SHOWN], only the newest lines stay. One notice goes at the top when anything
+     * was dropped, and a later trim does not add a second one.
+     */
+    fun shownTail(said: List<Said>): List<Said> {
+        if (said.size <= SHOWN) return said
+        val tail = said.takeLast(SHOWN)
+        val notice = Said("result", "Earlier messages are not shown.")
+        return if (tail.firstOrNull() == notice) tail else listOf(notice) + tail
     }
 
     /** Rough tokens, four characters each, so the history cap does not need a tokenizer. */

@@ -78,6 +78,28 @@ class ChatTest {
         assertEquals("line 40", kept.last().text)
     }
 
+    /** Under the cap the lines are unchanged. Over it, one notice and the newest lines. */
+    @Test
+    fun `the panel keeps a bounded tail and one notice`() {
+        val notice = Said("result", "Earlier messages are not shown.")
+        val under = (1..Chat.SHOWN).map { Said("user", "line $it") }
+        assertEquals(under, Chat.shownTail(under))
+        assertTrue(notice !in Chat.shownTail(under))
+
+        val over = (1..(Chat.SHOWN + 5)).map { Said("user", "line $it") }
+        val shown = Chat.shownTail(over)
+        assertEquals(Chat.SHOWN + 1, shown.size)
+        assertEquals(notice, shown.first())
+        assertEquals(1, shown.count { it == notice })
+        assertEquals("line 6", shown[1].text)
+        assertEquals("line ${Chat.SHOWN + 5}", shown.last().text)
+
+        val again = Chat.shownTail(shown + Said("user", "newer"))
+        assertEquals(notice, again.first())
+        assertEquals(1, again.count { it == notice })
+        assertEquals("newer", again.last().text)
+    }
+
     /** A handful of long reads is under the line cap and still over the token cap. */
     @Test
     fun `huge lines are dropped by the token budget even under the count cap`() {
@@ -217,6 +239,35 @@ class ChatTest {
         desk = desk.add(cancelled).dismiss(2)
         desk.card(2)?.takeIf { it.status == CardStatus.WAITING }?.let { applyMailChange(it, tools) }
         assertEquals(listOf("one"), tools.filed)
+    }
+
+    /** Finished cards past the newest few leave. Waiting and applying stay, and numbers do not rewind. */
+    @Test
+    fun `old settled mail cards leave and the next number keeps climbing`() {
+        val message = AllowedMessage("one", "Your stay", MessageAllowance.SEARCH_RESULT)
+        fun card(n: Int, status: CardStatus) =
+            MailChangeCard(n, "a", "Work", MailChangeKind.ARCHIVE, listOf(message), status = status)
+        val desk = MailChangeDesk(listOf(
+            card(9, CardStatus.DONE),
+            card(1, CardStatus.FAILED),
+            card(2, CardStatus.DISMISSED),
+            card(3, CardStatus.DONE),
+            card(4, CardStatus.WAITING),
+            card(5, CardStatus.APPLYING),
+        ))
+        val trimmed = desk.settle()
+        assertEquals(listOf(1, 2, 3, 4, 5), trimmed.cards.map { it.number })
+        assertEquals(CardStatus.WAITING, trimmed.card(4)?.status)
+        assertEquals(CardStatus.APPLYING, trimmed.card(5)?.status)
+        assertEquals(KEPT_SETTLED, trimmed.cards.count { it.status.settled })
+        assertEquals(10, trimmed.nextNumber)
+
+        val added = desk.add(card(desk.nextNumber, CardStatus.WAITING))
+        assertEquals(listOf(1, 2, 3, 4, 5, 10), added.cards.map { it.number })
+        assertEquals(CardStatus.WAITING, added.card(4)?.status)
+        assertEquals(CardStatus.APPLYING, added.card(5)?.status)
+        assertEquals(KEPT_SETTLED, added.cards.count { it.status.settled })
+        assertEquals(11, added.nextNumber)
     }
 
     /** A model that keeps calling tools is stopped rather than billed. */

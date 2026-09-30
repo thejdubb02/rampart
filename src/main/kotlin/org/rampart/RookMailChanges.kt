@@ -38,8 +38,10 @@ internal class MessageAllowances {
 /** Account-keyed transcript storage used when All inboxes changes the selected account. */
 internal data class RookConversations(private val accounts: Map<String, List<Said>> = emptyMap()) {
     fun said(account: String): List<Said> = accounts[account].orEmpty()
+
+    /** The one place lines are added, so the panel never keeps more than [Chat.SHOWN]. */
     fun append(account: String, lines: List<Said>): RookConversations =
-        copy(accounts = accounts + (account to (said(account) + lines)))
+        copy(accounts = accounts + (account to Chat.shownTail(said(account) + lines)))
     fun clear(account: String): RookConversations = copy(accounts = accounts + (account to emptyList()))
 }
 
@@ -66,12 +68,30 @@ internal data class MailChangeCard(
     }
 }
 
-/** Plain card transitions keep Confirm idempotent and Cancel unable to perform a write. */
-internal data class MailChangeDesk(val cards: List<MailChangeCard> = emptyList()) {
-    val nextNumber: Int get() = (cards.maxOfOrNull { it.number } ?: 0) + 1
+/**
+ * Plain card transitions keep Confirm idempotent and Cancel unable to perform a write.
+ * Adding a card drops finished cards past the newest [KEPT_SETTLED]. Waiting and applying
+ * cards stay, and a dropped card's number is not handed out again.
+ */
+internal data class MailChangeDesk(
+    val cards: List<MailChangeCard> = emptyList(),
+    /** Highest number handed out. Dropping old cards must not make [nextNumber] go backwards. */
+    val lastNumber: Int = cards.maxOfOrNull { it.number } ?: 0,
+) {
+    val nextNumber: Int get() = lastNumber + 1
     fun card(number: Int): MailChangeCard? = cards.firstOrNull { it.number == number }
-    fun add(card: MailChangeCard): MailChangeDesk =
-        if (cards.any { it.number == card.number }) this else copy(cards = cards + card)
+
+    /** A number already handed out is never reused, including one whose card has left. */
+    fun add(card: MailChangeCard): MailChangeDesk {
+        if (cards.any { it.number == card.number }) return settle()
+        return copy(cards = cards + card, lastNumber = maxOf(lastNumber, card.number)).settle()
+    }
+
+    /** Drops finished cards past the newest [KEPT_SETTLED]. Waiting and applying stay. */
+    fun settle(): MailChangeDesk {
+        val kept = cards.withoutOldSettled { it.status }
+        return if (kept === cards) this else copy(cards = kept)
+    }
     fun start(number: Int): MailChangeDesk = move(number, CardStatus.WAITING) { it.copy(status = CardStatus.APPLYING) }
     fun finish(number: Int, failure: String?): MailChangeDesk = move(number, CardStatus.APPLYING) {
         if (failure == null) it.copy(status = CardStatus.DONE, outcome = "Done.")

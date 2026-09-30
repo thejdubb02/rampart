@@ -102,9 +102,15 @@ internal data class FilterCard(
  * Immutable, like the settings desk: a transition that does not apply returns the same
  * desk. Save moves a waiting card to applying, and a second press does nothing. Clearing
  * the conversation keeps a card that is still being written, so its outcome is not lost.
+ * Adding a card drops finished cards past the newest [KEPT_SETTLED]. Waiting and applying
+ * cards stay, and a dropped card's number is not handed out again.
  */
-internal data class FilterDesk(val cards: List<FilterCard> = emptyList()) {
-    val nextNumber: Int get() = (cards.maxOfOrNull { it.number } ?: 0) + 1
+internal data class FilterDesk(
+    val cards: List<FilterCard> = emptyList(),
+    /** Highest number handed out. Dropping old cards must not make [nextNumber] go backwards. */
+    val lastNumber: Int = cards.maxOfOrNull { it.number } ?: 0,
+) {
+    val nextNumber: Int get() = lastNumber + 1
 
     val waiting: List<FilterCard> get() = cards.filter { it.status == CardStatus.WAITING }
 
@@ -113,12 +119,22 @@ internal data class FilterDesk(val cards: List<FilterCard> = emptyList()) {
     /**
      * New cards from a turn, stamped with the account they belong to.
      *
-     * A number already on the desk is never reused. The tool picks the numbers; this only
-     * records which account Save must write to.
+     * A number already handed out is never reused, including one whose card has since left
+     * the desk. The tool picks the numbers; this only records which account Save must write to.
      */
-    fun add(account: String, drafts: List<FilterCard>): FilterDesk =
-        copy(cards = cards + drafts.filter { d -> cards.none { it.number == d.number } }
-            .map { it.copy(account = account, status = CardStatus.WAITING, outcome = null) })
+    fun add(account: String, drafts: List<FilterCard>): FilterDesk {
+        val fresh = drafts.filter { d -> cards.none { it.number == d.number } }
+            .map { it.copy(account = account, status = CardStatus.WAITING, outcome = null) }
+        if (fresh.isEmpty()) return settle()
+        val high = fresh.maxOf { it.number }
+        return copy(cards = cards + fresh, lastNumber = maxOf(lastNumber, high)).settle()
+    }
+
+    /** Drops finished cards past the newest [KEPT_SETTLED]. Waiting and applying stay. */
+    fun settle(): FilterDesk {
+        val kept = cards.withoutOldSettled { it.status }
+        return if (kept === cards) this else copy(cards = kept)
+    }
 
     /** Waiting to applying, which is what Save does. Anything else is left as it is. */
     fun start(number: Int): FilterDesk = move(number, CardStatus.WAITING) { it.copy(status = CardStatus.APPLYING) }

@@ -213,4 +213,33 @@ class RookChangesTest {
         assertContains(prompt, "cannot press it")
         listOf('\u2014', '\u2013', '\u2026').forEach { assertTrue(it !in prompt) }
     }
+
+    /** Finished cards past the newest few leave. Waiting and applying stay, and numbers do not rewind. */
+    @Test
+    fun `old settled cards leave and the next number keeps climbing`() {
+        fun card(n: Int, status: CardStatus) =
+            ChangeCard(n, "g", SettingHome.COMPUTER, "t", emptyList(), status)
+        val desk = ChangeDesk(listOf(
+            card(9, CardStatus.DONE),
+            card(1, CardStatus.FAILED),
+            card(2, CardStatus.DISMISSED),
+            card(3, CardStatus.DONE),
+            card(4, CardStatus.WAITING),
+            card(5, CardStatus.APPLYING),
+        ))
+        val trimmed = desk.settle()
+        assertEquals(listOf(1, 2, 3, 4, 5), trimmed.cards.map { it.number })
+        assertEquals(CardStatus.WAITING, trimmed.card(4)?.status)
+        assertEquals(CardStatus.APPLYING, trimmed.card(5)?.status)
+        assertEquals(KEPT_SETTLED, trimmed.cards.count { it.status.settled })
+        assertEquals(10, trimmed.nextNumber)
+
+        val added = desk.add(listOf(card(desk.nextNumber, CardStatus.DONE)))
+        assertEquals(listOf(1, 2, 3, 4, 5, 10), added.cards.map { it.number })
+        assertEquals(CardStatus.WAITING, added.card(4)?.status)
+        assertEquals(CardStatus.APPLYING, added.card(5)?.status)
+        assertEquals(CardStatus.WAITING, added.card(10)?.status)
+        assertEquals(KEPT_SETTLED, added.cards.count { it.status.settled })
+        assertEquals(11, added.nextNumber)
+    }
 }

@@ -238,6 +238,33 @@ class FilterToolsTest {
         assertFalse("—" in system || "–" in system || "…" in system)
     }
 
+    /** Finished cards past the newest few leave. Waiting and applying stay, and numbers do not rewind. */
+    @Test
+    fun `old settled filter cards leave and the next number keeps climbing`() {
+        fun card(n: Int, status: CardStatus) = FilterCard(n, "a", dmarc, status)
+        val desk = FilterDesk(listOf(
+            card(9, CardStatus.DONE),
+            card(1, CardStatus.FAILED),
+            card(2, CardStatus.DISMISSED),
+            card(3, CardStatus.DONE),
+            card(4, CardStatus.WAITING),
+            card(5, CardStatus.APPLYING),
+        ))
+        val trimmed = desk.settle()
+        assertEquals(listOf(1, 2, 3, 4, 5), trimmed.cards.map { it.number })
+        assertEquals(CardStatus.WAITING, trimmed.card(4)?.status)
+        assertEquals(CardStatus.APPLYING, trimmed.card(5)?.status)
+        assertEquals(KEPT_SETTLED, trimmed.cards.count { it.status.settled })
+        assertEquals(10, trimmed.nextNumber)
+
+        val added = desk.add("a", listOf(card(desk.nextNumber, CardStatus.DONE)))
+        assertEquals(listOf(1, 2, 3, 4, 5, 10), added.cards.map { it.number })
+        assertEquals(CardStatus.WAITING, added.card(4)?.status)
+        assertEquals(CardStatus.APPLYING, added.card(5)?.status)
+        assertEquals(KEPT_SETTLED, added.cards.count { it.status.settled })
+        assertEquals(11, added.nextNumber)
+    }
+
     private object QuietMail : MailTools {
         override fun search(text: String, limit: Int): List<Summary> = emptyList()
         override fun read(id: String): String? = null
