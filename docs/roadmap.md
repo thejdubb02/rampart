@@ -74,7 +74,7 @@ The working order for the next stretch, most important first. Card numbers are t
 1. **RAM-125, Rook safety (urgent).** Every mailbox change behind a confirmation card, and each account's conversation kept separate. A message must never be able to steer Rook into changing mail.
 2. **RAM-124, the lost sign-off.** An agent draft reopened and sent from Rampart lost "Best regards," and the signature. Cause not yet found; capture the stored draft next time before sending.
 3. **RAM-127, eight feature bugs** from the 2026-09-29 audit (wrong-account warning on reopen, update prefetch, calendar time zone, contact history totals and Bcc, tray badge and shared mailboxes, UI freezes on drag and paste, spell check language).
-4. **RAM-126, Rook reliability.** Tool calls from any model, typed arguments, token budgets, a tidy panel.
+4. ~~**RAM-126, Rook reliability.**~~ Built and released 2026-09-30: a tool call is understood wherever it sits in a reply and in the OpenAI shape, bad arguments get a sentence back, history is budgeted by estimated tokens, eight steps with an honest stop, and the panel keeps 200 lines and three finished cards. Still to do: try the same requests on DeepSeek, Gemini and an OpenAI-compatible model.
 5. **Review and ship what is built:** the account switcher in the right-hand bar (RAM-117, last part) and the focused inbox (RAM-122).
 6. **RAM-128 Appearance extras, then RAM-129 mail layouts, then RAM-27 sender pictures** (briefs ready).
 7. **RAM-110 follow-up flags and offline attachments**: the cloud session's branch never reached GitHub; get it pushed or rebuild from the card.

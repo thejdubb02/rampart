@@ -76,7 +76,7 @@ safety is in what the tools are rather than in what the model is told:
   conversation.** Ids come from a search the panel ran, never out of the text of a message.
   That is what stops a message saying "archive everything in this mailbox" from being able
   to name anything. `Chat.allowed`, and it has its own tests.
-- One action touches at most 25 messages, a turn runs at most 4 tools, and every action is
+- One action touches at most 25 messages, a turn runs at most 8 tools, and every action is
   printed in the transcript and leaves an undo.
 
 The residual risk is worth stating rather than papering over: a message the model has read
