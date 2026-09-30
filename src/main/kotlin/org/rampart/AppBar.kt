@@ -1,6 +1,11 @@
 package org.rampart
 
 import androidx.compose.foundation.background
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
@@ -323,6 +328,15 @@ private fun VersionLabel(updateState: UpdateBarState, onUpdate: () -> Unit) {
                         Modifier
                     }
                 )
+                // A waiting update is a pill in the accent colour, so it reads as something
+                // to press rather than a label that happens to have an icon beside it.
+                .then(
+                    if (updateState is UpdateBarState.Waiting) {
+                        Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f))
+                    } else {
+                        Modifier
+                    }
+                )
                 .padding(horizontal = 2.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center,
@@ -330,7 +344,11 @@ private fun VersionLabel(updateState: UpdateBarState, onUpdate: () -> Unit) {
             Text(
                 text,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
+                color = if (updateState is UpdateBarState.Waiting) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.outline
+                },
                 maxLines = 1,
             )
             when (updateState) {
@@ -340,7 +358,7 @@ private fun VersionLabel(updateState: UpdateBarState, onUpdate: () -> Unit) {
                         RampartIcons.Download,
                         contentDescription = "Version ${updateState.version} is ready. Click to restart and update.",
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(11.dp),
+                        modifier = Modifier.size(11.dp).updateBob(),
                     )
                 }
                 is UpdateBarState.Staging, is UpdateBarState.Installing -> {
@@ -872,4 +890,28 @@ internal fun FilesPanel(session: Session?, onOpen: (String?) -> Unit) {
             }
         }
     }
+}
+
+/**
+ * The arrow nods down every couple of seconds while an update waits, so it is noticed
+ * without flashing. Moved in the draw layer only, so nothing is laid out again, and still
+ * when animations are switched off.
+ */
+@Composable
+private fun Modifier.updateBob(): Modifier {
+    if (!LocalAnimationsEnabled.current) return this
+    val bob by rememberInfiniteTransition(label = "update").animateFloat(
+        initialValue = 0f,
+        targetValue = 0f,
+        animationSpec = infiniteRepeatable(
+            keyframes {
+                durationMillis = 2400
+                0f at 0
+                2.5f at 300
+                0f at 600
+            },
+        ),
+        label = "bob",
+    )
+    return graphicsLayer { translationY = bob * density }
 }

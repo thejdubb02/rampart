@@ -8,6 +8,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionOnScreen
+import androidx.compose.ui.unit.toSize
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -316,7 +320,10 @@ internal fun WebBody(
     }
     val frozen = shot
     val showShot = covered && frozen != null
+    val bodyCover = LocalBodyCover.current
+    DisposableEffect(bodyCover, panel) { onDispose { bodyCover.onScreen.remove(panel) } }
     val sized = modifier.fillMaxWidth().height(height.dp).onSizeChanged { if (it.width > 0) wide = it.width }
+        .onGloballyPositioned { bodyCover.onScreen[panel] = Rect(it.positionOnScreen(), it.size.toSize()) }
     SwingPanel(
         background = Color.Transparent,
         factory = { panel },
@@ -900,6 +907,11 @@ private const val CONTENT_HEIGHT = """
 internal class BodyCover {
     var depth by mutableStateOf(0)
         private set
+
+    /** Where each open message is on screen, in pixels, so an overlay can tell if it is on one. */
+    val onScreen = java.util.concurrent.ConcurrentHashMap<Any, Rect>()
+
+    fun overlaps(area: Rect): Boolean = onScreen.values.any { it.overlaps(area) }
 
     val on: Boolean get() = depth > 0
 

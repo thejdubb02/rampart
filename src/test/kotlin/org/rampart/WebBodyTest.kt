@@ -190,4 +190,15 @@ class WebBodyTest {
         asUrl("<p>and now another message</p>")
         assertTrue(java.nio.file.Files.exists(page), "an open message's file was swept")
     }
+
+    @Test
+    fun `only a label that lands on the message covers it`() {
+        val cover = BodyCover()
+        val rect = androidx.compose.ui.geometry.Rect(400f, 100f, 1200f, 900f)
+        cover.onScreen["message"] = rect
+        assertTrue(cover.overlaps(androidx.compose.ui.geometry.Rect(1100f, 120f, 1250f, 150f)))
+        assertTrue(!cover.overlaps(androidx.compose.ui.geometry.Rect(20f, 800f, 180f, 830f)), "a sidebar label is not on the message")
+        cover.onScreen.remove("message")
+        assertTrue(!cover.overlaps(rect), "a closed message covers nothing")
+    }
 }

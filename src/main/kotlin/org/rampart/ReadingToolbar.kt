@@ -134,7 +134,7 @@ internal fun ReadingToolbar(
                 ) { onPaper(!paper) }
             }
             if (!rookOpen && onOpenRook != null) {
-                SidebarTooltip("Ask Rook") {
+                SidebarTooltip("Ask Rook", above = true) {
                     IconButton(onClick = onOpenRook, modifier = Modifier.size(34.dp)) {
                         RookAvatar(size = 18.dp)
                     }
@@ -225,7 +225,7 @@ private fun ToolIcon(
     tint: androidx.compose.ui.graphics.Color = LocalContentColor.current,
     onClick: () -> Unit,
 ) {
-    SidebarTooltip(label) {
+    SidebarTooltip(label, above = true) {
         IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(34.dp)) {
             Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(17.dp))
         }

@@ -40,11 +40,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.key
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.TooltipPlacement
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionOnScreen
+import androidx.compose.ui.unit.toSize
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.input.key.key
@@ -60,11 +64,24 @@ import kotlinx.coroutines.flow.first
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-internal fun SidebarTooltip(text: String, content: @Composable () -> Unit) {
+internal fun SidebarTooltip(text: String, above: Boolean = false, content: @Composable () -> Unit) {
     TooltipArea(
+        // Above, for buttons that sit right over the message: a label below them lands on it.
+        tooltipPlacement = if (above) {
+            TooltipPlacement.CursorPoint(offset = DpOffset(0.dp, (-8).dp), alignment = Alignment.TopEnd)
+        } else {
+            TooltipPlacement.CursorPoint(offset = DpOffset(0.dp, 16.dp))
+        },
         tooltip = {
-            CoverBody(true)
+            // Only a label that lands on the message swaps it for a snapshot. Doing it for
+            // every label made the message flicker whenever a button anywhere was hovered.
+            val cover = LocalBodyCover.current
+            var onMessage by remember { mutableStateOf(false) }
+            CoverBody(onMessage)
             Surface(
+                modifier = Modifier.onGloballyPositioned {
+                    onMessage = cover.overlaps(Rect(it.positionOnScreen(), it.size.toSize()))
+                },
                 shape = MaterialTheme.shapes.small,
                 color = MaterialTheme.colorScheme.inverseSurface,
                 shadowElevation = 4.dp,
