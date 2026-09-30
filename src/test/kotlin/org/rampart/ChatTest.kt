@@ -205,6 +205,110 @@ class ChatTest {
         assertContains(said.last().text, "round in circles")
     }
 
+    /** Two calls in one reply must not reach a tool. The person sees the words, not the JSON. */
+    @Test
+    fun `two tool calls run nothing`() {
+        val tools = Recorder()
+        val allowances = MessageAllowances().also { it.showSearch(listOf(note("real-1"))) }
+        val changes = MailChangeTools("account-a", "Work", allowances, 1)
+        val answers = ArrayDeque(
+            listOf(
+                """Let me do both.\n{\"tool\":\"search\",\"args\":{\"text\":\"hotel\"}}\n{\"tool\":\"archive\",\"args\":{\"ids\":[\"real-1\"]}}\nThen we can talk.""",
+                "Done.",
+            ),
+        )
+        val said = serving(answers) { config ->
+            converse(config, null, "test", emptyList(), allowances, tools, { _, _ -> }, mailChanges = changes)
+        }
+        assertTrue(tools.searches.isEmpty())
+        assertTrue(tools.filed.isEmpty())
+        assertTrue(changes.proposed.isEmpty())
+        assertEquals("Let me do both.\n\nThen we can talk.", said.first { it.role == "assistant" }.text)
+        assertEquals(
+            "One step at a time, please: ask for a single tool per reply.",
+            said.first { it.role == "result" }.text,
+        )
+        assertTrue(said.none { it.role == "call" })
+        assertTrue(said.none { "\"tool\"" in it.text })
+    }
+
+    @Test
+    fun `an unknown tool names the tools that exist`() {
+        val tools = Recorder()
+        val answers = ArrayDeque(listOf("""{\"tool\":\"explode\",\"args\":{}}""", "Done."))
+        val said = serving(answers) { config ->
+            converse(config, null, "test", emptyList(), MessageAllowances(), tools, { _, _ -> })
+        }
+        val result = said.first { it.role == "result" }.text
+        assertContains(result, "There is no tool called explode.")
+        assertContains(result, "The tools are: search, read, ")
+        assertContains(result, "draft_reply")
+        assertContains(result, "and the settings, calendar, task and filter tools when offered.")
+        assertTrue(tools.searches.isEmpty())
+        assertTrue(tools.filed.isEmpty())
+    }
+
+    /** An object is not a list of ids, so archive must not propose or file anything. */
+    @Test
+    fun `ids given as an object does not run`() {
+        val tools = Recorder()
+        val allowances = MessageAllowances().also { it.showSearch(listOf(note("real-1"))) }
+        val changes = MailChangeTools("account-a", "Work", allowances, 1)
+        val answers = ArrayDeque(listOf("""{\"tool\":\"archive\",\"args\":{\"ids\":{\"a\":\"b\"}}}""", "Done."))
+        val said = serving(answers) { config ->
+            converse(config, null, "test", emptyList(), allowances, tools, { _, _ -> }, mailChanges = changes)
+        }
+        assertEquals(
+            "ids needs to be a list of message ids, like [\"abc\"].",
+            said.first { it.role == "result" }.text,
+        )
+        assertTrue(changes.proposed.isEmpty())
+        assertTrue(tools.filed.isEmpty())
+    }
+
+    @Test
+    fun `ids given as one string is that one message`() {
+        val tools = Recorder()
+        val allowances = MessageAllowances().also { it.showSearch(listOf(note("real-1"))) }
+        val changes = MailChangeTools("account-a", "Work", allowances, 1)
+        val answers = ArrayDeque(listOf("""{\"tool\":\"archive\",\"args\":{\"ids\":\"real-1\"}}""", "Done."))
+        val said = serving(answers) { config ->
+            converse(config, null, "test", emptyList(), allowances, tools, { _, _ -> }, mailChanges = changes)
+        }
+        assertEquals(listOf("real-1"), changes.proposed.single().messages.map { it.id })
+        assertTrue(tools.filed.isEmpty())
+        assertContains(said.first { it.role == "result" }.text, "confirmation")
+    }
+
+    @Test
+    fun `a flag that is not true or false does not run`() {
+        val tools = Recorder()
+        val allowances = MessageAllowances().also { it.showSearch(listOf(note("real-1"))) }
+        val changes = MailChangeTools("account-a", "Work", allowances, 1)
+        val answers = ArrayDeque(
+            listOf("""{\"tool\":\"mark_read\",\"args\":{\"ids\":[\"real-1\"],\"read\":\"yes\"}}""", "Done."),
+        )
+        val said = serving(answers) { config ->
+            converse(config, null, "test", emptyList(), allowances, tools, { _, _ -> }, mailChanges = changes)
+        }
+        assertEquals("read needs to be true or false.", said.first { it.role == "result" }.text)
+        assertTrue(changes.proposed.isEmpty())
+        assertTrue(tools.filed.isEmpty())
+    }
+
+    @Test
+    fun `a limit that is not a number does not search`() {
+        val tools = Recorder()
+        val answers = ArrayDeque(
+            listOf("""{\"tool\":\"search\",\"args\":{\"text\":\"hotel\",\"limit\":\"ten\"}}""", "Done."),
+        )
+        val said = serving(answers) { config ->
+            converse(config, null, "test", emptyList(), MessageAllowances(), tools, { _, _ -> })
+        }
+        assertTrue(tools.searches.isEmpty())
+        assertEquals("limit needs to be a number.", said.first { it.role == "result" }.text)
+    }
+
     private fun note(id: String) =
         Summary(id, "Hotel", "front@hotel.test", "Your stay", "2026-09-20T09:00:00Z", "...", true)
 
@@ -232,7 +336,11 @@ class ChatTest {
         private val body: String? = null,
     ) : MailTools {
         val filed = mutableListOf<String>()
-        override fun search(text: String, limit: Int) = found
+        val searches = mutableListOf<String>()
+        override fun search(text: String, limit: Int): List<Summary> {
+            searches += text
+            return found
+        }
         override fun read(id: String): String? = body
         override fun file(ids: List<String>, role: String): Int {
             filed += ids
