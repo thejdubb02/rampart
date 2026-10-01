@@ -1,8 +1,10 @@
 package org.rampart
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -205,8 +207,54 @@ private fun toolbarWidth(ids: List<String>): Dp {
 
 private val ToolbarHeight = 44.dp
 
+/**
+ * Reply, Reply all and Forward for one message, held under a stacked conversation.
+ *
+ * The buttons are the reading toolbar's own, including when Reply all can be
+ * pressed. The fill is the colour the pane is actually drawn on: on a light
+ * reading page that is the page, and otherwise the surface the stack paints,
+ * so the mail above does not show through.
+ */
 @Composable
-private fun ToolText(label: String, enabled: Boolean, onClick: () -> Unit) {
+internal fun PinnedReplyBar(
+    who: String,
+    bodyReady: Boolean,
+    replyAll: Boolean,
+    onReply: (Boolean) -> Unit,
+    onForward: () -> Unit,
+) {
+    val page = LocalRampartTheme.current.page?.background
+    val pane = if (page != null && page == MaterialTheme.colorScheme.background) {
+        page
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
+    Column(Modifier.fillMaxWidth().background(pane)) {
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                "Reply to $who",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            ToolText("Reply", enabled = bodyReady) {
+                onReply(bareReplyAll(Settings.defaultReplyAll(), replyAll))
+            }
+            ToolText("Reply all", enabled = bodyReady && replyAll) { onReply(true) }
+            ToolText("Forward", enabled = bodyReady) { onForward() }
+        }
+    }
+}
+
+@Composable
+internal fun ToolText(label: String, enabled: Boolean, onClick: () -> Unit) {
     OutlinedButton(
         onClick = onClick,
         enabled = enabled,

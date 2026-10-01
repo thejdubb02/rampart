@@ -4695,6 +4695,33 @@ private fun Reader(
     }
 
     /**
+     * The same Reply and Forward the card's toolbar runs, so the pinned bar cannot
+     * grow a second copy of that path.
+     */
+    fun replyFromCard(cardSummary: Summary, all: Boolean) {
+        sendError = null; sendDetail = null
+        val account = accountOf(cardSummary) ?: writingAccount()
+        val body = cardFor(cardSummary).body
+        val mine = identities[account].orEmpty().map { it.email }.toSet()
+        write(account, replyTo(cardSummary, body, writingIdentity(body, account), all, mine))
+    }
+
+    fun forwardFromCard(cardSummary: Summary) {
+        sendError = null; sendDetail = null
+        val account = accountOf(cardSummary) ?: writingAccount()
+        val body = cardFor(cardSummary).body
+        write(account, forwardOf(cardSummary, body, writingIdentity(body, account)))
+    }
+
+    /**
+     * Who the pinned bar answers: the newest message somebody else wrote, or the
+     * newest message when the conversation is only your own mail.
+     */
+    fun replyBarTarget(messages: List<Summary>): Summary? = messages.lastOrNull { message ->
+        identities[accountOf(message)].orEmpty().none { it.email.equals(message.fromEmail, ignoreCase = true) }
+    } ?: messages.lastOrNull()
+
+    /**
      * One message's card: its own header, avatar, body and action row, exactly what the
      * reading pane has always drawn for whichever message was open, called once per
      * expanded card rather than once for the whole pane.
@@ -4757,18 +4784,9 @@ private fun Reader(
             tracking = key?.let { account ->
                 session(account).store?.tracking()?.filter { it.first.messageId in card.body?.messageId.orEmpty() }
             }.orEmpty(),
-            onReply = { all ->
-                sendError = null; sendDetail = null
-                val account = key ?: writingAccount()
-                val mine = identities[account].orEmpty().map { it.email }.toSet()
-                write(account, replyTo(cardSummary, card.body, writingIdentity(card.body, account), all, mine))
-            },
+            onReply = { all -> replyFromCard(cardSummary, all) },
             replyAll = hasOtherRecipients(cardSummary, card.body, ours),
-            onForward = {
-                sendError = null; sendDetail = null
-                val account = key ?: writingAccount()
-                write(account, forwardOf(cardSummary, card.body, writingIdentity(card.body, account)))
-            },
+            onForward = { forwardFromCard(cardSummary) },
             onForwardFile = { forwardAsFile(cardSummary) },
             onLink = { confirm = it },
             invitation = if (isPrimary) invitation else null,
@@ -6689,6 +6707,32 @@ private fun Reader(
                                 Spacer(Modifier.height(6.dp))
                             }
                         }
+                        }
+                        // Outside the scroll, so a long earlier message cannot carry
+                        // Reply off the bottom. A single message already keeps its
+                        // toolbar there. Hidden while a composer is open.
+                        if (stacked) {
+                            val target = replyBarTarget(thread)
+                            if (target != null) {
+                                val targetKey = accountOf(target)
+                                LaunchedEffect(targetKey, target.id) {
+                                    if (targetKey == null) return@LaunchedEffect
+                                    val slot = CardKey(targetKey, target.id)
+                                    if (cards[slot]?.loaded != true && cardEpoch[slot] == null) loadCard(targetKey, target.id)
+                                }
+                                if (composing == null) {
+                                    val card = cardFor(target)
+                                    val shown = SealedView.of(targetKey, target.id)?.body ?: card.body
+                                    val ours = identities[targetKey].orEmpty().map { it.email }.toSet()
+                                    PinnedReplyBar(
+                                        who = target.from.ifBlank { target.fromEmail },
+                                        bodyReady = shown != null,
+                                        replyAll = hasOtherRecipients(target, card.body, ours),
+                                        onReply = { all -> replyFromCard(target, all) },
+                                        onForward = { forwardFromCard(target) },
+                                    )
+                                }
+                            }
                         }
                     }
                 }
