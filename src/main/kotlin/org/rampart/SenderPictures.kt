@@ -4,7 +4,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
@@ -447,7 +446,8 @@ internal object SenderPictureSignals {
     val revision = mutableStateOf(0)
 
     fun bump() {
-        Snapshot.withMutableSnapshot { revision.value = revision.value + 1 }
+        // On the window's thread, like every other write here from a background job.
+        javax.swing.SwingUtilities.invokeLater { revision.value = revision.value + 1 }
     }
 }
 
@@ -556,7 +556,10 @@ internal object SenderPictureLoads {
             missedKeys.remove(key)
             shown[key] = bitmap
         }
-        Snapshot.withMutableSnapshot {
+        // On the window's thread. Several downloads finish at once, and each one applying
+        // its own snapshot to the same map conflicted, threw on a pool thread, and closed
+        // the app (0.1.443, SnapshotApplyConflictException).
+        javax.swing.SwingUtilities.invokeLater {
             for (old in dropped) {
                 if (old == key) continue
                 pictures.remove(old)
