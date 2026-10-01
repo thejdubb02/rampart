@@ -98,6 +98,14 @@ has to bite: script, iframe, object, embed, form, input, base and svg dropped; e
 blank and counted; background pictures in attributes and in CSS neutralised the same
 way.
 
+Which messages get their remote pictures back is a separate decision, made in the window
+by `showRemoteFor`. The default is every message outside Junk: a designed newsletter held
+back is not a safer version of itself but a broken one, with a headline and its text
+shadow sitting on a bare colour where a photo should be. Settings, "Show pictures in
+messages", turns that off, and then only a sender allowed for good or a message shown
+once draws them. Junk always holds them, because a real logo is what makes a phishing
+message convincing. The cleaning above runs either way.
+
 Three things back it up rather than replace it:
 
 - A content security policy of `default-src 'none'` in the document itself. No script,

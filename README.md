@@ -55,8 +55,8 @@ that only works if they run the same server you do.
 
 **Reading.** Threaded conversations, a unified inbox across accounts, instant offline
 search, push over the JMAP WebSocket. HTML drawn as blocks, with a browser engine only
-where a message genuinely needs one. Pictures in the flow, remote images held per sender,
-links confirmed before they open.
+where a message genuinely needs one. Pictures in the flow, remote images shown as the sender
+laid them out (held in Junk, or everywhere with one switch), links confirmed before they open.
 
 **Knowing what a message is.** A word above anything that cannot prove who sent it, from
 the SPF, DKIM and DMARC results the server already recorded. Trackers named rather than
