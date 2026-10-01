@@ -177,6 +177,12 @@ internal class ComputerPlace(private val choices: ComputerChoices) : SettingPlac
                 Settings::senderPictures, Settings::setSenderPictures,
             ),
             onOff(
+                "messagePictures", "Show pictures in messages",
+                "On by default, so mail looks the way the sender laid it out. Off holds every picture until you ask, which stops the sender learning when you opened it. Junk always holds them.",
+                "Themes", "remote images pictures tracking newsletter privacy appearance",
+                Settings::messagePictures, Settings::setMessagePictures,
+            ),
+            onOff(
                 "senderPicturesInJunk", "Show pictures in Junk",
                 "Off by default. A logo in Junk can make a phishing message look like the company it pretends to be.",
                 "Themes", "junk spam sender pictures avatars phishing appearance",

@@ -955,6 +955,7 @@ private fun Reader(
     var anchor by remember { mutableStateOf<String?>(null) }
     var undo by remember { mutableStateOf<Undoable?>(null) }
     var allowedSenders by remember { mutableStateOf(Settings.imageSenders()) }
+    val picturesOn = remember(SenderPictureSignals.revision.value) { Settings.messagePictures() }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
     var errorDetail by remember { mutableStateOf<String?>(null) }
@@ -1054,13 +1055,6 @@ private fun Reader(
     }
 
     /**
-     * Whether [message]'s pictures are drawn: a sender allowed for good, from [allowedSenders],
-     * or one the reader said yes to just for this message, from [shownOnce].
-     */
-    fun showRemoteFor(message: Summary?): Boolean =
-        message != null && (imageSenderKey(message.fromEmail) in allowedSenders || rowToken(message) in shownOnce)
-
-    /**
      * The account a new message is written from. The one being replied to, when there is
      * one, so a reply in the merged inbox goes back out of the mailbox it arrived in.
      */
@@ -1137,6 +1131,17 @@ private fun Reader(
         val junk = folderFor("junk", mailboxes[key].orEmpty())?.id ?: return false
         return sourceFolder(key) == junk
     }
+
+    /**
+     * Whether [message]'s pictures are drawn: everywhere but Junk when [picturesOn], else a
+     * sender allowed for good, from [allowedSenders], or one the reader said yes to just for
+     * this message, from [shownOnce].
+     */
+    fun showRemoteFor(message: Summary?): Boolean =
+        message != null && (
+            (picturesOn && !inJunk(message)) ||
+                imageSenderKey(message.fromEmail) in allowedSenders || rowToken(message) in shownOnce
+            )
 
     /** Settings are always about one real account, never about the merged row. */
     fun settingsAccount(): String? =
@@ -2232,7 +2237,9 @@ private fun Reader(
         if ("settings.savedSearches" in changed) savedSearches = Settings.savedSearches()
         if ("settings.focusedInbox" in changed) focusedInbox = Settings.focusedInbox()
         if ("settings.focusOverrides" in changed) focusOverrides = Settings.focusOverrides()
-        if ("settings.senderPictures" in changed || "settings.senderPicturesInJunk" in changed) {
+        if ("settings.senderPictures" in changed || "settings.senderPicturesInJunk" in changed ||
+            "settings.messagePictures" in changed
+        ) {
             SenderPictureSignals.bump()
         }
     }
@@ -2973,7 +2980,6 @@ private fun Reader(
         val from = sourceFolder(key)
         return { scope.launch { carryOut(key, message, target.id, from, pastTense(role)) } }
     }
-
 
     /**
      * Puts a message away until later.
@@ -4591,7 +4597,6 @@ private fun Reader(
     // one clicked from the list, the same as before there was more than one card to choose
     // between.
     val actions = selected?.let(::actionsFor) ?: MessageActions()
-
 
     /** Shows [message] as it arrived, or puts it away again. Its own card, not a shared one. */
     fun toggleSource(message: Summary) {
@@ -6755,7 +6760,6 @@ private fun Reader(
             if (from != null) scope.launch { installLatest(from) }
         }
     }
-
 
         /*
          * Bottom right, over the mail, the way every webmail does it. Writing a reply and

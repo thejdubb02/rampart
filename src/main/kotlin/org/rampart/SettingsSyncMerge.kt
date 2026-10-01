@@ -120,6 +120,7 @@ internal val SYNCED_SETTINGS: Map<String, SyncShape> = mapOf(
     // address stays on this computer: it decides where a request goes.
     "senderPictures" to SyncShape.TEXT,
     "senderPicturesInJunk" to SyncShape.TEXT,
+    "messagePictures" to SyncShape.TEXT,
     "savedSearches" to SyncShape.LIST_OF_OBJECTS,
     "order" to SyncShape.TEXT,
     "orderAppliesToAll" to SyncShape.TEXT,

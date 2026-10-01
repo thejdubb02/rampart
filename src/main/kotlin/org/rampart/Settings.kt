@@ -760,6 +760,20 @@ object Settings {
     }
 
     /**
+     * Whether a message's own pictures are drawn without asking.
+     *
+     * On unless turned off, because a newsletter laid out around its photos is unreadable
+     * without them: the text sits on a bare colour with a shadow meant for a picture. Junk
+     * still holds them, see the window's showRemoteFor.
+     */
+    fun messagePictures(): Boolean = read()["messagePictures"]?.jsonPrimitive?.booleanOrNull ?: true
+
+    fun setMessagePictures(value: Boolean) {
+        write { put("messagePictures", JsonPrimitive(value)) }
+        SenderPictureSignals.bump()
+    }
+
+    /**
      * Senders whose pictures may be fetched from the web. Domains, not addresses: see
      * [imageSenderKey].
      */
