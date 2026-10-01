@@ -67,21 +67,21 @@ is found.
 
 ---
 
-## Next up (set 2026-09-30)
+## Next up (set 2026-10-01)
 
 The working order for the next stretch, most important first. Card numbers are the RAM board; each card says what done means. Builder briefs for the queued feature work are in `docs/briefs/`, and the audits behind the fix cards are in `docs/audits/`.
 
-1. **RAM-125, Rook safety (urgent).** Every mailbox change behind a confirmation card, and each account's conversation kept separate. A message must never be able to steer Rook into changing mail.
-2. **RAM-124, the lost sign-off.** An agent draft reopened and sent from Rampart lost "Best regards," and the signature. Cause not yet found; capture the stored draft next time before sending.
-3. **RAM-127, eight feature bugs** from the 2026-09-29 audit (wrong-account warning on reopen, update prefetch, calendar time zone, contact history totals and Bcc, tray badge and shared mailboxes, UI freezes on drag and paste, spell check language).
-4. ~~**RAM-126, Rook reliability.**~~ Built and released 2026-09-30: a tool call is understood wherever it sits in a reply and in the OpenAI shape, bad arguments get a sentence back, history is budgeted by estimated tokens, eight steps with an honest stop, and the panel keeps 200 lines and three finished cards. Still to do: try the same requests on DeepSeek, Gemini and an OpenAI-compatible model.
-5. **Review and ship what is built:** the account switcher in the right-hand bar (RAM-117, last part) and the focused inbox (RAM-122).
-6. ~~**RAM-128 Appearance extras, RAM-129 mail layouts, RAM-27 sender pictures.**~~ All released by 2026-09-30, sender pictures in 0.1.437 through the companion server. Also released that day: three split themes with a dark window and a light reading page (RAM-134, 0.1.436) and the add-on catalogue for themes and templates (RAM-135, 0.1.438, content at github.com/thejdubb02/rampart-catalogue).
-7. **RAM-135, the catalogue's next kinds**, in the card's order: filter recipes, assistant shortcuts (full text shown before adding), AI provider presets, then icon packs once they are files. Also: split themes' focused-layout Back bar still draws dark.
-8. **RAM-110 follow-up flags and offline attachments**: the cloud session's branch never reached GitHub; get it pushed or rebuild from the card.
-9. **RAM-44** the fifty thousand message test, **RAM-39** Gmail and Microsoft sign-in (needs client IDs registered), **RAM-72** a failed deferred update, **RAM-113** confirm the update icon on a real click.
+Released since the last reset: Rook safety (RAM-125), Rook reliability (RAM-126), seven of the eight audit bugs (RAM-127; the eighth, calendar time zones, was checked and is not a bug), the focused inbox (RAM-122), follow-up flags and offline attachments (RAM-110), the update icon (RAM-113), three split themes (RAM-134), the add-on catalogue with themes, templates and filter recipes (RAM-135, filter recipes in 0.1.450), remote pictures shown by default outside Junk (0.1.447), and the "today at a glance" page when no message is open (RAM-142, 0.1.450).
 
-Waiting on a decision from Justin: RAM-111 (may Rook run on open, or only on a button press).
+1. **RAM-124, the lost sign-off.** An agent draft reopened and sent from Rampart lost "Best regards," and the signature. Cause not yet found; capture the stored draft next time before sending.
+2. **RAM-72, a failed deferred update** that leaves the app unable to start. Rampart should notice and explain it, or repair it while nobody is using the client.
+3. **RAM-44, the fifty thousand message test.** A repeatable speed and memory check, so a slowdown is a number rather than a feeling.
+4. **RAM-135, the catalogue's next kind:** assistant shortcuts, with the full text shown before adding. Then AI provider presets, then icon packs once they are files.
+5. **RAM-39, Gmail and Microsoft sign-in.** Needs client IDs registered with Google and Microsoft.
+6. **RAM-41, tray icon, unread badge and notification actions.**
+7. **RAM-126 follow-up:** try the same Rook requests on DeepSeek, Gemini and an OpenAI-compatible model.
+
+Waiting on a decision from Justin: RAM-111 (may Rook run on open, or only on a button press) and RAM-116 (whether our mail server has room for ClamAV).
 
 ## The order
 
