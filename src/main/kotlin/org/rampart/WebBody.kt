@@ -893,6 +893,7 @@ private const val COLLAPSE_BLANK_GAPS = """
 (function () {
   var body = document.body;
   if (!body) return;
+  var MEDIA = 'img, svg, video, canvas, iframe, object, embed, input, button, hr';
   var capped = [];
   var nodes = body.querySelectorAll('*');
   for (var i = 0; i < nodes.length; i++) {
@@ -905,8 +906,10 @@ private const val COLLAPSE_BLANK_GAPS = """
     if (under) continue;
     if (el.getBoundingClientRect().height <= 160) continue;
     if ((el.innerText || '').trim() !== '') continue;
-    if (el.querySelector('img, svg, video, canvas, iframe, object, embed, input, button, hr')) continue;
-    if (!bare(el)) continue;
+    // The element itself as well as what is inside it: a tall picture has nothing inside it,
+    // and was being clipped to one line (the Duchamp newsletter, 0.1.443).
+    if (el.matches(MEDIA) || el.querySelector(MEDIA)) continue;
+    if (!bare(el) || onPicture(el)) continue;
     el.style.height = 'auto';
     el.style.minHeight = '0';
     el.style.paddingTop = '0';
@@ -926,6 +929,14 @@ private const val COLLAPSE_BLANK_GAPS = """
       if (getComputedStyle(kids[k]).backgroundImage !== 'none') return false;
     }
     return true;
+  }
+  // An empty row inside a box with a background picture is what places the text on that
+  // picture, such as a spacer holding a headline low over a hero photo. It is layout.
+  function onPicture(el) {
+    for (var e = el.parentElement; e && e !== body; e = e.parentElement) {
+      if (getComputedStyle(e).backgroundImage !== 'none') return true;
+    }
+    return false;
   }
 })();
 """
