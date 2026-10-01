@@ -317,12 +317,12 @@ private fun Ranked(rows: List<Counted>, whenEmpty: String) {
 }
 
 @Composable
-private fun Heading(text: String) {
+internal fun Heading(text: String, modifier: Modifier = Modifier) {
     Text(
         text.uppercase(),
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.outline,
-        modifier = Modifier.padding(bottom = 8.dp),
+        modifier = modifier.padding(bottom = 8.dp),
     )
 }
 

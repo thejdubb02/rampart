@@ -113,6 +113,7 @@ import javax.swing.JOptionPane
 import java.net.URI
 import java.nio.file.Files
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
@@ -2182,13 +2183,15 @@ private fun Reader(
      * do and nothing to search server side.
      */
     /*
-     * Counted on opening, and again whenever the list underneath has moved.
+     * Counted when the dashboard is open, and when no message is selected, because
+     * that page lists what is waiting on an answer. Again whenever the list underneath
+     * has moved.
      *
      * Not on a timer and not in the background: it is a handful of queries over a local
      * file, so it is cheap when somebody is looking at it and pointless when nobody is.
      */
-    LaunchedEffect(dashboardOpen, emails, here) {
-        if (!dashboardOpen) return@LaunchedEffect
+    LaunchedEffect(dashboardOpen, selected == null, emails, here) {
+        if (!dashboardOpen && selected != null) return@LaunchedEffect
         val key = here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key
             ?: return@LaunchedEffect
         val boxes = mailboxes[key].orEmpty()
@@ -2203,6 +2206,30 @@ private fun Reader(
                     mine = mine,
                 )
             }.getOrNull()
+        }
+    }
+
+    /*
+     * What is left of today, for the empty reading pane. The same read the calendar
+     * panel makes. Only while nothing is open: it asks the server, and a message on
+     * screen does not need it. No calendar, or a read that fails, leaves the list
+     * empty so the page shows the date and the buttons without a line that never ends.
+     */
+    val glanceAccount = here?.first?.takeIf { it != ALL_ACCOUNTS } ?: sessions.firstOrNull()?.key
+    // Reset with the account, so one account's events are not shown as another's
+    // while the next read is on its way.
+    var stillToday by remember(glanceAccount) { mutableStateOf<List<Occurrence>>(emptyList()) }
+    LaunchedEffect(selected == null, glanceAccount) {
+        if (selected != null) return@LaunchedEffect
+        val backend = glanceAccount?.let { account -> sessions.firstOrNull { it.key == account }?.jmap }
+        val client = eventCalendarFor(backend)
+        if (client == null) {
+            stillToday = emptyList()
+            return@LaunchedEffect
+        }
+        val viewer = Regional.zone()
+        stillToday = withContext(Dispatchers.IO) {
+            runCatching { readSideAgenda(client, viewer).today }.getOrElse { emptyList() }
         }
     }
 
@@ -6610,7 +6637,59 @@ private fun Reader(
                     } else {
                         val message = openMessage
             if (message == null) {
-                Message(summary = null, body = null, onLink = { confirm = it }, messageMode = messageMode)
+                Message(
+                    summary = null,
+                    body = null,
+                    onLink = { confirm = it },
+                    messageMode = messageMode,
+                    nothingOpen = {
+                        val region = Regional.current()
+                        NothingOpen(
+                            date = LocalDate.now(region.zone),
+                            region = region,
+                            unread = glanceUnread(
+                                here?.first,
+                                mailboxes,
+                                unifiedInboxUnread(mailboxes, sharing.prefs),
+                            ),
+                            waiting = stats?.waiting,
+                            stillToday = stillToday.map { event ->
+                                GlanceLine(timeText(event, region), event.title)
+                            },
+                            onOpen = { opened ->
+                                dashboardOpen = false
+                                selected = opened
+                                focusedNav = focusedNav.opened(rowToken(opened))
+                            },
+                            onWrite = {
+                                val account = writingAccount()
+                                val from = identities[account].orEmpty().firstOrNull()?.email
+                                    ?: sessions.firstOrNull { it.key == account }?.account?.email.orEmpty()
+                                sendError = null
+                                sendDetail = null
+                                write(account, Draft(from = from))
+                            },
+                            onToday = if (Assistant.config().mode == AssistantMode.OFF) {
+                                null
+                            } else {
+                                {
+                                    dashboardOpen = true
+                                    today.open = true
+                                    contactsOpen = false
+                                    settingsOpen = false
+                                    calendarOpen = false
+                                }
+                            },
+                            onDashboard = {
+                                dashboardOpen = true
+                                today.open = false
+                                contactsOpen = false
+                                settingsOpen = false
+                                calendarOpen = false
+                            },
+                        )
+                    },
+                )
             } else {
                 /*
                  * One place for the card, whether or not the thread has arrived.

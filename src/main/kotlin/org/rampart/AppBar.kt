@@ -74,6 +74,7 @@ import kotlinx.coroutines.withContext
 import java.awt.Cursor
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.ZoneId
 import java.time.format.TextStyle
 
 /*
@@ -641,6 +642,40 @@ private fun dayHeading(date: LocalDate, today: LocalDate): String {
 }
 
 /**
+ * What is left of today and the week after it.
+ *
+ * The same read the panel beside the mail makes, so the empty reading pane and that
+ * panel cannot drift into two ideas of "today". A calendar the owner has hidden is
+ * left out, the same way the full calendar starts, so a hidden rota does not fill
+ * the list it was hidden from. A day either side is asked for because the query is
+ * in UTC and the window is local, and the day before also catches what started
+ * yesterday and is still on.
+ *
+ * Blocks. Callers run it off the main thread.
+ */
+internal fun readSideAgenda(
+    calendar: CalendarClient,
+    viewer: ZoneId,
+    now: LocalDateTime = LocalDateTime.now(viewer),
+): Agenda<Occurrence> {
+    val first = now.toLocalDate()
+    val until = first.plusDays(SIDE_AGENDA_DAYS.toLong())
+    val hidden = runCatching { calendar.calendars() }.getOrDefault(emptyList())
+        .filter { !it.isVisible }.map { it.id }.toSet()
+    val events = calendar.events(
+        utcStamp(first.minusDays(1).atStartOfDay(), viewer),
+        utcStamp(until.plusDays(1).atStartOfDay(), viewer),
+    )
+    val read = expandAll(
+        events.filter { e -> e.calendarIds.isEmpty() || e.calendarIds.any { it !in hidden } },
+        first.minusDays(1),
+        until,
+        viewer,
+    )
+    return agenda(read, now) { EventSpan(it.start, it.end, it.allDay) }
+}
+
+/**
  * The calendar beside the mail: what is left of today and the week after it.
  *
  * Read only, and deliberately short. Anything more than glancing at what is coming, such as
@@ -663,28 +698,9 @@ internal fun AgendaPanel(backend: MailBackend?, accountName: String, onOpenCalen
         loading = true
         try {
             val now = LocalDateTime.now(viewer)
-            val first = now.toLocalDate()
-            val until = first.plusDays(SIDE_AGENDA_DAYS.toLong())
-            val read = withContext(Dispatchers.IO) {
-                // The owner's own choice of what is hidden, the same as the full calendar
-                // starts from, so a hidden rota does not fill the panel it is hidden from.
-                val hidden = runCatching { calendar.calendars() }.getOrDefault(emptyList())
-                    .filter { !it.isVisible }.map { it.id }.toSet()
-                // A day either side, because the query is in UTC and the window is local.
-                // The day before also catches what started yesterday and is still on.
-                val events = calendar.events(
-                    utcStamp(first.minusDays(1).atStartOfDay(), viewer),
-                    utcStamp(until.plusDays(1).atStartOfDay(), viewer),
-                )
-                expandAll(
-                    events.filter { e -> e.calendarIds.isEmpty() || e.calendarIds.any { it !in hidden } },
-                    first.minusDays(1),
-                    until,
-                    viewer,
-                )
-            }
-            today = first
-            shown = agenda(read, now) { EventSpan(it.start, it.end, it.allDay) }
+            val read = withContext(Dispatchers.IO) { readSideAgenda(calendar, viewer, now) }
+            today = now.toLocalDate()
+            shown = read
             fault = null
         } catch (e: Exception) {
             fault = "Could not read your events." to whyFailed(e)

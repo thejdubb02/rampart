@@ -327,6 +327,11 @@ internal fun Message(
     onLoadImage: (suspend (Attachment) -> ImageBitmap?)? = null,
     /** Raw bytes for an attachment when opening a preview. */
     onLoadBytes: (suspend (Attachment) -> ByteArray?)? = null,
+    /**
+     * What to draw when no message is open. Null keeps the plain "Pick a message.",
+     * which is what every caller other than the main reading pane still wants.
+     */
+    nothingOpen: (@Composable () -> Unit)? = null,
 ) {
     val linkColor = MaterialTheme.colorScheme.primary
     val quoteColor = MaterialTheme.colorScheme.outline
@@ -525,13 +530,20 @@ internal fun Message(
         if (ownsPane) ThemeArt(Modifier.align(Alignment.BottomEnd))
         Column(if (ownsPane) Modifier.fillMaxSize() else Modifier.fillMaxWidth()) {
             if (summary == null) {
-                Box(Modifier.fillMaxSize()) {
-                    Text(
-                        "Pick a message.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.align(Alignment.Center),
-                    )
+                val glance = nothingOpen
+                if (glance != null) {
+                    // A height, so the page can scroll. fillMaxSize on its own is measured
+                    // with no bound inside this column.
+                    Box(Modifier.weight(1f).fillMaxWidth()) { glance() }
+                } else {
+                    Box(Modifier.fillMaxSize()) {
+                        Text(
+                            "Pick a message.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.align(Alignment.Center),
+                        )
+                    }
                 }
                 return@Column
             }
