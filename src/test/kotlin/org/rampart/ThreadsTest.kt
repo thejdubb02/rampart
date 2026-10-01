@@ -20,11 +20,11 @@ class ThreadsTest {
     )
 
     /*
-     * Sent copies stay in Sent. A conversation archived out of the one folder that holds
-     * everything you have written is a folder that no longer does.
+     * Marking a conversation read does not touch what you wrote. Those copies are in
+     * Sent, and "I have read this" is about the mail that arrived.
      */
     @Test
-    fun `your own replies are not filed with the conversation`() {
+    fun `your own replies are not marked read with the conversation`() {
         assertEquals(listOf("1", "3"), conversationIds(thread, mine))
     }
 
@@ -34,7 +34,7 @@ class ThreadsTest {
         assertEquals(listOf("1", "3"), conversationIds(shouty, mine))
     }
 
-    /** A half-written reply moved to Archive is a draft nobody finds again. */
+    /** A half-written reply is not mail that arrived, so marking the conversation read leaves it. */
     @Test
     fun `a draft in the conversation is left where it is`() {
         val withDraft = thread + note("4", "dana@example.org", setOf("\$draft"))
@@ -44,6 +44,40 @@ class ThreadsTest {
     @Test
     fun `a conversation nobody has written in is all of it`() {
         assertEquals(listOf("1", "3"), conversationIds(thread.filterNot { it.id == "2" }, emptySet()))
+    }
+
+    /*
+     * The server's list is the conversation the row stands for. The rows on screen are
+     * only a stand-in for when the server cannot say, and an empty answer is still an
+     * answer: falling back to those rows is how a click filed messages that had already
+     * left the folder.
+     */
+    @Test
+    fun `the server's list is what gets filed, including a reply of yours`() {
+        assertEquals(listOf("a", "b"), filingIds("b", "t", listOf("a", "b"), listOf("b", "c")))
+        assertEquals(listOf("mine", "theirs"), filingIds("theirs", "t", listOf("mine", "theirs"), emptyList()))
+    }
+
+    @Test
+    fun `the message that was clicked is filed even when the server left it out`() {
+        assertEquals(listOf("a", "b"), filingIds("b", "t", listOf("a"), listOf("b", "c")))
+    }
+
+    @Test
+    fun `an empty answer from the server does not fall back to the rows on screen`() {
+        assertEquals(listOf("b"), filingIds("b", "t", emptyList(), listOf("a", "b", "c")))
+    }
+
+    @Test
+    fun `when the server cannot say, the open rows are used, or just this message`() {
+        assertEquals(listOf("a", "b"), filingIds("b", "t", null, listOf("a", "b")))
+        assertEquals(listOf("b"), filingIds("b", "t", null, listOf("a", "c")))
+    }
+
+    @Test
+    fun `a message with no thread does not use a server list`() {
+        assertEquals(listOf("b", "a"), filingIds("a", "", listOf("x"), listOf("b", "a")))
+        assertEquals(listOf("a"), filingIds("a", "  ", listOf("x"), listOf("b")))
     }
 
     /*

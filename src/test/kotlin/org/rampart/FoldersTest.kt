@@ -67,4 +67,12 @@ class FoldersTest {
         assertEquals("4 messages moved to trash.", movedNotice(4, pastTense("trash")))
         assertEquals("2 messages marked as spam.", movedNotice(2, pastTense("junk")))
     }
+
+    @Test
+    fun `a missing folder says so, in one sentence`() {
+        assertEquals("This account has no Archive folder.", noSuchFolder("archive"))
+        assertEquals("This account has no Trash folder.", noSuchFolder("trash"))
+        assertEquals("This account has no Junk folder.", noSuchFolder("junk"))
+        assertEquals("This account has nowhere to put that.", noSuchFolder("elsewhere"))
+    }
 }

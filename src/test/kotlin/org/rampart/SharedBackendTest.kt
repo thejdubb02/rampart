@@ -39,6 +39,14 @@ class SharedBackendTest {
         override fun markSeen(id: String): Applied { calls += "seen $id"; return Applied(null) }
         override fun setKeyword(ids: List<String>, keyword: String, on: Boolean): Applied { calls += "keyword $keyword $ids"; return Applied(null) }
         override fun move(ids: List<String>, toMailboxId: String): Applied { calls += "move $ids $toMailboxId"; return Applied(null) }
+        override fun moveFrom(ids: List<String>, fromMailboxId: String, toMailboxId: String): Applied {
+            calls += "moveFrom $ids $fromMailboxId $toMailboxId"
+            return Applied(null)
+        }
+        override fun conversationIn(threadId: String, mailboxId: String): List<String>? {
+            calls += "conversation $threadId $mailboxId"
+            return listOf("e1", "e2")
+        }
         override fun destroy(ids: List<String>): Applied { calls += "destroy $ids"; return Applied(null) }
         override fun createMailbox(name: String, parentId: String?): String { calls += "create $name $parentId"; return "new" }
         override fun updateMailbox(id: String, name: String?, parentId: String?, reparent: Boolean) { calls += "update $id" }
@@ -83,14 +91,17 @@ class SharedBackendTest {
 
     private fun mail(id: String) = Summary(id, "A", "a@example.com", id, "2026-09-20T09:00:00Z", "", seen = false)
 
-    private fun setUp(owner: Boolean = false): Triple<SharedBackend, Inner, MutableList<JsonArray>> {
+    private fun setUp(
+        owner: Boolean = false,
+        folderList: JsonArray = folders,
+    ): Triple<SharedBackend, Inner, MutableList<JsonArray>> {
         val inner = Inner()
         val sent = mutableListOf<JsonArray>()
         val backend = SharedBackend(inner, "g", owner) { calls ->
             sent += calls
             calls.map { call ->
                 when (call[0].jsonPrimitive.content) {
-                    "Mailbox/get" -> folders
+                    "Mailbox/get" -> folderList
                     "Email/get" -> where
                     else -> error("unexpected ${call[0]}")
                 }
@@ -130,6 +141,45 @@ class SharedBackendTest {
     fun `opening a message in a read-only folder does not try to mark it read, and does not complain`() {
         val (backend, inner, _) = setUp()
         backend.markSeen("e2")
+        assertTrue(inner.calls.isEmpty())
+    }
+
+    @Test
+    fun `the shared account can say which messages of a thread are in a folder`() {
+        val (backend, inner, _) = setUp()
+        assertEquals(listOf("e1", "e2"), backend.conversationIn("t1", "inbox"))
+        assertEquals(listOf("conversation t1 inbox"), inner.calls)
+    }
+
+    @Test
+    fun `filing out of one folder does not ask to leave the others`() {
+        // A reply that is also in Sent. Taking it out of every folder it is in would
+        // need leave from Sent, which this mailbox does not have, and would drop the copy.
+        val extra = Json.parseToJsonElement(
+            """
+            ["Mailbox/get", { "list": [
+              { "id": "inbox", "name": "Inbox", "role": "inbox",
+                "myRights": { "mayReadItems": true, "mayAddItems": true, "mayRemoveItems": true } },
+              { "id": "sent", "name": "Sent", "role": "sent",
+                "myRights": { "mayReadItems": true } },
+              { "id": "archive", "name": "Archive", "role": "archive",
+                "myRights": { "mayReadItems": true, "mayAddItems": true, "mayRemoveItems": true } }
+            ] }, "m"]
+            """.trimIndent(),
+        ) as JsonArray
+        val (backend, inner, _) = setUp(folderList = extra)
+        inner.page = listOf(mail("e1"))
+        backend.emails("inbox")
+        backend.emails("sent")
+        backend.moveFrom(listOf("e1"), "inbox", "archive")
+        assertEquals(listOf("moveFrom [e1] inbox archive"), inner.calls)
+    }
+
+    @Test
+    fun `filing out of a folder you cannot take mail from is refused`() {
+        val (backend, inner, _) = setUp()
+        assertFailsWith<NotAllowedHere> { backend.moveFrom(listOf("e2"), "clients", "inbox") }
+        assertFailsWith<NotAllowedHere> { backend.moveFrom(listOf("e1"), "inbox", "clients") }
         assertTrue(inner.calls.isEmpty())
     }
 

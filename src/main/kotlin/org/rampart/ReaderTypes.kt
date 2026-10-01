@@ -204,15 +204,23 @@ internal data class ConversationActions(
 )
 
 /**
- * A batch move, and where it came from.
+ * One account's share of a batch that was moved, and where to put it back.
  *
- * Kept so it can be put back. Undo for a move is only ever a move in the other direction,
- * which is the whole reason batch actions are moves and nothing else: filing fifty messages
- * by accident is recoverable, and a client that makes that unrecoverable is one people
- * stop using for anything but reading.
+ * Undo for a move is only ever a move in the other direction, which is the whole
+ * reason batch actions are moves and nothing else: filing fifty messages by accident
+ * is recoverable, and a client that makes that unrecoverable is one people stop
+ * using for anything but reading.
+ *
+ * [toMailboxId] is set when the move only took the messages out of [fromMailboxId]
+ * and left every other folder alone. Undo then does the same in reverse. Null means
+ * the move replaced every folder, and undo is a plain move back to [fromMailboxId].
  */
-/** One account's share of a batch that was moved, and where to put it back. */
-internal data class Move(val accountKey: String, val ids: List<String>, val fromMailboxId: String)
+internal data class Move(
+    val accountKey: String,
+    val ids: List<String>,
+    val fromMailboxId: String,
+    val toMailboxId: String? = null,
+)
 
 internal data class Undoable(
     val moves: List<Move>,

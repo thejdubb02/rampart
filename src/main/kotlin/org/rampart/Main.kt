@@ -841,6 +841,14 @@ private fun Reader(
      * whenever it is assigned.
      */
     var filed by remember { mutableStateOf<Set<String>>(emptySet()) }
+    /**
+     * Conversations whose filing is already in flight.
+     *
+     * The row, the card and the conversation menu are three ways to ask for the same
+     * move, and a double click is two of them. A second one is ignored until the first
+     * finishes, so it cannot send the move twice. Keyed by account and thread.
+     */
+    val filing = remember { mutableSetOf<String>() }
     /** The card [expanded] should be scrolled into view once it has been laid out. */
     var pendingScrollTo by remember { mutableStateOf<String?>(null) }
     /** Whether the open conversation is muted. Read off disk when the message changes. */
@@ -2853,14 +2861,6 @@ private fun Reader(
         io { session(key).jmap.mailboxes() }?.let { mailboxes = mailboxes + (key to it) }
     }
 
-    /*
-     * Filing one message, wherever the click came from: the button above the open message
-     * and the right-click menu on a row are the same operation and must behave the same
-     * way, including leaving the same thing behind to undo. One function, two callers.
-     *
-     * Returns null when this account has no folder for that role, so a server with no
-     * Archive never offers an Archive that would fail.
-     */
     /**
      * The move itself, wherever it was asked for.
      *
@@ -2960,33 +2960,18 @@ private fun Reader(
         undo = from?.let { Undoable(listOf(Move(key, listOf(message.id), it)), verb) }
     }
 
-    fun fileAway(message: Summary, role: String): (() -> Unit)? {
+    /**
+     * One message into the folder for [role]. Null when this account has no such folder.
+     *
+     * Not spam, and only that. Archive, delete and spam file the whole conversation.
+     * See [fileConversation]. Move to a folder somebody picked is [carryOut] directly,
+     * and stays the one message.
+     */
+    fun moveThis(message: Summary, role: String): (() -> Unit)? {
         val key = accountOf(message) ?: return null
         val target = folderFor(role, mailboxes[key].orEmpty()) ?: return null
         val from = sourceFolder(key)
-        return {
-            scope.launch {
-                /*
-                 * Archiving by year or month puts it in a subfolder of Archive, made on the
-                 * first message of a new period and never otherwise. A folder with fifteen
-                 * years of mail in it is a folder nobody opens.
-                 *
-                 * If making it fails the message still goes to Archive itself. Refusing to
-                 * archive because a subfolder could not be created would be the wrong way
-                 * round: the filing is the point, the tidiness is not.
-                 */
-                val bucket = if (role == "archive") archiveBucket(message.receivedAt, Settings.archiveBy()) else null
-                val into = bucket?.let { name ->
-                    val existing = mailboxes[key].orEmpty()
-                        .firstOrNull { it.parentId == target.id && it.name == name }
-                    existing?.id ?: io { session(key).jmap.createMailbox(name, target.id) }
-                        ?.also { refreshFolders(key) }
-                } ?: target.id
-
-                carryOut(key, message, into, from, pastTense(role))
-            }
-            Unit
-        }
+        return { scope.launch { carryOut(key, message, target.id, from, pastTense(role)) } }
     }
 
 
@@ -4006,14 +3991,7 @@ private fun Reader(
         }
     }
 
-    /*
-     * The same three acts, done to a whole conversation.
-     *
-     * Kept apart from the single-message versions rather than folded into them, because
-     * what they leave behind is different: one message archived leaves the rest of the
-     * thread in the inbox, and the undo for the conversation has to put twelve back. See
-     * [conversationIds] for the two kinds of message they will not touch.
-     */
+    /** Which messages marking the conversation read applies to. See [conversationIds]. */
     fun conversationOf(message: Summary): List<String> =
         conversationIds(thread, identities[accountOf(message)].orEmpty().map { it.email }.toSet())
 
@@ -4021,23 +3999,95 @@ private fun Reader(
         accountOf(message)?.let { setSeen(it, conversationOf(message).toSet(), read) }
     }
 
+    /**
+     * Files the whole conversation out of the folder on screen.
+     *
+     * The list is one row per conversation, so moving only the message the row happens
+     * to show leaves the row there and the click looks like it did nothing. The server
+     * says which messages of the thread are in this folder. A reply of yours that is
+     * still in the folder is one of them. A copy that is also in Sent stays in Sent,
+     * because the move takes the message out of this folder only.
+     *
+     * Before the thread has loaded, the rows on screen are empty. That used to file
+     * nothing and say nothing. The server is asked anyway, and a backend that cannot
+     * say falls back to those rows, or to this one message.
+     */
     fun fileConversation(message: Summary, role: String, verb: String) {
         val key = accountOf(message) ?: return
-        val target = folderFor(role, mailboxes[key].orEmpty())?.id ?: return
-        val ids = conversationOf(message)
-        if (ids.isEmpty()) return
-        val from = sourceFolder(key)
+        val flight = key + "\u0000" + message.threadId.ifBlank { message.id }
+        // A second click on the same conversation while this one is in flight. Ignored,
+        // rather than sent twice.
+        if (!filing.add(flight)) return
+        val target = folderFor(role, mailboxes[key].orEmpty())
+        if (target == null) {
+            filing.remove(flight)
+            report(noSuchFolder(role))
+            return
+        }
+        val folder = sourceFolder(key)
         scope.launch {
-            if (!sayJunk(key, ids, from, target)) return@launch
-            if (changed(key) { session(key).jmap.move(ids, target) } == null) return@launch
-            io { session(key).store?.forget(ids) }
-            val gone = ids.toSet()
-            advancePast { it.sameMail(key, gone) }
-            emails = emails.filterNot { it.sameMail(key, gone) }
-            thread = emptyList()
-            // Twelve messages filed by one click is exactly the act that has to be
-            // reversible, and a move is only ever undone by a move the other way.
-            undo = from?.let { Undoable(listOf(Move(key, ids, it)), verb) }
+            try {
+                /*
+                 * Archiving by year or month puts it in a subfolder of Archive, made on the
+                 * first message of a new period and never otherwise. A folder with fifteen
+                 * years of mail in it is a folder nobody opens.
+                 *
+                 * If making it fails the message still goes to Archive itself. Refusing to
+                 * archive because a subfolder could not be created would be the wrong way
+                 * round: the filing is the point, the tidiness is not.
+                 */
+                val bucket = if (role == "archive") archiveBucket(message.receivedAt, Settings.archiveBy()) else null
+                val into = bucket?.let { name ->
+                    val existing = mailboxes[key].orEmpty()
+                        .firstOrNull { it.parentId == target.id && it.name == name }
+                    existing?.id ?: io { session(key).jmap.createMailbox(name, target.id) }
+                        ?.also { refreshFolders(key) }
+                } ?: target.id
+                // Null is "cannot say". A failure is a failure, and is not then filed
+                // as if the server had said the thread was empty.
+                val fromServer = if (folder != null && message.threadId.isNotBlank()) {
+                    val outcome = tried {
+                        withContext(Dispatchers.IO) {
+                            session(key).jmap.conversationIn(message.threadId, folder)
+                        }
+                    }
+                    if (outcome.isFailure) {
+                        report("That did not work.", whyFailed(outcome.exceptionOrNull()!!))
+                        return@launch
+                    }
+                    outcome.getOrNull()
+                } else {
+                    null
+                }
+                val ids = filingIds(message.id, message.threadId, fromServer, thread.map { it.id })
+                if (!sayJunk(key, ids, folder, into)) return@launch
+                val moved = if (folder != null) {
+                    changed(key) { session(key).jmap.moveFrom(ids, folder, into) }
+                } else {
+                    changed(key) { session(key).jmap.move(ids, into) }
+                }
+                if (moved == null) return@launch
+                io { session(key).store?.forget(ids) }
+                val gone = ids.toSet()
+                // The list row often is not the id that was moved. Any row of this
+                // conversation, on this account, is the row the click was about.
+                fun leaves(row: Summary) =
+                    row.sameMail(key, gone) ||
+                        (message.threadId.isNotBlank() && row.threadId == message.threadId &&
+                            (row.account.isBlank() || row.account == key))
+                advancePast(::leaves)
+                emails = emails.filterNot(::leaves)
+                thread = thread.filterNot { it.id in gone }
+                expanded = expanded - gone
+                openedByHand = openedByHand - gone
+                cards = cards.filterKeys { card -> card.account != key || card.id !in gone }
+                filed = filed + gone
+                // Back the same way: out of the folder they went to, into the one they
+                // left. A plain move would drop a copy that was also in Sent.
+                undo = folder?.let { Undoable(listOf(Move(key, ids, it, into)), verb) }
+            } finally {
+                filing.remove(flight)
+            }
         }
     }
 
@@ -4427,11 +4477,11 @@ private fun Reader(
             }
         },
         forwardFile = { message -> forwardAsFile(message) },
-        archive = { message -> fileAway(message, "archive")?.invoke() },
-        junk = { message -> fileAway(message, "junk")?.invoke() },
-        notJunk = { message -> fileAway(message, "inbox")?.invoke() },
+        archive = { message -> fileConversation(message, "archive", pastTense("archive")) },
+        junk = { message -> fileConversation(message, "junk", pastTense("junk")) },
+        notJunk = { message -> moveThis(message, "inbox")?.invoke() },
         isJunk = ::inJunk,
-        trash = { message -> fileAway(message, "trash")?.invoke() },
+        trash = { message -> fileConversation(message, "trash", pastTense("trash")) },
         star = ::starOne,
         markRead = ::markRead,
         filter = { message -> filterFor = message },
@@ -4476,7 +4526,6 @@ private fun Reader(
      */
     fun actionsFor(message: Summary): MessageActions {
         if (accountOf(message) == null) return MessageActions()
-        fun moveTo(role: String): (() -> Unit)? = fileAway(message, role)
         /*
          * Spam and Not spam are the same move in opposite directions, and only one of them
          * is ever the right thing to offer. A message in Junk needs a way out, and that way
@@ -4490,12 +4539,12 @@ private fun Reader(
         val junked = inJunk(message)
         val boxes = mailboxes[accountOf(message)!!].orEmpty()
         return MessageActions(
-            archive = moveTo("archive"),
+            archive = { fileConversation(message, "archive", pastTense("archive")) },
             snooze = { until -> snooze(message, until) },
             followUp = { followUps.ask(message) },
-            trash = moveTo("trash"),
-            junk = if (junked) null else moveTo("junk"),
-            notJunk = if (junked) moveTo("inbox") else null,
+            trash = { fileConversation(message, "trash", pastTense("trash")) },
+            junk = if (junked) null else ({ fileConversation(message, "junk", pastTense("junk")) }),
+            notJunk = if (junked) moveThis(message, "inbox") else null,
             star = { starOne(message) },
             // Unread is how most people say "come back to this", and it was reachable
             // only by right-clicking the row the message was opened from.
@@ -6431,7 +6480,15 @@ private fun Reader(
                                         val results = withContext(Dispatchers.IO) {
                                             last.moves.map { move ->
                                                 move to runCatching {
-                                                    session(move.accountKey).jmap.move(move.ids, move.fromMailboxId)
+                                                    // A filing only took them out of one folder, so putting
+                                                    // them back takes them out of that one and restores the
+                                                    // other. A plain move would drop a copy also in Sent.
+                                                    val placed = move.toMailboxId
+                                                    if (placed != null) {
+                                                        session(move.accountKey).jmap.moveFrom(move.ids, placed, move.fromMailboxId)
+                                                    } else {
+                                                        session(move.accountKey).jmap.move(move.ids, move.fromMailboxId)
+                                                    }
                                                 }
                                             }
                                         }

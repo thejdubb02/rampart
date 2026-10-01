@@ -78,6 +78,10 @@ internal class SharedBackend(
         }
 
     override fun thread(threadId: String): List<Summary> = inner.thread(threadId)
+
+    /** The shared account's own answer. The default would say this backend cannot tell. */
+    override fun conversationIn(threadId: String, mailboxId: String): List<String>? =
+        inner.conversationIn(threadId, mailboxId)
     override fun body(id: String): Body = inner.body(id)
     override fun attachments(emailId: String): List<Attachment> = inner.attachments(emailId)
     override fun open(id: String): OpenedMail = inner.open(id)
@@ -146,6 +150,22 @@ internal class SharedBackend(
             }
         }
         return inner.move(ids, toMailboxId).also { ids.forEach { id -> located[id] = setOf(toMailboxId) } }
+    }
+
+    /**
+     * Only the one folder the patch takes mail out of, plus the one it files into.
+     *
+     * Unlike [move], a message that is also in Sent stays there, so Sent's rights are
+     * not the question. The folder on screen is.
+     */
+    override fun moveFrom(ids: List<String>, fromMailboxId: String, toMailboxId: String): Applied {
+        refusal(FolderAction.FILE_INTO, rightsOf(toMailboxId))?.let { throw NotAllowedHere(it) }
+        refusal(FolderAction.TAKE_OUT, rightsOf(fromMailboxId))?.let { throw NotAllowedHere(it) }
+        return inner.moveFrom(ids, fromMailboxId, toMailboxId).also {
+            ids.forEach { id ->
+                located[id]?.let { boxes -> located[id] = boxes - fromMailboxId + toMailboxId }
+            }
+        }
     }
 
     override fun destroy(ids: List<String>): Applied {

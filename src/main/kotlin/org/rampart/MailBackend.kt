@@ -213,6 +213,29 @@ internal interface MailBackend {
 
     fun move(ids: List<String>, toMailboxId: String): Applied
 
+    /**
+     * Messages of [threadId] that are in [mailboxId] right now, drafts left out.
+     *
+     * Null means this backend cannot say which, and the caller uses whatever is
+     * already on screen. An empty list is an answer: none of them are in that folder.
+     * A draft stays where it is, because a half-written reply filed away is a draft
+     * nobody finds again.
+     */
+    fun conversationIn(threadId: String, mailboxId: String): List<String>? = null
+
+    /**
+     * Takes each message out of [fromMailboxId] and puts it in [toMailboxId].
+     *
+     * [move] replaces every folder a message is in. That is right for a message that
+     * lives in one folder, and wrong for one that is also filed in Sent: the Sent copy
+     * would leave Sent. This leaves every other folder alone.
+     *
+     * The default is [move], which is all a protocol that keeps a message in one folder
+     * can do.
+     */
+    fun moveFrom(ids: List<String>, fromMailboxId: String, toMailboxId: String): Applied =
+        move(ids, toMailboxId)
+
     fun destroy(ids: List<String>): Applied
 
     fun createMailbox(name: String, parentId: String? = null): String

@@ -26,6 +26,19 @@ private val NAMES = mapOf(
     "inbox" to setOf("inbox"),
 )
 
+/**
+ * What to say when the button for [role] has nowhere to go.
+ *
+ * The menu still offers Archive on an account that has no such folder. A click
+ * that returns without a word is how that looked like a button that did nothing.
+ */
+internal fun noSuchFolder(role: String): String = when (role) {
+    "archive" -> "This account has no Archive folder."
+    "trash" -> "This account has no Trash folder."
+    "junk" -> "This account has no Junk folder."
+    else -> "This account has nowhere to put that."
+}
+
 /** The folder for [role], or null when this account genuinely has not got one. */
 internal fun folderFor(role: String, boxes: List<Mailbox>): Mailbox? {
     boxes.firstOrNull { it.role == role }?.let { return it }

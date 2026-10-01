@@ -2055,6 +2055,31 @@ internal class Jmap private constructor(
         return Applied(requireApplied(response, ids, "updated", "notUpdated", "move"))
     }
 
+    /**
+     * Every message of the thread that is in [mailboxId], drafts left out.
+     *
+     * One request: Thread/get names the messages and Email/get reads where each one
+     * is, by back reference, so the ids never come through us. See [conversationInCalls].
+     */
+    override fun conversationIn(threadId: String, mailboxId: String): List<String> {
+        if (threadId.isBlank()) return emptyList()
+        val responses = call(*conversationInCalls(accountId, threadId).toTypedArray())
+        return idsInFolder(responses[1].list().map { it.jsonObject }, mailboxId)
+    }
+
+    /**
+     * Out of [fromMailboxId] and into [toMailboxId], and nowhere else changes.
+     *
+     * The patch keys are one folder removed and one folder set. Replacing the whole
+     * mailboxIds object, which is what [move] does, would take a reply out of Sent
+     * when the reply was also still in the inbox.
+     */
+    override fun moveFrom(ids: List<String>, fromMailboxId: String, toMailboxId: String): Applied {
+        if (ids.isEmpty()) return Applied(null)
+        val response = call(moveFromCall(accountId, ids, fromMailboxId, toMailboxId))[0][1].jsonObject
+        return Applied(requireApplied(response, ids, "updated", "notUpdated", "move"))
+    }
+
     override fun setKeyword(ids: List<String>, keyword: String, on: Boolean): Applied {
         if (ids.isEmpty()) return Applied(null)
         val response = call(invoke("Email/set", "k") {
@@ -2241,6 +2266,84 @@ internal fun appliedIds(node: JsonElement?): Set<String> = when (node) {
     is JsonArray -> node.mapNotNull { it.str() }.toSet()
     else -> emptySet()
 }
+
+/**
+ * The two calls that name a thread and then read where each message is.
+ *
+ * Sent together, one request. Email/get takes its ids from Thread/get by back
+ * reference. Only the two properties the answer is filtered on: `id` is not asked
+ * for, because a JMAP get returns it anyway.
+ */
+internal fun conversationInCalls(accountId: String, threadId: String): List<JsonArray> = listOf(
+    buildJsonArray {
+        add("Thread/get")
+        add(buildJsonObject {
+            put("accountId", accountId)
+            putJsonArray("ids") { add(threadId) }
+        })
+        add("t")
+    },
+    buildJsonArray {
+        add("Email/get")
+        add(buildJsonObject {
+            put("accountId", accountId)
+            putJsonObject("#ids") {
+                put("resultOf", "t")
+                put("name", "Thread/get")
+                put("path", "/list/*/emailIds")
+            }
+            putJsonArray("properties") {
+                add("mailboxIds")
+                add("keywords")
+            }
+        })
+        add("g")
+    },
+)
+
+/**
+ * One Email/set that takes each message out of [fromMailboxId] and puts it in
+ * [toMailboxId], leaving every other folder it belongs to as it was.
+ */
+internal fun moveFromCall(
+    accountId: String,
+    ids: List<String>,
+    fromMailboxId: String,
+    toMailboxId: String,
+): JsonArray = buildJsonArray {
+    add("Email/set")
+    add(buildJsonObject {
+        put("accountId", accountId)
+        putJsonObject("update") {
+            ids.forEach { id ->
+                putJsonObject(id) {
+                    // The same key twice would keep only the last write. A message
+                    // already in the destination just stays there.
+                    if (fromMailboxId != toMailboxId) put("mailboxIds/$fromMailboxId", JsonNull)
+                    put("mailboxIds/$toMailboxId", JsonPrimitive(true))
+                }
+            }
+        }
+    })
+    add("m")
+}
+
+/**
+ * Ids from an Email/get list that are in [mailboxId] and are not a draft.
+ *
+ * Membership is the key being present. A message filed in this folder and in Sent
+ * is in this folder. A draft is left where it is: filing one away is how a
+ * half-written reply disappears.
+ */
+internal fun idsInFolder(emails: List<JsonObject>, mailboxId: String): List<String> =
+    emails.mapNotNull { email ->
+        val id = (email["id"] as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
+        val boxes = email["mailboxIds"] as? JsonObject ?: return@mapNotNull null
+        if (mailboxId !in boxes) return@mapNotNull null
+        val keywords = email["keywords"] as? JsonObject
+        if (keywords != null && keywords.keys.any { it.equals("\$draft", ignoreCase = true) }) return@mapNotNull null
+        id
+    }
 
 /**
  * Refuses the call unless every id landed.

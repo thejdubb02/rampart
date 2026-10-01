@@ -17,14 +17,43 @@ import kotlinx.serialization.json.jsonPrimitive
  */
 
 /**
- * Which messages of a conversation an action may touch.
+ * Which messages one click files out of the folder on screen.
  *
- * Two are left alone, and both matter more than they look:
+ * The server's list wins. It is every message of the thread that is in the folder,
+ * which is the list the row stands for, including a reply of yours when that reply
+ * is in the folder. Null means the server cannot say. The rows already open are the
+ * next best list, and only when this message is one of them: an empty thread is the
+ * state before it has loaded, and filing nothing is how the click used to look like
+ * it did nothing.
  *
- * - **Your own replies.** They are in Sent, and archiving a conversation that swept your
- *   Sent copies into Archive would take them out of the one folder that is supposed to
- *   hold everything you have written.
- * - **Drafts.** A half-written reply moved to Archive is a draft nobody finds again.
+ * A blank [threadId] is not a thread, so a server list is not used for it.
+ * [messageId] is always in the answer. It is the message the click was on.
+ *
+ * An empty list from the server is an answer, not a failure. Nothing else in the
+ * folder belongs to the thread, and the click's own message is still filed.
+ */
+internal fun filingIds(
+    messageId: String,
+    threadId: String,
+    fromServer: List<String>?,
+    threadRowIds: List<String>,
+): List<String> {
+    val known = if (threadId.isNotBlank()) fromServer else null
+    val chosen = known ?: threadRowIds.takeIf { messageId in it }.orEmpty()
+    return if (messageId in chosen) chosen else chosen + messageId
+}
+
+/**
+ * Which messages of a conversation a read or unread applies to.
+ *
+ * Filing does not use this. A reply of yours that is still in the folder is the
+ * usual reason the row stays, so filing asks the server which messages are in the
+ * folder. See [filingIds]. Marking the conversation read still leaves two kinds
+ * alone, and both matter more than they look:
+ *
+ * - **Your own replies.** They are in Sent. Marking them read or unread along with
+ *   the mail that arrived is not what "I have read this" means.
+ * - **Drafts.** A half-written reply is not mail that arrived.
  *
  * [mine] is compared in lower case because an address is not case sensitive in the half
  * that matters and servers disagree about the other half.
