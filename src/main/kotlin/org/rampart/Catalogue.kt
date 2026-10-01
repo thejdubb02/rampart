@@ -63,15 +63,20 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 
 /**
- * Themes and message templates fetched from a catalogue.
+ * Themes, message templates, and filters fetched from a catalogue.
  *
- * An item is colours or text. Nothing downloaded here is executed, evaluated, loaded as
- * a class, or used as a path on disk. An add-on that ran code could read all your mail
- * and your keys, so the catalogue stays data.
+ * An item is colours, text, or a mail rule in the form already stored in a Sieve script.
+ * Nothing downloaded here is executed, evaluated, loaded as a class, or used as a path
+ * on disk. An add-on that ran code could read all your mail and your keys, so the
+ * catalogue stays data.
+ *
+ * A filter is written onto one account's server. The server runs it at delivery. A
+ * recipe that forwards mail is refused: that is the one way a data-only add-on can
+ * still send mail to an address its author chose.
  *
  * Nothing in this file runs until the catalogue page is open. There is no startup fetch
  * and no timer. The index is trusted only for the size and SHA-256 it claims: the bytes
- * are checked against both before they are read as a theme or a template.
+ * are checked against both before they are read as a theme, a template, or a filter.
  */
 
 /** The catalogue Rampart ships with. Blank in settings means this address. */
@@ -84,10 +89,19 @@ internal const val CATALOGUE_NEWER = "This catalogue needs a newer Rampart."
 /** Shown on the row, and nothing is saved, when the bytes are not the ones the index named. */
 internal const val CATALOGUE_MISMATCH = "The download did not match the catalogue, so it was not added."
 
+/**
+ * A shared recipe that forwards to an address its author chose could send mail there.
+ * That is refused, and nothing is written.
+ */
+internal const val CATALOGUE_FORWARDS = "This recipe forwards mail, so it was not added."
+
+/** The recipe was not a rule this build can rebuild. Nothing is written. */
+internal const val CATALOGUE_NOT_A_FILTER = "This recipe is not a filter Rampart understands, so it was not added."
+
 /** The index, and no more. Read one byte past this and the catalogue is refused. */
 internal const val CATALOGUE_INDEX_CAP = 256 * 1024
 
-/** One theme or template, and no more. An index entry larger than this is not downloaded. */
+/** One theme, template, or filter, and no more. An index entry larger than this is not downloaded. */
 internal const val CATALOGUE_ITEM_CAP = 8 * 1024
 
 private const val REDIRECT_LIMIT = 5
@@ -117,7 +131,9 @@ internal data class CatalogueItem(
  * The little the list draws, and nothing else.
  *
  * A theme preview is enough to paint a swatch. A template preview is the subject and the
- * first line. The full file is fetched only when the person adds it.
+ * first line. A filter preview is one line from the index. The rule in plain words is
+ * built here from the parsed recipe, once it has been checked, and shown before it is
+ * written. The full file is fetched only when the person adds it.
  */
 internal sealed interface CataloguePreview {
     data class Theme(
@@ -132,6 +148,8 @@ internal sealed interface CataloguePreview {
     ) : CataloguePreview
 
     data class Template(val subject: String, val firstLine: String) : CataloguePreview
+
+    data class Filter(val summary: String) : CataloguePreview
 }
 
 /** A catalogue answer a person can read. Anything else thrown from the network is rewritten. */
@@ -161,7 +179,7 @@ internal fun parseIndex(text: String): List<CatalogueItem> {
 
 private fun readItem(obj: JsonObject): CatalogueItem? {
     val kind = text(obj, "kind") ?: return null
-    if (kind != "theme" && kind != "template") return null
+    if (kind != "theme" && kind != "template" && kind != "filter") return null
     val id = text(obj, "id")?.takeIf { it.isNotBlank() } ?: return null
     val name = text(obj, "name")?.takeIf { it.isNotBlank() } ?: return null
     val path = text(obj, "path") ?: return null
@@ -170,7 +188,11 @@ private fun readItem(obj: JsonObject): CatalogueItem? {
     if (size !in 1..CATALOGUE_ITEM_CAP) return null
     val sha256 = text(obj, "sha256")?.takeIf { HEX_SHA256.matches(it) }?.lowercase() ?: return null
     val previewObj = obj["preview"] as? JsonObject ?: return null
-    val preview = if (kind == "theme") themePreview(previewObj) else templatePreview(previewObj)
+    val preview = when (kind) {
+        "theme" -> themePreview(previewObj)
+        "template" -> templatePreview(previewObj)
+        else -> filterPreview(previewObj)
+    }
     preview ?: return null
     return CatalogueItem(
         kind = kind,
@@ -210,6 +232,11 @@ private fun templatePreview(obj: JsonObject): CataloguePreview.Template? {
     return CataloguePreview.Template(subject, firstLine)
 }
 
+private fun filterPreview(obj: JsonObject): CataloguePreview.Filter? {
+    val summary = text(obj, "summary")?.takeIf { it.isNotBlank() } ?: return null
+    return CataloguePreview.Filter(summary)
+}
+
 /**
  * The URL of one item, or null when [path] is not a relative file under the index.
  *
@@ -228,14 +255,14 @@ private fun plainHttps(uri: URI): Boolean =
     uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank() && uri.userInfo == null
 
 /**
- * A relative `themes/...json` or `templates/...json`, or null.
+ * A relative `themes/`, `templates/`, or `filters/` JSON file, or null.
  *
  * The checks are on the text, not on a normalised path: normalisation is what turns
  * `themes/../../secret` into something that looks safe after it has already escaped.
  */
 private fun safePath(path: String): String? {
     if (path.isEmpty() || path != path.trim()) return null
-    if (!(path.startsWith("themes/") || path.startsWith("templates/"))) return null
+    if (!(path.startsWith("themes/") || path.startsWith("templates/") || path.startsWith("filters/"))) return null
     if (!path.endsWith(".json")) return null
     if ('\\' in path || '?' in path || '#' in path || ':' in path || '%' in path) return null
     if (".." in path || "//" in path) return null
@@ -316,13 +343,79 @@ internal fun catalogueTemplate(text: String): Template {
     return Template(name, subject, body)
 }
 
-/** A theme is added when a custom theme already has the key its name would be saved under. */
+/**
+ * A theme is added when a custom theme already has the key its name would be saved under.
+ * A template is added when one has its name. A filter is never "added" here: which
+ * account it lands on is chosen when the person presses Add, so the button stays.
+ */
 internal fun catalogueAdded(item: CatalogueItem, themes: List<Theme>, templates: List<Template>): Boolean =
     when (item.kind) {
         "theme" -> themes.any { it.key == customThemeKey(item.name) }
         "template" -> templates.any { it.name == item.name }
         else -> false
     }
+
+/**
+ * One catalogue filter, ready to write, or why it must not be.
+ *
+ * Read with [ruleOf], the same function that reads a rule out of a Sieve script. The id
+ * is new every time: a recipe installed twice, or onto two accounts, would otherwise
+ * share an id and a later edit could not tell the copies apart. [Rule.global] is forced
+ * off. A catalogue item is one account's rule, not a set pushed to every account.
+ *
+ * A forward is refused even when the rest of the recipe is one this build understands.
+ */
+internal fun prepareCatalogueFilter(text: String): PreparedFilter {
+    val element = runCatching { Json.parseToJsonElement(text) }.getOrNull()
+        ?: return PreparedFilter(null, CATALOGUE_NOT_A_FILTER)
+    val rule = runCatching { ruleOf(element) }.getOrNull()
+    if (rule == null) return PreparedFilter(null, CATALOGUE_NOT_A_FILTER)
+    if (rule.acts.any { it is Act.Forward }) return PreparedFilter(null, CATALOGUE_FORWARDS)
+    if (rule.name.isBlank() || !rule.understood) return PreparedFilter(null, CATALOGUE_NOT_A_FILTER)
+    return PreparedFilter(
+        rule.copy(id = java.util.UUID.randomUUID().toString(), global = false, raw = null),
+        null,
+    )
+}
+
+internal data class PreparedFilter(val rule: Rule?, val reason: String?)
+
+/**
+ * [current] with this recipe added, the way the Filters page would save a new rule.
+ *
+ * Null when the recipe is refused, or when the script was not written by a builder.
+ * Nothing is written in either case. The sentence is [prepareCatalogueFilter]'s reason.
+ */
+internal fun scriptWithCatalogueFilter(current: Script, accountKey: String, text: String): Script? {
+    val rule = prepareCatalogueFilter(text).rule ?: return null
+    return scriptWithNewRule(current, accountKey, rule)
+}
+
+/** The first folder this rule files into that [folders] does not have, as the row says it. */
+internal fun catalogueFolderRefusal(rule: Rule, folders: List<String>): String? {
+    val missing = rule.acts.filterIsInstance<Act.FileInto>().firstOrNull { act ->
+        folders.none { it.equals(act.folder, ignoreCase = true) }
+    } ?: return null
+    return "This account has no folder named ${missing.folder}"
+}
+
+/** The account's own spelling of each folder, after [catalogueFolderRefusal] has passed. */
+internal fun catalogueRuleInFolders(rule: Rule, folders: List<String>): Rule {
+    val acts = rule.acts.map { act ->
+        if (act !is Act.FileInto) act
+        else Act.FileInto(folders.first { it.equals(act.folder, ignoreCase = true) })
+    }
+    return if (acts == rule.acts) rule else rule.copy(acts = acts)
+}
+
+/**
+ * Said in the confirm step when this account already has a rule of the same name.
+ *
+ * The Add button stays. The account is chosen at that moment, so a disabled Added
+ * button would be a claim about an account nobody has picked yet.
+ */
+internal fun alreadyOnAccount(ruleName: String, names: List<String>, label: String): String? =
+    if (names.any { it.equals(ruleName, ignoreCase = true) }) "Already on $label" else null
 
 private val http: HttpClient by lazy {
     HttpClient.newBuilder()
@@ -350,22 +443,16 @@ internal suspend fun loadIndex(address: String): List<CatalogueItem> = withConte
 }
 
 /**
- * Download [item], check it, and save it.
+ * Download [item], check it, and save a theme or a template.
  *
  * Null when it was added. A sentence when it was not, in which case nothing was written.
  * The hash is checked before the bytes are parsed: parsing is what turns them into a
- * theme or a template, and an unverified file is not one.
+ * theme or a template, and an unverified file is not one. A filter is not saved here.
+ * It has to be confirmed onto one account first. See [stageCatalogueFilter].
  */
 internal suspend fun addCatalogueItem(indexAddress: String, item: CatalogueItem): String? = withContext(Dispatchers.IO) {
     try {
-        if (item.size !in 1..CATALOGUE_ITEM_CAP) {
-            throw CatalogueProblem("That item is larger than Rampart will read.")
-        }
-        val url = safeItemUrl(catalogueUri(indexAddress), item.path)
-            ?: throw CatalogueProblem("That item's address is not one Rampart will open.")
-        val bytes = get(url, CATALOGUE_ITEM_CAP, "That item is larger than Rampart will read.")
-        if (!verified(bytes, item)) throw CatalogueProblem(CATALOGUE_MISMATCH)
-        val text = bytes.toString(Charsets.UTF_8)
+        val text = fetchItem(indexAddress, item)
         when (item.kind) {
             "theme" -> installTheme(ThemeJson.decode(text))
             "template" -> installTemplate(catalogueTemplate(text))
@@ -381,6 +468,93 @@ internal suspend fun addCatalogueItem(indexAddress: String, item: CatalogueItem)
     } catch (e: Exception) {
         plainNetworkError(e, catalogueHost(indexAddress))
     }
+}
+
+/**
+ * Download a filter, check it, and describe it. Nothing is written.
+ *
+ * The account is already chosen. [FilterStage.Ready] is what the row confirms: the rule
+ * in the same words the Filters page uses, which account it would land on, and whether
+ * that account already has a rule of this name.
+ */
+internal suspend fun stageCatalogueFilter(
+    indexAddress: String,
+    item: CatalogueItem,
+    accountLabel: String,
+    backend: MailBackend?,
+): FilterStage = withContext(Dispatchers.IO) {
+    val blocked = noFiltersBecause(backend, accountLabel)
+    if (blocked != null || backend == null) {
+        return@withContext FilterStage.Failed(blocked ?: "Sign in to an account to keep filters.")
+    }
+    try {
+        val text = fetchItem(indexAddress, item)
+        val prepared = prepareCatalogueFilter(text)
+        val rule = prepared.rule ?: return@withContext FilterStage.Failed(prepared.reason ?: CATALOGUE_NOT_A_FILTER)
+        val (chosen, script) = runningScript(backend)
+        if (chosen != null && !script.editable) return@withContext FilterStage.Failed(UNEDITABLE_FILTERS)
+        FilterStage.Ready(
+            rule = rule,
+            words = summarise(rule),
+            already = alreadyOnAccount(rule.name, script.rules.map { it.name }, accountLabel),
+        )
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: CatalogueProblem) {
+        FilterStage.Failed(e.message ?: CATALOGUE_NOT_A_FILTER)
+    } catch (e: Exception) {
+        FilterStage.Failed(e.message ?: "That could not be added.")
+    }
+}
+
+/**
+ * Write a filter that was already confirmed.
+ *
+ * Null when it was added. A sentence when it was not, and the account is left as it was.
+ * A folder the recipe files into has to exist on this account. The check uses the names
+ * the server has now, the same list the Filters page offers.
+ */
+internal suspend fun commitCatalogueFilter(
+    backend: MailBackend?,
+    accountKey: String,
+    accountLabel: String,
+    rule: Rule,
+): String? = withContext(Dispatchers.IO) {
+    val blocked = noFiltersBecause(backend, accountLabel)
+    if (blocked != null || backend == null) return@withContext blocked ?: "Sign in to an account to keep filters."
+    try {
+        val names = backend.mailboxes().map { it.name }
+        catalogueFolderRefusal(rule, names)?.let { return@withContext it }
+        addFilter(backend, accountKey, catalogueRuleInFolders(rule, names))
+        null
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        e.message ?: "That could not be added."
+    }
+}
+
+/** A filter the row can confirm, or the sentence that says why it cannot. */
+internal sealed interface FilterStage {
+    data class Ready(val rule: Rule, val words: String, val already: String?) : FilterStage
+    data class Failed(val reason: String) : FilterStage
+}
+
+/**
+ * The item's bytes, after the size and the hash have both matched.
+ *
+ * Throws [CatalogueProblem]. Parsing comes after this, so a file that did not match is
+ * never turned into a theme, a template, or a filter.
+ */
+private fun fetchItem(indexAddress: String, item: CatalogueItem): String {
+    if (item.size !in 1..CATALOGUE_ITEM_CAP) {
+        throw CatalogueProblem("That item is larger than Rampart will read.")
+    }
+    val url = safeItemUrl(catalogueUri(indexAddress), item.path)
+        ?: throw CatalogueProblem("That item's address is not one Rampart will open.")
+    val bytes = get(url, CATALOGUE_ITEM_CAP, "That item is larger than Rampart will read.")
+    if (!verified(bytes, item)) throw CatalogueProblem(CATALOGUE_MISMATCH)
+    return bytes.toString(Charsets.UTF_8)
 }
 
 private fun get(start: URI, cap: Int, tooBig: String): ByteArray {
@@ -439,14 +613,47 @@ private fun hex(obj: JsonObject, name: String): String? {
     return value.takeIf { HEX_COLOUR.matches(it) }
 }
 
+private data class FilterChoice(val key: String, val label: String, val reason: String?)
+
+private sealed interface FilterDraft {
+    val path: String
+
+    /** More than one account can keep a filter, so the row asks which. */
+    data class Pick(override val path: String, val choices: List<FilterChoice>) : FilterDraft
+
+    /** The rule in words, the account, and Add filter or Cancel. Nothing is written yet. */
+    data class Confirm(
+        override val path: String,
+        val accountKey: String,
+        val label: String,
+        val words: String,
+        val already: String?,
+        val rule: Rule,
+    ) : FilterDraft
+}
+
+private fun filterChoices(
+    accounts: List<AccountMailboxes>,
+    backendFor: (String) -> MailBackend?,
+): List<FilterChoice> = accounts.map { account ->
+    val label = account.email.ifBlank { account.name }.ifBlank { "This account" }
+    FilterChoice(account.key, label, noFiltersBecause(backendFor(account.key), label))
+}
+
 /**
  * The catalogue page.
  *
  * Composed only while this settings page is the one on screen, which is what keeps the
  * fetch off startup and off any timer. Changing the address at the bottom loads again.
+ *
+ * A filter is confirmed in its row before it is written, and it is written to one
+ * account's server rather than kept on this computer the way a theme is.
  */
 @Composable
-internal fun CataloguePage() {
+internal fun CataloguePage(
+    accounts: List<AccountMailboxes> = emptyList(),
+    backendFor: (String) -> MailBackend? = { null },
+) {
     var draft by remember { mutableStateOf(Settings.catalogue()) }
     var address by remember { mutableStateOf(draft.ifBlank { DEFAULT_CATALOGUE }) }
     var generation by remember { mutableStateOf(0) }
@@ -456,7 +663,11 @@ internal fun CataloguePage() {
     var themes by remember { mutableStateOf(Settings.customThemes()) }
     var templates by remember { mutableStateOf(Templates.read()) }
     var rowErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    // A filter added this visit, so the row says where it went instead of going quiet.
+    var filterAdded by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var busy by remember { mutableStateOf<String?>(null) }
+    var filterTicket by remember { mutableStateOf(0) }
+    var filterDraft by remember { mutableStateOf<FilterDraft?>(null) }
     val scope = rememberCoroutineScope()
 
     fun commit(raw: String, force: Boolean = false) {
@@ -473,6 +684,9 @@ internal fun CataloguePage() {
             error = null
             items = emptyList()
             rowErrors = emptyMap()
+            filterTicket += 1
+            filterDraft = null
+            busy = null
         }
     }
 
@@ -511,9 +725,88 @@ internal fun CataloguePage() {
         }
     }
 
+    fun cancelFilter() {
+        val path = filterDraft?.path
+        filterTicket += 1
+        filterDraft = null
+        if (path != null && busy == path) busy = null
+    }
+
+    fun stageFilter(item: CatalogueItem, choice: FilterChoice) {
+        if (busy != null) return
+        filterTicket += 1
+        val ticket = filterTicket
+        busy = item.path
+        filterDraft = null
+        rowErrors = rowErrors - item.path
+        val index = address
+        scope.launch {
+            try {
+                val outcome = stageCatalogueFilter(index, item, choice.label, backendFor(choice.key))
+                if (ticket != filterTicket) return@launch
+                when (outcome) {
+                    is FilterStage.Failed -> rowErrors = rowErrors + (item.path to outcome.reason)
+                    is FilterStage.Ready -> filterDraft = FilterDraft.Confirm(
+                        path = item.path,
+                        accountKey = choice.key,
+                        label = choice.label,
+                        words = outcome.words,
+                        already = outcome.already,
+                        rule = outcome.rule,
+                    )
+                }
+            } finally {
+                if (ticket == filterTicket && busy == item.path) busy = null
+            }
+        }
+    }
+
+    fun beginFilter(item: CatalogueItem) {
+        if (busy != null) return
+        filterAdded = filterAdded - item.path
+        rowErrors = rowErrors - item.path
+        val choices = filterChoices(accounts, backendFor)
+        val open = choices.filter { it.reason == null }
+        when {
+            open.size == 1 -> stageFilter(item, open.single())
+            open.size > 1 -> filterDraft = FilterDraft.Pick(item.path, choices)
+            else -> {
+                val reasons = choices.mapNotNull { it.reason }
+                if (reasons.size > 1) filterDraft = FilterDraft.Pick(item.path, choices)
+                else rowErrors = rowErrors + (item.path to (reasons.singleOrNull() ?: "Sign in to an account to keep filters."))
+            }
+        }
+    }
+
+    fun commitFilter(confirm: FilterDraft.Confirm) {
+        if (busy != null) return
+        filterTicket += 1
+        val ticket = filterTicket
+        busy = confirm.path
+        rowErrors = rowErrors - confirm.path
+        scope.launch {
+            try {
+                val problem = commitCatalogueFilter(
+                    backendFor(confirm.accountKey),
+                    confirm.accountKey,
+                    confirm.label,
+                    confirm.rule,
+                )
+                if (ticket != filterTicket) return@launch
+                if (problem == null) {
+                    filterDraft = null
+                    filterAdded = filterAdded + (confirm.path to "Added to ${confirm.label}.")
+                }
+                else rowErrors = rowErrors + (confirm.path to problem)
+            } finally {
+                if (ticket == filterTicket && busy == confirm.path) busy = null
+            }
+        }
+    }
+
     Section(
         "Catalogue",
-        "Add a theme or a message template. An item is colours or text, and nothing else.",
+        "Add a theme, a message template, or a filter. An item is data, and nothing else.",
     )
     Text(
         "Opening this contacts ${catalogueHost(address)}.",
@@ -556,6 +849,18 @@ internal fun CataloguePage() {
                 rowErrors = rowErrors,
                 busy = busy,
                 onAdd = { add(it) },
+            )
+            Spacer(Modifier.height(8.dp))
+            FilterGroup(
+                rows = items.filter { it.kind == "filter" },
+                draft = filterDraft,
+                rowErrors = rowErrors,
+                added = filterAdded,
+                busy = busy,
+                onAdd = { beginFilter(it) },
+                onPick = { item, choice -> stageFilter(item, choice) },
+                onConfirm = { commitFilter(it) },
+                onCancel = { cancelFilter() },
             )
         }
     }
@@ -602,6 +907,97 @@ private fun CatalogueGroup(
 }
 
 @Composable
+private fun FilterGroup(
+    rows: List<CatalogueItem>,
+    draft: FilterDraft?,
+    rowErrors: Map<String, String>,
+    added: Map<String, String>,
+    busy: String?,
+    onAdd: (CatalogueItem) -> Unit,
+    onPick: (CatalogueItem, FilterChoice) -> Unit,
+    onConfirm: (FilterDraft.Confirm) -> Unit,
+    onCancel: () -> Unit,
+) {
+    Section(
+        "Filters",
+        "A ready-made rule, saved on one account's server. You see what it does before it is added.",
+    )
+    if (rows.isEmpty()) {
+        Text(
+            "None in this catalogue.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline,
+        )
+        return
+    }
+    rows.forEach { item ->
+        val here = draft?.takeIf { it.path == item.path }
+        CatalogueRow(
+            item = item,
+            added = false,
+            error = rowErrors[item.path],
+            busy = busy == item.path,
+            enabled = busy == null || busy == item.path,
+            onAdd = { onAdd(item) },
+            below = {
+                if (here == null) added[item.path]?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                }
+                FilterBelow(
+                    draft = here,
+                    busy = busy == item.path,
+                    enabled = busy == null || busy == item.path,
+                    onPick = { onPick(item, it) },
+                    onConfirm = onConfirm,
+                    onCancel = onCancel,
+                )
+            },
+            showAdd = here == null,
+        )
+    }
+}
+
+@Composable
+private fun FilterBelow(
+    draft: FilterDraft?,
+    busy: Boolean,
+    enabled: Boolean,
+    onPick: (FilterChoice) -> Unit,
+    onConfirm: (FilterDraft.Confirm) -> Unit,
+    onCancel: () -> Unit,
+) {
+    when (draft) {
+        null -> Unit
+        is FilterDraft.Pick -> {
+            if (draft.choices.any { it.reason == null }) {
+                Text("Which account?", style = MaterialTheme.typography.bodySmall)
+            }
+            draft.choices.forEach { choice ->
+                if (choice.reason == null) {
+                    TextButton(onClick = { onPick(choice) }, enabled = enabled && !busy) { Text(choice.label) }
+                }
+            }
+            draft.choices.forEach { choice ->
+                val reason = choice.reason ?: return@forEach
+                Text(reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+            }
+            TextButton(onClick = onCancel, enabled = !busy) { Text("Cancel") }
+        }
+        is FilterDraft.Confirm -> {
+            Text(draft.words, style = MaterialTheme.typography.bodySmall)
+            Text(draft.label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+            draft.already?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { onConfirm(draft) }, enabled = enabled && !busy) {
+                    Text(if (busy) "Adding" else "Add filter")
+                }
+                TextButton(onClick = onCancel, enabled = !busy) { Text("Cancel") }
+            }
+        }
+    }
+}
+
+@Composable
 private fun CatalogueRow(
     item: CatalogueItem,
     added: Boolean,
@@ -609,6 +1005,8 @@ private fun CatalogueRow(
     busy: Boolean,
     enabled: Boolean,
     onAdd: () -> Unit,
+    below: @Composable () -> Unit = {},
+    showAdd: Boolean = true,
 ) {
     Row(
         Modifier.fillMaxWidth().padding(bottom = 14.dp),
@@ -622,6 +1020,7 @@ private fun CatalogueRow(
                 }
             }
             is CataloguePreview.Template -> Unit
+            is CataloguePreview.Filter -> Unit
         }
         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
             Text(item.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
@@ -647,6 +1046,14 @@ private fun CatalogueRow(
                     color = MaterialTheme.colorScheme.outline,
                 )
             }
+            if (item.preview is CataloguePreview.Filter) {
+                Text(
+                    item.preview.summary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+            below()
             if (!error.isNullOrBlank()) {
                 Text(
                     error,
@@ -655,10 +1062,12 @@ private fun CatalogueRow(
                 )
             }
         }
-        if (added) {
-            OutlinedButton(onClick = {}, enabled = false) { Text("Added") }
-        } else {
-            OutlinedButton(onClick = onAdd, enabled = enabled && !busy) { Text(if (busy) "Adding" else "Add") }
+        if (showAdd) {
+            if (added) {
+                OutlinedButton(onClick = {}, enabled = false) { Text("Added") }
+            } else {
+                OutlinedButton(onClick = onAdd, enabled = enabled && !busy) { Text(if (busy) "Adding" else "Add") }
+            }
         }
     }
 }

@@ -240,7 +240,7 @@ internal fun SettingsPane(
                                 sidebarIcons, onSidebarIcons, onAppearance, onOrderAll,
                                 onBrowseCatalogue = { page = "catalogue" },
                             )
-                            "catalogue" -> CataloguePage()
+                            "catalogue" -> CataloguePage(accounts, backendFor)
                             "identities" -> IdentitiesPage(
                                 accounts, account, onAccount, identities, signatureError, onSignature, onPickSignatureImage,
                             )

@@ -8,6 +8,8 @@ import kotlin.io.path.deleteIfExists
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -206,6 +208,83 @@ class CatalogueTest {
     }
 
     @Test
+    fun `parseIndex accepts a filter and its path stays under the catalogue`() {
+        val items = parseIndex(
+            indexJson(
+                filterEntry(),
+                filterEntry(id = "escaped", path = "filters/../x.json"),
+                """{"kind":"filter","id":"bare","name":"Bare","path":"filters/bare.json","size":12,"sha256":"$SHA","preview":{}}""",
+            ),
+        )
+        assertEquals(listOf("newsletters"), items.map { it.id })
+        assertEquals("filter", items.single().kind)
+        val preview = items.single().preview as CataloguePreview.Filter
+        assertEquals("File newsletters and mark them read.", preview.summary)
+        assertEquals(
+            URI("https://raw.githubusercontent.com/thejdubb02/rampart-catalogue/main/filters/x.json"),
+            safeItemUrl(index, "filters/x.json"),
+        )
+        assertNull(safeItemUrl(index, "filters/../x.json"))
+    }
+
+    @Test
+    fun `a filter recipe files into a folder and marks read`() {
+        val first = assertNotNull(scriptWithCatalogueFilter(Script(emptyList()), "acct", FILE_AND_READ))
+        val again = assertNotNull(scriptWithCatalogueFilter(first, "acct", FILE_AND_READ))
+        val added = ownRules(again)
+        assertEquals(2, added.size)
+        assertNotEquals(added[0].id, added[1].id)
+        added.forEach { rule ->
+            assertEquals("Newsletters", rule.name)
+            assertFalse(rule.global)
+            assertNotEquals("recipe-1", rule.id)
+            assertEquals(listOf(Act.FileInto("Reading"), Act.MarkRead), rule.acts)
+        }
+    }
+
+    @Test
+    fun `a filter recipe that forwards is refused`() {
+        listOf("forward", "redirect").forEach { type ->
+            val prepared = prepareCatalogueFilter(forwardRecipe(type))
+            assertNull(prepared.rule)
+            assertEquals("This recipe forwards mail, so it was not added.", prepared.reason)
+            assertNull(scriptWithCatalogueFilter(Script(emptyList()), "acct", forwardRecipe(type)))
+        }
+    }
+
+    @Test
+    fun `a filter recipe that does not parse is refused`() {
+        listOf("nope", """{"hello":"there"}""", NOT_UNDERSTOOD).forEach { text ->
+            val prepared = prepareCatalogueFilter(text)
+            assertNull(prepared.rule, text)
+            assertEquals(CATALOGUE_NOT_A_FILTER, prepared.reason)
+            assertNull(scriptWithCatalogueFilter(Script(emptyList()), "acct", text))
+        }
+    }
+
+    @Test
+    fun `a filter that deletes is kept and the words say delete`() {
+        val rule = assertNotNull(prepareCatalogueFilter(DELETE_RECIPE).rule)
+        assertEquals(listOf(Act.Delete), rule.acts)
+        assertTrue("delete" in summarise(rule))
+    }
+
+    @Test
+    fun `a filter for a missing folder names that folder`() {
+        val rule = assertNotNull(prepareCatalogueFilter(FILE_AND_READ).rule)
+        assertEquals("This account has no folder named Reading", catalogueFolderRefusal(rule, listOf("Inbox")))
+        assertNull(catalogueFolderRefusal(rule, listOf("reading")))
+        val fitted = catalogueRuleInFolders(rule, listOf("reading"))
+        assertEquals("reading", (fitted.acts.first() as Act.FileInto).folder)
+    }
+
+    @Test
+    fun `a filter already on the account is said in the confirm step`() {
+        assertEquals("Already on Work", alreadyOnAccount("Newsletters", listOf("newsletters"), "Work"))
+        assertNull(alreadyOnAccount("Newsletters", listOf("Receipts"), "Work"))
+    }
+
+    @Test
     fun `added means the saved theme key or the saved template name`() {
         val theme = ThemeJson.decode(HYBRID)
         val themeItem = parseIndex(indexJson(themeEntry())).single()
@@ -260,6 +339,63 @@ private fun themeEntry(
         "accent": "#7BA3B0",
         "page": {"background": "#F4F1EA", "text": "#1C1A17", "accent": "#3D5A4C"}
       }
+    }
+""".trimIndent()
+
+private fun filterEntry(
+    id: String = "newsletters",
+    path: String = "filters/newsletters.json",
+) = """
+    {
+      "kind": "filter",
+      "id": "$id",
+      "name": "Newsletters",
+      "description": "File digests away.",
+      "author": "Rampart",
+      "path": "$path",
+      "size": 180,
+      "sha256": "$SHA",
+      "preview": {"summary": "File newsletters and mark them read."}
+    }
+""".trimIndent()
+
+private val FILE_AND_READ = """
+    {
+      "id": "recipe-1",
+      "name": "Newsletters",
+      "global": true,
+      "matchType": "all",
+      "conditions": [
+        {"field": "from", "comparator": "contains", "value": "news.example"}
+      ],
+      "actions": [
+        {"type": "move", "value": "Reading"},
+        {"type": "mark_read"}
+      ]
+    }
+""".trimIndent()
+
+private fun forwardRecipe(type: String) = """
+    {
+      "name": "Send away",
+      "conditions": [{"field": "from", "comparator": "contains", "value": "boss"}],
+      "actions": [{"type": "$type", "value": "other@example.com"}]
+    }
+""".trimIndent()
+
+private val NOT_UNDERSTOOD = """
+    {
+      "name": "Odd",
+      "conditions": [{"field": "from", "comparator": "contains", "value": "a"}],
+      "actions": [{"type": "explode"}]
+    }
+""".trimIndent()
+
+private val DELETE_RECIPE = """
+    {
+      "name": "Drop digests",
+      "conditions": [{"field": "from", "comparator": "contains", "value": "news.example"}],
+      "actions": [{"type": "delete"}]
     }
 """.trimIndent()
 

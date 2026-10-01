@@ -84,8 +84,8 @@ at a time and never by default.
   <img src="docs/images/reader-dark.png" width="440" alt="Rampart in a dark theme">
 </p>
 
-Twenty-one themes, the window's title bar included, and a catalogue of further themes and
-message templates, fetched only when you open it. Keyboard shortcuts with the list on `?`,
+Twenty-one themes, the window's title bar included, and a catalogue of further themes,
+message templates, and filters, fetched only when you open it. Keyboard shortcuts with the list on `?`,
 a command palette on Ctrl+K, passwords in the operating system's credential store, and it
 updates itself.
 
