@@ -36,7 +36,7 @@ import kotlinx.coroutines.flow.first
  * The update, as a line in the window bottom bar rather than a card over the mail.
  *
  * Shown only when an update attempt has failed, so there are not two prompts on screen
- * at once while the icon beside the version label in the right bar is showing.
+ * at once while the update icon in the right bar is showing.
  */
 @Composable
 internal fun UpdateBar(state: UpdateBarState, onClick: () -> Unit) {

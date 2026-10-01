@@ -240,7 +240,7 @@ private fun PanelEdge(tool: SideTool, available: Float?) {
 /**
  * The bar itself: one button per tool, top to bottom in [SideTool]'s order.
  *
- * Dashboard, Settings, the version and the accounts are pinned to the bottom edge.
+ * Dashboard, Settings, a waiting update and the accounts are pinned to the bottom edge.
  * They are measured first, and a short window clips the tools above them. The
  * accounts moved here so a long folder list can no longer scroll them away.
  */
@@ -286,39 +286,39 @@ private fun Bar(
         )
         BarAction(
             icon = RampartIcons.Settings,
-            label = "Settings",
+            label = Updates.current?.let { "Settings (Rampart $it)" } ?: "Settings",
             active = inSettings,
             onClick = onSettings,
         )
-        VersionLabel(updateState, onUpdate)
+        UpdateIcon(updateState, onUpdate)
         AccountSwitcher(accounts, currentAccount, onAccount = onSettings, onAdd = onAddAccount)
     }
 }
 
 /**
- * The running version, just above the accounts.
+ * An update waiting to be installed, as one icon above the accounts.
  *
- * Once an update is staged, the line reads "Update to <version>" and a click installs
- * it and restarts. During install, a spinner takes the place of the arrow. A development
- * build shows the plain version and nothing to press.
+ * The running version used to be printed here as well, and in a rail this narrow
+ * "0.1.438" was cut off at the edge. It is now in the Settings tooltip and on the
+ * Updates page, and this spot only shows anything when there is something to press.
+ * A click on a waiting update installs it and restarts; during install a spinner
+ * takes the icon's place.
  */
 @Composable
-private fun VersionLabel(updateState: UpdateBarState, onUpdate: () -> Unit) {
-    val running = Updates.current
+private fun UpdateIcon(updateState: UpdateBarState, onUpdate: () -> Unit) {
     val canUpdate = remember { Updates.canUpdate() }
     val offered = if (canUpdate) updateState else UpdateBarState.Hidden
-    if (running == null && offered is UpdateBarState.Hidden) return
-    val text = if (offered is UpdateBarState.Waiting) offered.label else (running ?: "dev")
     val tooltip = when (offered) {
-        is UpdateBarState.Waiting -> "Click to install and restart"
-        is UpdateBarState.Staging, is UpdateBarState.Installing -> "Updating"
+        is UpdateBarState.Waiting -> "${offered.label}: click to install and restart"
+        is UpdateBarState.Staging, is UpdateBarState.Installing -> offered.label
         is UpdateBarState.Failed -> offered.message
-        UpdateBarState.Hidden -> null
+        UpdateBarState.Hidden -> return
     }
     val clickable = offered is UpdateBarState.Waiting || offered is UpdateBarState.Failed
-    val content = @Composable {
-        Row(
+    SidebarTooltip(tooltip) {
+        Box(
             modifier = Modifier
+                .size(26.dp)
                 .clip(MaterialTheme.shapes.extraSmall)
                 .then(
                     if (clickable) {
@@ -332,62 +332,33 @@ private fun VersionLabel(updateState: UpdateBarState, onUpdate: () -> Unit) {
                     }
                 )
                 // A waiting update is a pill in the accent colour, so it reads as something
-                // to press rather than a label that happens to have an icon beside it.
+                // to press rather than a decoration.
                 .then(
                     if (offered is UpdateBarState.Waiting) {
                         Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f))
                     } else {
                         Modifier
                     }
-                )
-                .padding(horizontal = 2.dp, vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center,
+                ),
+            contentAlignment = Alignment.Center,
         ) {
-            Text(
-                text,
-                style = MaterialTheme.typography.labelSmall,
-                color = if (offered is UpdateBarState.Waiting) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.outline
-                },
-                maxLines = 1,
-            )
             when (offered) {
-                is UpdateBarState.Waiting -> {
-                    Spacer(Modifier.width(2.dp))
-                    Icon(
-                        RampartIcons.Download,
-                        contentDescription = "Click to install and restart",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(11.dp).updateBob(offered.version),
-                    )
-                }
-                is UpdateBarState.Staging, is UpdateBarState.Installing -> {
-                    Spacer(Modifier.width(2.dp))
-                    Spinner(size = 11.dp, thickness = 2.dp)
-                }
-                is UpdateBarState.Failed -> {
-                    Spacer(Modifier.width(2.dp))
-                    Icon(
-                        RampartIcons.Download,
-                        contentDescription = offered.message,
-                        tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(11.dp),
-                    )
-                }
+                is UpdateBarState.Waiting -> Icon(
+                    RampartIcons.Download,
+                    contentDescription = tooltip,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(14.dp).updateBob(offered.version),
+                )
+                is UpdateBarState.Staging, is UpdateBarState.Installing -> Spinner(size = 14.dp, thickness = 2.dp)
+                is UpdateBarState.Failed -> Icon(
+                    RampartIcons.Download,
+                    contentDescription = tooltip,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(14.dp),
+                )
                 UpdateBarState.Hidden -> Unit
             }
         }
-    }
-
-    if (tooltip != null) {
-        SidebarTooltip(tooltip) {
-            content()
-        }
-    } else {
-        content()
     }
 }
 
