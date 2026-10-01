@@ -273,6 +273,9 @@ internal fun WebBody(
                     Diagnostics.duration(Metric.MESSAGE_OPEN_RENDER, (System.nanoTime() - handedOver) / 1_000_000.0)
                     (view.engine.executeScript("window") as JSObject).setMember("rampart", bridge)
                     view.engine.executeScript(darkSwitch(bridge.dark, bridge.paper, bridge.ink))
+                    // Before either height read below. A spacer still in the page would be
+                    // measured, and the panel would be sized to the gap.
+                    view.engine.executeScript(COLLAPSE_BLANK_GAPS)
                     view.engine.executeScript(WIRING)
                     ticker.set(
                         measure(
@@ -874,6 +877,58 @@ internal fun nextBodyHeight(current: Int, measured: Int, cap: Int = TALLEST): In
     if (measured <= 0) return current.coerceIn(1, cap)
     return measured.coerceIn(1, cap)
 }
+
+/**
+ * Drops a screen-tall spacer once the page has been laid out.
+ *
+ * The string pass can see a run of breaks. It cannot see a cell whose height, padding
+ * or margin came out at 700 pixels with nothing in it. This walks the laid-out tree
+ * once, after the document has loaded and before the height is read, and lets such a
+ * box shrink. A box that still will not shrink is clipped to one blank line. Text, a
+ * picture, a rule or a background image means the sender meant the space, so it stays.
+ * Only the outermost match is changed: capping a box and then every box inside it
+ * would fight the layout the first change just produced.
+ */
+private const val COLLAPSE_BLANK_GAPS = """
+(function () {
+  var body = document.body;
+  if (!body) return;
+  var capped = [];
+  var nodes = body.querySelectorAll('*');
+  for (var i = 0; i < nodes.length; i++) {
+    var el = nodes[i];
+    if (getComputedStyle(el).display === 'none') continue;
+    var under = false;
+    for (var c = 0; c < capped.length; c++) {
+      if (capped[c].contains(el)) { under = true; break; }
+    }
+    if (under) continue;
+    if (el.getBoundingClientRect().height <= 160) continue;
+    if ((el.innerText || '').trim() !== '') continue;
+    if (el.querySelector('img, svg, video, canvas, iframe, object, embed, input, button, hr')) continue;
+    if (!bare(el)) continue;
+    el.style.height = 'auto';
+    el.style.minHeight = '0';
+    el.style.paddingTop = '0';
+    el.style.paddingBottom = '0';
+    if (el.getBoundingClientRect().height > 160) {
+      el.style.maxHeight = '24px';
+      el.style.overflow = 'hidden';
+    }
+    capped.push(el);
+  }
+  // A background image is the picture, even when it is painted on a child rather than
+  // on the box itself. `none` is the computed value when there is nothing to paint.
+  function bare(el) {
+    if (getComputedStyle(el).backgroundImage !== 'none') return false;
+    var kids = el.querySelectorAll('*');
+    for (var k = 0; k < kids.length; k++) {
+      if (getComputedStyle(kids[k]).backgroundImage !== 'none') return false;
+    }
+    return true;
+  }
+})();
+"""
 
 /**
  * The page's own height, in its pixels, or 0 when it has no width yet.

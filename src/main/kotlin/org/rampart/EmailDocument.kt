@@ -53,7 +53,7 @@ internal fun emailDocument(
     pageBackground: String = "#ffffff",
     pageText: String = "#1a1a1a",
 ): EmailPage {
-    val source = Jsoup.parse(withoutTofu(html)).also(::scrubTofu)
+    val source = Jsoup.parse(collapseBlankRuns(withoutTofu(html))).also(::scrubTofu)
     val clean = Cleaner(EMAIL_SAFELIST).clean(source)
     clean.outputSettings().prettyPrint(false)
     val held = resolveImages(clean, carried, remoteImages)
@@ -94,6 +94,87 @@ internal fun emailDocument(
         held,
     )
 }
+
+/**
+ * Collapses the blank runs that leave a screen of nothing between two paragraphs.
+ *
+ * Three breaks is the point where a paragraph gap becomes a hole, so a longer run
+ * becomes two. A stack of paragraphs or divs whose only content is whitespace, a
+ * no-break space or a break is the same hole written the other way, and becomes the
+ * first of them. The two can mix in one run: a gap is often a paragraph and then a
+ * div. Anything inside preformatted text, a textarea or a stylesheet is left byte
+ * for byte, because there a run of breaks is the content.
+ */
+internal fun collapseBlankRuns(html: String): String {
+    val held = ArrayList<String>()
+    // A NUL is never in mail text, so it cannot collide with what it marks.
+    val marker = "\u0000"
+    val masked = PROTECTED_REGION.replace(html) { match ->
+        held.add(match.value)
+        marker + held.lastIndex + marker
+    }
+    return restoreProtected(collapseEmptyBlocks(collapseBreakRuns(masked)), held, marker)
+}
+
+private fun restoreProtected(masked: String, held: List<String>, marker: String): String {
+    if (held.isEmpty()) return masked
+    val pattern = Regex(Regex.escape(marker) + "(\\d+)" + Regex.escape(marker))
+    return pattern.replace(masked) { held.getOrNull(it.groupValues[1].toIntOrNull() ?: -1) ?: it.value }
+}
+
+/** A run of three or more breaks, with only whitespace between them, becomes the first two. */
+private fun collapseBreakRuns(html: String): String =
+    BR_RUN.replace(html) { match ->
+        BR_TAG.findAll(match.value).take(2).joinToString("") { it.value }
+    }
+
+/**
+ * A run of two or more empty paragraphs or divs becomes the first.
+ *
+ * Empty means the element holds only whitespace, `&nbsp;`, `&#160;` or breaks.
+ * Whitespace between two such elements still counts as one run.
+ */
+private fun collapseEmptyBlocks(html: String): String {
+    val out = StringBuilder()
+    var i = 0
+    while (i < html.length) {
+        val match = EMPTY_BLOCK.find(html, i) ?: break
+        out.append(html, i, match.range.first)
+        var runEnd = match.range.last + 1
+        while (true) {
+            val gap = html.drop(runEnd).takeWhile { it.isWhitespace() }.length
+            val following = EMPTY_BLOCK.find(html, runEnd + gap) ?: break
+            if (following.range.first != runEnd + gap) break
+            runEnd = following.range.last + 1
+        }
+        // One empty block is a paragraph break and stays. The rest of a run does not.
+        out.append(match.value)
+        i = runEnd
+    }
+    if (i < html.length) out.append(html, i, html.length)
+    return out.toString()
+}
+
+private val BR_TAG = Regex("<br\\b[^>]*>", RegexOption.IGNORE_CASE)
+
+private val BR_RUN = Regex("<br\\b[^>]*>(?:\\s*<br\\b[^>]*>){2,}", RegexOption.IGNORE_CASE)
+
+/**
+ * An empty `<p>` or `<div>`, including one whose only child is a break.
+ *
+ * The character as well as the entities: some senders write the no-break space
+ * as the character itself, and it is the same gap.
+ */
+private val EMPTY_BLOCK = Regex(
+    "<(p|div)\\b[^>]*>(?:[\\s\u00A0]|&nbsp;?|&#0*160;?|&#x0*a0;?|<br\\b[^>]*>)*</\\1\\s*>",
+    RegexOption.IGNORE_CASE,
+)
+
+/** `pre`, `textarea` and `style`, through the closing tag or to the end if it is never closed. */
+private val PROTECTED_REGION = Regex(
+    "<(pre|textarea|style)\\b[^>]*>[\\s\\S]*?</\\1\\s*>|<(?:pre|textarea|style)\\b[^>]*>[\\s\\S]*\\z",
+    RegexOption.IGNORE_CASE,
+)
 
 /**
  * The message's own stylesheet, carried over by hand.
