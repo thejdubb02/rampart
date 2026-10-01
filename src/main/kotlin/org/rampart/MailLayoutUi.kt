@@ -96,6 +96,8 @@ internal fun MailPanes(
     list: @Composable (fillWidth: Boolean) -> Unit,
     reading: @Composable () -> Unit,
     notice: @Composable () -> Unit = {},
+    /** The page the message is drawn on, so Back in the focused layout sits on it too. */
+    page: @Composable (@Composable () -> Unit) -> Unit = { it() },
 ) {
     // List and message share one branch. Two branches would throw the list away
     // on the way from one to the other, and Back would open it again at the top.
@@ -103,7 +105,7 @@ internal fun MailPanes(
         PaneArrangement.SIDE_BY_SIDE -> SideBySide(modifier, list, reading, notice)
         PaneArrangement.STACKED -> Stacked(modifier, list, reading, notice)
         PaneArrangement.LIST, PaneArrangement.MESSAGE ->
-            Focused(modifier, arrangement == PaneArrangement.MESSAGE, onBack, list, reading, notice)
+            Focused(modifier, arrangement == PaneArrangement.MESSAGE, onBack, list, reading, notice, page)
     }
 }
 
@@ -160,16 +162,19 @@ private fun Focused(
     list: @Composable (Boolean) -> Unit,
     reading: @Composable () -> Unit,
     notice: @Composable () -> Unit,
+    page: @Composable (@Composable () -> Unit) -> Unit,
 ) {
     Box(modifier.fillMaxSize()) {
         Box(Modifier.fillMaxSize().graphicsLayer { alpha = if (messageOpen) 0f else 1f }) {
             list(true)
         }
         if (messageOpen) {
-            Column(Modifier.fillMaxSize()) {
-                FocusedBackBar(onBack)
-                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { notice() }
-                Box(Modifier.weight(1f).fillMaxWidth()) { reading() }
+            page {
+                Column(Modifier.fillMaxSize()) {
+                    FocusedBackBar(onBack)
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { notice() }
+                    Box(Modifier.weight(1f).fillMaxWidth()) { reading() }
+                }
             }
         } else {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) { notice() }

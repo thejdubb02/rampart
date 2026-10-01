@@ -6316,6 +6316,7 @@ private fun Reader(
             CompositionLocalProvider(LocalViewingJunk provides viewingJunk) {
             MailPanes(
                 modifier = Modifier.weight(1f).fillMaxHeight(),
+                page = { content -> ReadingPage(messageMode, Modifier.fillMaxSize(), content) },
                 layout = MailLayoutState.layout,
                 messageOpen = showsFocusedMessage(
                     MailLayoutState.layout,
