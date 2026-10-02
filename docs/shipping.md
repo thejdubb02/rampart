@@ -27,6 +27,13 @@ XML file listing the current version and where to get it. Windows re-reads it on
 schedule and in the background, whether or not the app is running, and downloads only the
 blocks that changed.
 
+Measured on 2026-10-02 by comparing the `AppxBlockMap.xml` of 0.1.447 and 0.1.450: the
+package is 222 MB and the update fetched 11.4 MB (5%), all of it Rampart's own jar. The
+Java runtime and the JavaFX web engine are reused block for block. This is why Rampart does
+not load feature modules at runtime: it would save a few of those 11 MB, and it would turn
+the release channel into a way to push unreviewed code into a running mail client. Data
+that changes often (the catalogue) is fetched live; code ships through the signed package.
+
 On top of that, Rampart asks GitHub every half hour whether there is a newer release, and
 downloads the manifest as soon as there is one. It is a mail client: it stays open for
 days, so the moment somebody finally agrees to update is the wrong moment to find out the
