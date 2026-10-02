@@ -451,6 +451,8 @@ internal fun Composer(
     /** The technical line under [error], when the failure came from the server. */
     errorDetail: String? = null,
     onDiscard: () -> Unit,
+    /** Closes the panel and keeps the draft. Gets the draft when it differs from what was opened, so the caller can save it; null when there is nothing new to keep. */
+    onClose: (Draft?) -> Unit,
     onSend: (Draft) -> Unit,
     /** Writes the draft to the server. Null while there is nowhere to write it. */
     onSave: (suspend (Draft) -> Unit)? = null,
@@ -868,7 +870,7 @@ internal fun Composer(
                 true
             }
             event.key == Key.Escape -> {
-                if (!sending && !attaching) onDiscard()
+                if (!sending && !attaching) onClose(draft.takeIf { it != initial })
                 true
             }
             event.isCtrlPressed && event.key == Key.B -> format("**", "**")
@@ -1026,6 +1028,7 @@ internal fun Composer(
                     TextButton(onClick = { onFull(!full) }) {
                         Text(if (full) "Shrink" else "Full screen", maxLines = 1)
                     }
+                    TextButton(onClick = { onClose(draft.takeIf { it != initial }) }, enabled = !sending && !attaching) { Text("Close", maxLines = 1) }
                     TextButton(onClick = onDiscard, enabled = !sending && !attaching) { Text("Discard", maxLines = 1) }
                     // maxLines = 1 on every label in this row: none of them had it, so at a
                     // dragged-narrow panel width Compose was free to wrap each one, Send

@@ -5289,6 +5289,17 @@ private fun Reader(
             }
         }
         val accountIdentities = identities[key].orEmpty()
+        val save: suspend (Draft) -> Unit = { draft ->
+            val account = key?.let(::session)
+            val drafts = folderFor("drafts", mailboxes[key].orEmpty())
+            val identity = identityForDraft(accountIdentities, draft.from)
+            if (account == null || drafts == null || identity == null) {
+                throw JmapError("There is nowhere to save this: the account has no Drafts folder.")
+            }
+            writing.saves.save { replacing ->
+                account.jmap.saveDraft(draft, identity, drafts.id, replacing)
+            }
+        }
 
         Composer(
             identities = accountIdentities,
@@ -5336,6 +5347,26 @@ private fun Reader(
                     }
                 }
             },
+            onClose = { changed ->
+                // The autosave may still be waiting out its pause, so the latest typing is
+                // saved here first. The panel stays open until that lands: a close that
+                // quietly failed to save would lose the very thing Close promises to keep.
+                val accountKey = key
+                if (changed == null) {
+                    composing = null
+                    sendError = null; sendDetail = null
+                } else scope.launch {
+                    try {
+                        save(changed)
+                        composing = null
+                        sendError = null; sendDetail = null
+                        if (accountKey != null) refreshFolders(accountKey)
+                    } catch (e: Exception) {
+                        sendError = "Could not save the draft, so it is still open."
+                        sendDetail = e.message
+                    }
+                }
+            },
             onAttach = { files ->
                 val account = key?.let(::session)
                     ?: throw JmapError("Pick an account before attaching anything.")
@@ -5349,17 +5380,7 @@ private fun Reader(
                 materializeAttachment { dir -> session(accountKey).jmap.download(attachment, dir) }
             },
             fromFiles = key?.let { filesOf(session(it).jmap) },
-            onSave = { draft ->
-                val account = key?.let(::session)
-                val drafts = folderFor("drafts", mailboxes[key].orEmpty())
-                val identity = identityForDraft(accountIdentities, draft.from)
-                if (account == null || drafts == null || identity == null) {
-                    throw JmapError("There is nowhere to save this: the account has no Drafts folder.")
-                }
-                writing.saves.save { replacing ->
-                    account.jmap.saveDraft(draft, identity, drafts.id, replacing)
-                }
-            },
+            onSave = save,
             book = withContacts(books[key].orEmpty(), contacts.map { it.first }),
             sealCards = contacts.map { it.second },
             full = composeFull,

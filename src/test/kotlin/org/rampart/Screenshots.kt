@@ -300,6 +300,7 @@ class Screenshots {
                                 sending = false,
                                 error = null,
                                 onDiscard = {},
+                                onClose = {},
                                 onSend = {},
                             )
                         }
@@ -496,6 +497,7 @@ class Screenshots {
                 sending = false,
                 error = null,
                 onDiscard = {},
+                onClose = {},
                 onSend = {},
                 onAttach = { emptyList() },
             )
