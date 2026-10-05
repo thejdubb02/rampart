@@ -42,6 +42,13 @@ The packet viewer shows the redacted text, so what you see is what is sent. It i
 filter, not a guarantee: a code written out in words, or a number split across lines, gets
 through.
 
+Every reply in the Rook panel carries a small line under it naming where it came from,
+`local:<model>` or `cloud:<model>` (`Assistant.provenance`). A summary is kept for the rest of
+the session, keyed on the whole packet, so asking again for the same thread with the same
+model and prompt costs nothing; a new reply in the thread makes a new packet and asks again.
+The cache is memory only for now, because a copy on disk would have to respect encryption
+at rest.
+
 ---
 
 ## 1. What the model is actually for

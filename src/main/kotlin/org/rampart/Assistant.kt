@@ -74,6 +74,10 @@ data class AssistantConfig(
 data class Spend(val calls: Int, val tokensIn: Int, val tokensOut: Int, val dollars: Double)
 
 object Assistant {
+    /** Where an answer came from, shown under it: `local:qwen2.5:14b` or `cloud:anthropic/claude-haiku-4-5`. */
+    fun provenance(config: AssistantConfig): String =
+        (if (config.mode == AssistantMode.LOCAL) "local:" else "cloud:") + config.model
+
     /** The features that can be agreed to separately. Used as ledger and consent keys. */
     const val SUMMARISE = "summarise"
 

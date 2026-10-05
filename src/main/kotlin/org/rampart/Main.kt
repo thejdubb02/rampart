@@ -3963,19 +3963,18 @@ private fun Reader(
         scope.launch {
             val outcome = withContext(Dispatchers.IO) {
                 runCatching {
-                    val reply = Llm.ask(config, Secrets.loadNamed(Assistant.KEY), packet)
-                    Assistant.record(Assistant.SUMMARISE, reply.tokensIn, reply.tokensOut, config)
-                    reply
+                    Summarise.cachedOr(packet) {
+                        val reply = Llm.ask(config, Secrets.loadNamed(Assistant.KEY), packet)
+                        Assistant.record(Assistant.SUMMARISE, reply.tokensIn, reply.tokensOut, config)
+                        Said("assistant", reply.text.trim(), Assistant.provenance(config))
+                    }
                 }
             }
             summarising = false
             if (selected?.threadId != forThread) return@launch
             outcome.fold(
-                onSuccess = {
-                    val text = it.text.trim()
-                    selected?.let { message -> accountOf(message) }?.let { account ->
-                        appendRook(account, Said("assistant", text))
-                    }
+                onSuccess = { said ->
+                    selected?.let { message -> accountOf(message) }?.let { account -> appendRook(account, said) }
                 },
                 onFailure = {
                     val err = it.message ?: "The model could not be reached."
@@ -5838,7 +5837,7 @@ private fun Reader(
                                                         }
                                                     }
                                                 }
-                                                appendRook(key, Said("assistant", text))
+                                                appendRook(key, Said("assistant", text, Assistant.provenance(Assistant.config())))
                                             },
                                             onFailure = { (title, detail) ->
                                                 if (selected?.let { it.threadId.ifBlank { it.id } } != forThread) return@startActionItems

@@ -376,7 +376,12 @@ private fun SaidLine(line: Said) {
         else -> Row(verticalAlignment = Alignment.Top) {
             RookAvatar(size = 18.dp)
             Spacer(Modifier.width(8.dp))
-            Text(line.text, style = MaterialTheme.typography.bodyMedium)
+            Column {
+                Text(line.text, style = MaterialTheme.typography.bodyMedium)
+                line.by?.let {
+                    Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                }
+            }
         }
     }
 }

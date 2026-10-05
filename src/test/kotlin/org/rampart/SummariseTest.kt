@@ -60,4 +60,14 @@ class SummariseTest {
         val wide = Turn("a".repeat(Summarise.BUDGET), "b".repeat(Summarise.BUDGET), "c".repeat(Summarise.BUDGET))
         assertTrue(Summarise.user("d".repeat(Summarise.BUDGET), listOf(wide)).length <= Summarise.BUDGET)
     }
+
+    @Test
+    fun `the same packet is only paid for once, a new one asks again`() {
+        var asked = 0
+        val ask = { Said("assistant", "summary ${++asked}", "local:m") }
+        val packet = "packet-${System.nanoTime()}"
+        assertEquals("summary 1", Summarise.cachedOr(packet, ask).text)
+        assertEquals("summary 1", Summarise.cachedOr(packet, ask).text)
+        assertEquals("summary 2", Summarise.cachedOr("$packet with a new reply", ask).text)
+    }
 }

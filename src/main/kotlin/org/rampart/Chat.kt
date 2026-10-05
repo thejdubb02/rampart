@@ -37,7 +37,8 @@ import kotlin.coroutines.cancellation.CancellationException
 internal const val MOST = 25
 
 /** One line of the conversation, as it is shown and as it is sent. */
-internal data class Said(val role: String, val text: String)
+/** One line of a conversation. [by] names the model behind a reply, see [Assistant.provenance]. */
+internal data class Said(val role: String, val text: String, val by: String? = null)
 
 /**
  * A tool the model asked for.
@@ -407,17 +408,17 @@ internal fun converse(
         record(reply.tokensIn, reply.tokensOut)
         val asked = Chat.asked(reply.text)
         if (asked == null) {
-            added += Said("assistant", reply.text.trim())
+            added += Said("assistant", reply.text.trim(), Assistant.provenance(config))
             return added
         }
         // More than one call is not run. The model is asked for one, and the person sees
         // only the words around the calls.
         if (asked.several) {
-            if (asked.lead.isNotBlank()) added += Said("assistant", asked.lead)
+            if (asked.lead.isNotBlank()) added += Said("assistant", asked.lead, Assistant.provenance(config))
             added += Said("result", "One step at a time, please: ask for a single tool per reply.")
             return@repeat
         }
-        if (asked.lead.isNotBlank()) added += Said("assistant", asked.lead)
+        if (asked.lead.isNotBlank()) added += Said("assistant", asked.lead, Assistant.provenance(config))
         added += Said("call", reply.text.trim())
         added += Said("result", carryOut(asked, shown, tools, settings, calendar, tasks, filters, mailChanges))
     }
