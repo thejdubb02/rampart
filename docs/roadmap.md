@@ -73,7 +73,7 @@ The working order for the next stretch, most important first. Card numbers are t
 
 Released since the last reset: Rook safety (RAM-125), Rook reliability (RAM-126), seven of the eight audit bugs (RAM-127; the eighth, calendar time zones, was checked and is not a bug), the focused inbox (RAM-122), follow-up flags and offline attachments (RAM-110), the update icon (RAM-113), three split themes (RAM-134), the add-on catalogue with themes, templates and filter recipes (RAM-135, filter recipes in 0.1.450), remote pictures shown by default outside Junk (0.1.447), and the "today at a glance" page when no message is open (RAM-142, 0.1.450).
 
-1. **RAM-124, the lost sign-off.** An agent draft reopened and sent from Rampart lost "Best regards," and the signature. Cause not yet found; capture the stored draft next time before sending.
+1. **RAM-124, the lost sign-off.** An agent draft reopened and sent from Rampart lost its signature. Fixed on main (588e855): the agent's HTML puts the "-- " line in its own element, which was left behind when the signature was lifted out, so the composer thought the draft was already signed. Waiting on a release and one real agent draft sent from the test mailbox. Why the "Best regards," line also went is still unexplained.
 2. **RAM-72, a failed deferred update** that leaves the app unable to start. Rampart should notice and explain it, or repair it while nobody is using the client.
 3. **RAM-44, the fifty thousand message test.** A repeatable speed and memory check, so a slowdown is a number rather than a feeling.
 4. **RAM-135, the catalogue's next kind:** assistant shortcuts, with the full text shown before adding. Then AI provider presets, then icon packs once they are files.
