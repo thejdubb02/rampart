@@ -51,6 +51,19 @@ own background check, and the next launch, because the manifest carries `OnLaunc
 What the person sees: a line at the bottom of the sidebar, once the manifest is ready,
 naming the version. Clicking it opens App Installer.
 
+### If it will not start after an update
+
+Before 0.1.423 the update was staged with `Add-AppxPackage -DeferRegistrationWhenPackagesAreInUse`
+and applied by Windows after the app closed, with nobody watching. On 2026-09-21 one of those
+left an install that would not open and gave no reason. That path is gone: App Installer now
+closes Rampart, installs, and relaunches it while its own window is on screen, so a failure is
+shown there rather than discovered at the next launch.
+
+Two things remain. A copy that starts and then fails during startup shows a dialog offering
+to reinstall (`main()`'s uncaught-exception handler). A copy so broken that Windows never
+starts the process cannot be helped from inside the app; running the install command in the
+README again re-registers the current package over it.
+
 Linux gets a `.deb` from an apt repository in the same release, so `apt upgrade` carries it.
 
 ## The first install needs one elevated step, and only the first
