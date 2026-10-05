@@ -40,10 +40,12 @@ import java.nio.file.Path
  *
  * The kept copy is used even with a connection, since it is the same bytes (a blob id names
  * fixed content, and the seal proves the file is the one written) and it saves a download.
+ * Either way the file is scanned before it is handed back; see Defender.kt.
  */
-internal fun Session.fetchAttachment(attachment: Attachment, into: Path): Path =
+internal fun Session.fetchAttachment(attachment: Attachment, into: Path): Path = Defender.check(
     OfflineAttachments.restore(key, { Secrets.mailKey(account) }, attachment, into)
         ?: jmap.download(attachment, into)
+)
 
 /** The same thing for the accounts the background pass should look after. */
 internal fun offlineAccounts(sessions: List<Session>, inboxOf: (String) -> String?): List<OfflineAccount> =

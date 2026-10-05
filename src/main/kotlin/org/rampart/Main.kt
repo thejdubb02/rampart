@@ -7054,7 +7054,7 @@ private fun Reader(
                         } else {
                             scope.launch {
                                 val path = io {
-                                    Files.write(uniqueIn(downloadsFolder(), part.name), bytes)
+                                    Defender.check(Files.write(uniqueIn(downloadsFolder(), part.name), bytes))
                                 }
                                 if (path != null && attached === mail) attachedSaved = path.toString()
                             }
@@ -7063,7 +7063,7 @@ private fun Reader(
                     onDragFile = { part ->
                         val bytes = mail.partBytes[part.blobId]
                             ?: throw IllegalStateException("That file is not in the attached message.")
-                        materializeAttachment { dir -> Files.write(uniqueIn(dir, part.name), bytes) }
+                        materializeAttachment { dir -> Defender.check(Files.write(uniqueIn(dir, part.name), bytes)) }
                     },
                     onDragFailed = { report("That file could not be dragged out.", it) },
                     onOpenTnef = { part ->

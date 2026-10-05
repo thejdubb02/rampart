@@ -318,7 +318,7 @@ private fun SealActions(
             TextButton(onClick = {
                 scope.launch {
                     val saved = withContext(Dispatchers.IO) {
-                        runCatching { uniqueIn(downloadsFolder(), file.name).also { Files.write(it, file.bytes) } }
+                        runCatching { Defender.check(Files.write(uniqueIn(downloadsFolder(), file.name), file.bytes)) }
                     }
                     onNote(saved.fold({ "Saved ${file.name} to $it." }, { "${file.name} could not be saved: ${whyFailed(it)}" }))
                 }

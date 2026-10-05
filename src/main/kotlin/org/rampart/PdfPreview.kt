@@ -116,15 +116,18 @@ internal fun readPdfPageSizes(document: PDDocument): List<PdfPageSize> {
 
 /**
  * Opens a PDF attachment with the default system application.
+ *
+ * Off the UI thread, since the Defender scan takes a second or two. A file Defender
+ * blocks is deleted and simply does not open.
  */
-internal fun openInSystemViewer(attachment: Attachment, bytes: ByteArray) {
+internal fun openInSystemViewer(attachment: Attachment, bytes: ByteArray) = kotlin.concurrent.thread(isDaemon = true) {
     runCatching {
         val dir = Files.createTempDirectory("rampart-pdf-preview")
         dir.toFile().deleteOnExit()
         val rawName = safeFileName(attachment.name).ifBlank { "document.pdf" }
         val finalName = if (rawName.endsWith(".pdf", ignoreCase = true)) rawName else "$rawName.pdf"
         val tempFile = dir.resolve(finalName)
-        Files.write(tempFile, bytes)
+        Defender.check(Files.write(tempFile, bytes))
         tempFile.toFile().deleteOnExit()
         val desktop = if (Desktop.isDesktopSupported()) Desktop.getDesktop() else null
         if (desktop != null && desktop.isSupported(Desktop.Action.OPEN)) {
