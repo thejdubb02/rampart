@@ -32,6 +32,16 @@ does not read encrypted mail.** Every path that hands message text to a model go
 saying it was withheld. The only way past is Decrypt to summarise on one opened thread, which
 always shows the packet first. `encryption.md` lists the paths.
 
+A fourth, added 2026-10-05: **some things in mail never reach a model, encrypted or not.**
+Every request is built in `Llm.packetOf`, and everything that goes into it passes through
+`Redact` first: sign-in and reset links, one-time codes, card numbers that pass the Luhn
+check, IBANs, US Social Security numbers and UK National Insurance numbers each become a
+placeholder such as `[code removed]`. It applies to local models too, because none of these
+help a summary or a draft and one filter in one place cannot be forgotten by a new feature.
+The packet viewer shows the redacted text, so what you see is what is sent. It is a pattern
+filter, not a guarantee: a code written out in words, or a number split across lines, gets
+through.
+
 ---
 
 ## 1. What the model is actually for
