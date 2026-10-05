@@ -141,4 +141,48 @@ class LlmTest {
         }
         assertTrue(thrown.message.orEmpty().endsWith("."), thrown.message.orEmpty())
     }
+
+    @Test
+    fun `a password reset link is redacted but a plain link is not`() {
+        assertEquals("[link removed]", Redact.text("https://example.com/reset?token=abc123"))
+        assertEquals("https://example.com/about", Redact.text("https://example.com/about"))
+    }
+
+    @Test
+    fun `verification codes are redacted`() {
+        assertEquals("Your verification code is [code removed].", Redact.text("Your verification code is 482913."))
+        assertEquals("Your code: [code removed]", Redact.text("Your code: 123 456"))
+    }
+
+    @Test
+    fun `card numbers are redacted only when they pass luhn`() {
+        assertEquals("[card number removed]", Redact.text("4111 1111 1111 1111"))
+        assertEquals("4111 1111 1111 1112", Redact.text("4111 1111 1111 1112"))
+        assertEquals("Order 1234567890123", Redact.text("Order 1234567890123"))
+    }
+
+    @Test
+    fun `iban is redacted`() {
+        assertEquals("[IBAN removed]", Redact.text("GB82 WEST 1234 5698 7654 32"))
+    }
+
+    @Test
+    fun `ssn and ni numbers are redacted`() {
+        assertEquals("[SSN removed]", Redact.text("123-45-6789"))
+        assertEquals("[NI number removed]", Redact.text("AB 12 34 56 C"))
+    }
+
+    @Test
+    fun `ordinary text is unchanged`() {
+        assertEquals(
+            "Meeting at 10:30 on 2026-10-05, call 707-555-0134",
+            Redact.text("Meeting at 10:30 on 2026-10-05, call 707-555-0134"),
+        )
+    }
+
+    @Test
+    fun `packet redacts a verification code from the user`() {
+        val packet = Llm.packet("m", "s", "Your verification code is 482913.")
+        assertTrue(!packet.contains("482913"), "the packet still contains the code")
+    }
 }

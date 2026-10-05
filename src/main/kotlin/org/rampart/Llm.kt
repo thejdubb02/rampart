@@ -62,17 +62,22 @@ internal object Llm {
      * tool call the model made goes back as its own words, and what the app answered goes
      * back as the user's, because that is the only pair of roles every provider agrees
      * about.
+     *
+     * The packet is redacted before it is built: secrets that would reach the model are
+     * replaced with placeholders so the viewer sees exactly what is removed. This applies
+     * to local models too: none of these are things a summary or a draft needs, and
+     * redacting in one place is safer than threading the mode through every feature.
      */
     fun packetOf(model: String, system: String, said: List<Said>, maxTokens: Int = 700): String {
         val json = buildJsonObject {
             put("model", model)
             put("max_tokens", maxTokens)
             put("messages", buildJsonArray {
-                add(buildJsonObject { put("role", "system"); put("content", system) })
+                add(buildJsonObject { put("role", "system"); put("content", Redact.text(system)) })
                 said.forEach { line ->
                     add(buildJsonObject {
                         put("role", if (line.role == "assistant" || line.role == "call") "assistant" else "user")
-                        put("content", line.text)
+                        put("content", Redact.text(line.text))
                     })
                 }
             })
@@ -147,6 +152,39 @@ internal object Llm {
             throw LlmError("Something went wrong talking to the model.")
         }
     }
+}
+
+/**
+ * Takes out of a packet the things in mail that must never reach a model: sign-in and reset
+ * links, one-time codes, card numbers, IBANs, and US and UK national numbers.
+ *
+ * None of them help a summary or a draft, and each is something a person would be alarmed
+ * to find in a provider's log. Card numbers are only taken when they pass the Luhn check,
+ * so order and tracking numbers survive. The packet viewer shows the result, so a person can
+ * see what was removed before anything is sent.
+ */
+internal object Redact {
+    private val url = Regex("""https?://[^\s<>"']+?(?=[).,\]]*(?:[\s<>"']|$))""")
+    private val secretParam = Regex("""[?&](token|code|key|sig|signature|auth|magic|login|otp|reset|access_token)=""", RegexOption.IGNORE_CASE)
+    private val randomSegment = Regex("""/(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{24,}(?=[/?#]|$)""")
+    private val oneTimeCode = Regex("""(\b(?:verification code|code|otp|passcode|pin)\b[^\d\n]{0,40})(?<!\d)(\d{2,4}[ -]?\d{2,4})(?!\d)""", RegexOption.IGNORE_CASE)
+    private val card = Regex("""(?<![\d -])\d(?:[ -]?\d){12,18}(?![\d])""")
+    private val iban = Regex("""\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{1,4}){3,8}\b""")
+    private val ssn = Regex("""\b\d{3}-\d{2}-\d{4}\b""")
+    private val ni = Regex("""\b[A-CEGHJ-PR-TW-Z]{2} ?\d{2} ?\d{2} ?\d{2} ?[A-D]\b""")
+
+    fun text(s: String): String = s
+        .replace(url) { if (secretParam.containsMatchIn(it.value) || randomSegment.containsMatchIn(it.value)) "[link removed]" else it.value }
+        .replace(oneTimeCode) { m -> if (m.groupValues[2].count(Char::isDigit) in 4..8) m.groupValues[1] + "[code removed]" else m.value }
+        .replace(card) { if (luhn(it.value.filter(Char::isDigit))) "[card number removed]" else it.value }
+        .replace(iban) { if (it.value.count { c -> c != ' ' } in 15..34) "[IBAN removed]" else it.value }
+        .replace(ssn, "[SSN removed]")
+        .replace(ni, "[NI number removed]")
+
+    private fun luhn(digits: String): Boolean = digits.reversed().mapIndexed { i, c ->
+        val d = c.digitToInt() * (if (i % 2 == 1) 2 else 1)
+        if (d > 9) d - 9 else d
+    }.sum() % 10 == 0
 }
 
 /** A failure with a sentence in it, which is the only kind worth showing to anybody. */
