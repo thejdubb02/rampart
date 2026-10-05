@@ -2105,6 +2105,10 @@ internal fun peelHtmlSignature(html: String, signature: String): Pair<String, St
             if (got == want) {
                 val sig = (start..end).joinToString("") { kids[it].outerHtml() }
                 for (i in end downTo start) kids[i].remove()
+                // The `-- ` line above it goes too. Left behind, [signed] reads it as
+                // "already signed" and drops the sign-off: an agent's draft opened as
+                // "Best regards," then "--" and nothing else, and was sent that way.
+                if (start > 0 && kids[start - 1].text().trim() == "--") kids[start - 1].remove()
                 return doc.body().html() to sig
             }
             if (got.length > want.length) break

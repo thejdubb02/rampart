@@ -174,4 +174,26 @@ class DraftTest {
         assertEquals(opened, opened.copy())
         assertTrue(opened != opened.copy(body = opened.body + "x"))
     }
+
+    /**
+     * The shape the agents' mailbox tool writes: a `-- ` div, then the signature div, with
+     * the same sign-off in the text part. Opening it used to show "Best regards," and "--"
+     * with the signature gone, and sending it sent exactly that.
+     */
+    @Test
+    fun anAgentDraftKeepsItsSignatureWhenOpenedAndSent() {
+        val sigText = "Justin Willhite\nWillhite Strategy Group"
+        val sigHtml = "<div>Justin Willhite</div><div>Willhite Strategy Group</div>"
+        val me = Identity("i1", "Justin Willhite", "justin@willhitestrategy.com", sigText, sigHtml)
+        val text = "Hi Bonnie,\n\nSecond para.\n\nBest regards,\n\n-- \n$sigText"
+        val html = "<div>Hi Bonnie,</div><div>Second para.</div><div>Best regards,</div>\n" +
+            "<div>-- </div>\n<div class=\"signature\" data-signature>$sigHtml</div>"
+        val stored = draftOf(summary, Body(html, text), "justin@willhitestrategy.com")
+        val opened = draftOpening(stored, listOf(me), aboveQuote = true)
+        assertEquals(sigText, opened.textSignature)
+        assertEquals(1, opened.body.lines().count { it == "-- " }, opened.body)
+        val sent = opened.copy(body = "Edited.\n\n" + opened.body, html = "")
+        assertTrue(markupToPlain(sent.body).endsWith("Best regards,\n\n-- \n$sigText"), sent.body)
+        assertTrue(htmlPartOf(sent)!!.contains("Willhite Strategy Group"))
+    }
 }
