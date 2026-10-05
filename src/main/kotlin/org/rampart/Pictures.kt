@@ -297,9 +297,11 @@ internal fun plainPageMatches(reading: Reading?, background: String, text: Strin
 private val INVISIBLE_SPACE = Regex("[\u2000-\u200A\u202F\u205F]")
 
 /**
- * The zero-width ones, and a byte order mark that arrived as a character.
+ * The zero-width ones, a byte order mark that arrived as a character, and the variation
+ * selectors. U+FE0F after an emoji asks for the colour form; the engine here has no colour
+ * emoji, draws the plain glyph anyway, and then a box for the selector beside it.
  *
  * Nothing rather than a space: these sit inside words, so replacing them would break the
  * word in half instead of joining it back up.
  */
-private val NOTHING_AT_ALL = Regex("[\u200B-\u200F\u2060-\u2064\uFEFF]")
+private val NOTHING_AT_ALL = Regex("[\u200B-\u200F\u2060-\u2064\uFE00-\uFE0F\uFEFF]")

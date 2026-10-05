@@ -98,6 +98,7 @@ class PicturesTest {
         assertEquals("10.44 AM", withoutTofu("10.44 AM"))
         assertEquals("word", withoutTofu("wo​rd"), "a zero width one leaves nothing behind")
         assertEquals("plain text", withoutTofu("plain text"))
+        assertEquals("\u2600 Sunny", withoutTofu("\u2600\uFE0F Sunny"), "an emoji keeps its glyph, not its selector")
     }
 
     /** The number of colour components a JPEG declares, read out of its frame header. */
