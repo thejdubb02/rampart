@@ -156,6 +156,7 @@ JDK 21 and nothing else. The Gradle wrapper fetches the rest.
 
 [docs/roadmap.md](docs/roadmap.md) is what is being built next and why, in order.
 [docs/architecture.md](docs/architecture.md) is how it is put together.
+[docs/performance.md](docs/performance.md) is how fast it is on a big mailbox, and how to measure it.
 
 ## Licence
 
