@@ -172,6 +172,43 @@ class StoreTest {
     }
 
     @Test
+    fun `writing a message again replaces its search entry, and forgetting it removes it`() = withStore { store ->
+        store.put("inbox", messages)
+        store.put("inbox", listOf(messages[1].copy(subject = "Receipt 2026-4471", preview = "a receipt")))
+        assertTrue(store.search("invoice").isEmpty())
+        assertEquals(listOf("b"), store.search("receipt").map { it.id })
+        store.forget(listOf("b"))
+        assertTrue(store.search("receipt").isEmpty())
+        assertEquals(listOf("a"), store.search("Dana").map { it.id })
+    }
+
+    @Test
+    fun `a file whose search rows predate rowid keys is rekeyed on opening`() {
+        val path = Files.createTempDirectory("rampart-store").resolve("mail.db")
+        try {
+            Store.open(path, null).use { it.put("inbox", messages) }
+            // As an older version left it: search rows at their own rowids, no version mark.
+            DriverManager.getConnection("jdbc:sqlite:$path").use { connection ->
+                connection.createStatement().use {
+                    it.execute("CREATE TEMP TABLE old AS SELECT id, sender, subject, body FROM search")
+                    it.execute("DELETE FROM search")
+                    it.execute("INSERT INTO search (rowid, id, sender, subject, body) SELECT 1000 + rowid, * FROM old")
+                    it.execute("INSERT INTO search (id, sender, subject, body) VALUES ('gone', 'x', 'orphan', '')")
+                    it.execute("PRAGMA user_version = 0")
+                }
+            }
+            Store.open(path, null).use { store ->
+                store.put("inbox", listOf(messages[1].copy(subject = "Receipt 2026-4471", preview = "a receipt")))
+                assertTrue(store.search("invoice").isEmpty())
+                assertEquals(listOf("b"), store.search("receipt").map { it.id })
+                assertTrue(store.search("orphan").isEmpty())
+            }
+        } finally {
+            path.deleteIfExists()
+        }
+    }
+
+    @Test
     fun `search spans folders, because that is what people mean by search`() = withStore { store ->
         store.put("inbox", listOf(messages[0].copy(subject = "Tuesday plan")))
         store.put("archive", listOf(messages[1].copy(subject = "Tuesday invoice")))

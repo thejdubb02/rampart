@@ -186,6 +186,11 @@ internal class Store(private val connection: Connection) : AutoCloseable {
      * migration framework for something disposable is work with no payoff.
      */
     private fun prepare() {
+        // Write-ahead log, synced at checkpoints rather than on every commit. Each page
+        // scrolled is two commits, and with a full sync on each that was half the cost of
+        // reading a 50,000 message folder. The worst a power cut does now is lose the
+        // last few writes to a copy the server can always refill.
+        exec("PRAGMA journal_mode = WAL", "PRAGMA synchronous = NORMAL")
         exec(
             """
             CREATE TABLE IF NOT EXISTS message (
@@ -318,6 +323,7 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             it.execute("ALTER TABLE message ADD COLUMN keywordsIndexed INTEGER NOT NULL DEFAULT 0")
         }
         indexExistingKeywords()
+        keySearchByMessageRow()
         // A cache file from before the cap has no used column. CREATE does not add
         // one to a table that already exists, and without it there is no order to
         // evict in. The bytes are disposable, so a missing column is just added.
@@ -581,6 +587,36 @@ internal class Store(private val connection: Connection) : AutoCloseable {
         connection.createStatement().use { s -> statements.forEach { s.execute(it.trimIndent()) } }
     }
 
+    /**
+     * Gives each search row its message's rowid, once, for files written before search rows
+     * were keyed that way. The id column in the search table is UNINDEXED, so deleting by it
+     * read the whole index on every page written: a 50,000 message folder took a minute of
+     * local work to scroll the first time. A search row with no message left is dropped.
+     * Never VACUUM this file: it renumbers the message rowids and orphans every search row.
+     */
+    private fun keySearchByMessageRow() {
+        val version = connection.createStatement().use { s -> s.executeQuery("PRAGMA user_version").use { it.next(); it.getInt(1) } }
+        if (version >= 1) return
+        val was = connection.autoCommit
+        connection.autoCommit = false
+        try {
+            exec(
+                "CREATE TEMP TABLE search_keyed AS SELECT m.rowid AS r, s.id, s.sender, s.subject, s.body " +
+                    "FROM search s JOIN message m ON m.id = s.id",
+                "DELETE FROM search",
+                "INSERT INTO search (rowid, id, sender, subject, body) SELECT r, id, sender, subject, body FROM search_keyed",
+                "DROP TABLE search_keyed",
+                "PRAGMA user_version = 1",
+            )
+            connection.commit()
+        } catch (e: Exception) {
+            connection.rollback()
+            throw e
+        } finally {
+            connection.autoCommit = was
+        }
+    }
+
     /** Populates the normalized keyword table once for rows written by older versions. */
     private fun indexExistingKeywords() {
         val pending = connection.prepareStatement(
@@ -697,7 +733,10 @@ internal class Store(private val connection: Connection) : AutoCloseable {
                 s.executeBatch()
             }
             ids.chunked(10_000).forEach { part ->
-                connection.prepareStatement("DELETE FROM search WHERE id IN (${holders(part.size)})").use { s ->
+                // By rowid, which is the message's own: the id column here is not indexed.
+                connection.prepareStatement(
+                    "DELETE FROM search WHERE rowid IN (SELECT rowid FROM message WHERE id IN (${holders(part.size)}))",
+                ).use { s ->
                     part.forEachIndexed { index, id -> s.setString(index + 1, id) }
                     s.executeUpdate()
                 }
@@ -722,12 +761,15 @@ internal class Store(private val connection: Connection) : AutoCloseable {
                 }
                 s.executeBatch()
             }
-            connection.prepareStatement("INSERT INTO search (id, sender, subject, body) VALUES (?,?,?,?)").use { s ->
+            connection.prepareStatement(
+                "INSERT INTO search (rowid, id, sender, subject, body) VALUES ((SELECT rowid FROM message WHERE id = ?),?,?,?,?)",
+            ).use { s ->
                 messages.forEach { m ->
                     s.setString(1, m.id)
-                    s.setString(2, m.from + " " + m.fromEmail)
-                    s.setString(3, m.subject)
-                    s.setString(4, indexedBodies[m.id]?.trim()?.takeIf { it.isNotBlank() } ?: m.preview)
+                    s.setString(2, m.id)
+                    s.setString(3, m.from + " " + m.fromEmail)
+                    s.setString(4, m.subject)
+                    s.setString(5, indexedBodies[m.id]?.trim()?.takeIf { it.isNotBlank() } ?: m.preview)
                     s.addBatch()
                 }
                 s.executeBatch()
@@ -1588,9 +1630,10 @@ internal class Store(private val connection: Connection) : AutoCloseable {
             "DELETE FROM mailbox_message WHERE message_id IN ($marks)",
             "DELETE FROM message_keyword WHERE message_id IN ($marks)",
             "DELETE FROM message_recipient WHERE message_id IN ($marks)",
+            // Search first: its rows are found through the message's rowid.
+            "DELETE FROM search WHERE rowid IN (SELECT rowid FROM message WHERE id IN ($marks))",
             "DELETE FROM message WHERE id IN ($marks)",
             "DELETE FROM body WHERE id IN ($marks)",
-            "DELETE FROM search WHERE id IN ($marks)",
             "DELETE FROM kept WHERE id IN ($marks)",
             "DELETE FROM kept_picture WHERE id IN ($marks)",
         ).forEach { sql ->
