@@ -458,7 +458,7 @@ internal fun parseDiagBatch(text: String): List<DiagAggregate> {
         val item = raw as? Map<*, *> ?: return@mapNotNull null
         val metric = (item["metric"] as? String)?.takeIf { it.length in 1..80 && it in KNOWN_METRICS }
             ?: return@mapNotNull null
-        val category = (item["category"] as? String)?.takeIf { it.isNotBlank() && it.length <= 80 }
+        val category = (item["category"] as? String)?.takeIf { it.isNotBlank() && it.length <= 400 }
         val count = (item["count"] as? Double)?.toLong()?.takeIf { it > 0 } ?: return@mapNotNull null
         DiagAggregate(
             metric = metric,

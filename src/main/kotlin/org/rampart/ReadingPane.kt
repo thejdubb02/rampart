@@ -728,21 +728,29 @@ internal fun Message(
                     suggest?.let { SuggestRepliesCard(it) }
 
                     SelectionContainer {
+                        // No text here is a link, so any of it can be selected and copied. A
+                        // click on the name opened the person, and one anywhere on the row
+                        // folded the card, so the first half of a double-click took the text
+                        // away from the selection. The face opens the person, the date folds.
+                        val fold = Modifier.let { m -> onHeaderClick?.let { m.clickable(onClick = it) } ?: m }
+                        val openSender = onPerson?.takeIf { summary.fromEmail.isNotBlank() }
                         Row(
-                            Modifier.fillMaxWidth()
-                                .let { row -> onHeaderClick?.let { row.clickable(onClick = it) } ?: row }
-                                .padding(vertical = 4.dp),
+                            Modifier.fillMaxWidth().padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             val (who, address) = displaySender(summary.from, summary.fromEmail)
                             val off = unsubscribeFrom(body?.listUnsubscribe, body?.listUnsubscribePost)
                             DisableSelection {
+                                Box(Modifier.clip(CircleShape).let { m ->
+                                    openSender?.let { open -> m.clickable { open(who, summary.fromEmail) } } ?: m
+                                }) {
                                 Avatar(
                                     who,
                                     summary.fromEmail.ifBlank { who },
                                     34.dp,
                                     photo = photoFor(summary.fromEmail),
                                 )
+                                }
                             }
                             Spacer(Modifier.width(11.dp))
                             Column(Modifier.weight(1f)) {
@@ -753,13 +761,7 @@ internal fun Message(
                                         fontWeight = FontWeight.SemiBold,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
-                                        // Its own click, inside the row's: the name opens the
-                                        // person, anywhere else on the row folds the card.
-                                        modifier = Modifier.weight(1f, fill = false).let { name ->
-                                            val open = onPerson?.takeIf { summary.fromEmail.isNotBlank() }
-                                            if (open == null) name else name.clip(MaterialTheme.shapes.small)
-                                                .clickable { open(who, summary.fromEmail) }
-                                        },
+                                        modifier = Modifier.weight(1f, fill = false),
                                     )
                                     // Only when the message went out through somewhere other
                                     // than the domain it claims, which is the ordinary
@@ -802,7 +804,7 @@ internal fun Message(
                                     }
                                 }
                             }
-                            Column(horizontalAlignment = Alignment.End) {
+                            Column(fold, horizontalAlignment = Alignment.End) {
                                 Text(
                                     summary.receivedAt.asLocalTime(),
                                     style = MaterialTheme.typography.bodySmall,
@@ -849,31 +851,16 @@ internal fun Message(
                                     color = MaterialTheme.colorScheme.outline,
                                 )
                                 Spacer(Modifier.width(7.dp))
-                                if (onPerson == null) {
-                                    Text(
-                                        shown.joinToString(", ") + if (more > 0) "  +$more more" else "",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f, fill = false),
-                                    )
-                                } else {
-                                    // Each one its own click, so the right person opens.
-                                    Row(Modifier.weight(1f, fill = false), verticalAlignment = Alignment.CenterVertically) {
-                                        shown.forEachIndexed { i, address ->
-                                            if (i > 0) Text(", ", style = MaterialTheme.typography.bodySmall)
-                                            Text(
-                                                address,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                                modifier = Modifier.clip(MaterialTheme.shapes.small)
-                                                    .clickable { onPerson(address, address) },
-                                            )
-                                        }
-                                        if (more > 0) Text("  +$more more", style = MaterialTheme.typography.bodySmall, maxLines = 1)
-                                    }
-                                }
+                                // Plain text, not a click per address: a click there opened the
+                                // person on the first half of a double-click, so an address could
+                                // not be selected to copy.
+                                Text(
+                                    shown.joinToString(", ") + if (more > 0) "  +$more more" else "",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
                                 Spacer(Modifier.width(10.dp))
                                 DisableSelection {
                                     Text(

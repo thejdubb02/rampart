@@ -42,7 +42,14 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -172,6 +179,18 @@ internal fun PdfPreviewModal(
         }
     }
 
+    // Over the whole window, not inside the card. A card in a thread sits in the stack's
+    // scrolling column, which gives it no height limit, and the page list below threw
+    // "measured with an infinity maximum height" there and took the app down.
+    Popup(
+        popupPositionProvider = object : PopupPositionProvider {
+            override fun calculatePosition(
+                anchorBounds: IntRect, windowSize: IntSize, layoutDirection: LayoutDirection, popupContentSize: IntSize,
+            ) = IntOffset.Zero
+        },
+        onDismissRequest = onClose,
+        properties = PopupProperties(focusable = true),
+    ) {
     Box(
         Modifier.fillMaxSize()
             .background(Color.Black.copy(alpha = 0.35f))
@@ -243,6 +262,7 @@ internal fun PdfPreviewModal(
                 )
             }
         }
+    }
     }
 }
 

@@ -1,5 +1,11 @@
 package org.rampart
 
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.ImageComposeScene
+import androidx.compose.ui.Modifier
 import org.apache.pdfbox.pdmodel.PDDocument
 import org.apache.pdfbox.pdmodel.PDPage
 import org.apache.pdfbox.pdmodel.PDPageContentStream
@@ -85,6 +91,23 @@ class PdfPreviewTest {
             assertNull(outOfBounds)
         } finally {
             document.close()
+        }
+    }
+
+    @Test
+    fun `the preview opens from a card in a thread, inside the stack's scrolling column`() {
+        val bytes = createSamplePdf(pageCount = 2)
+        val scene = ImageComposeScene(900, 700) {
+            MaterialTheme {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    PdfPreviewModal(Attachment("b", "a.pdf", "application/pdf", bytes.size.toLong()), bytes, {}, {})
+                }
+            }
+        }
+        try {
+            repeat(3) { scene.render(it * 16_000_000L) }
+        } finally {
+            scene.close()
         }
     }
 

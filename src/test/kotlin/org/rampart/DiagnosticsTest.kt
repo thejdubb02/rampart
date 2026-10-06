@@ -148,10 +148,15 @@ class DiagnosticsTest {
     }
 
     @Test
-    fun `a crash keeps only the exception's class name, never its message`() {
-        Diagnostics.crash(RuntimeException("do not keep this: jdubb@consumerquest.online"))
+    fun `a crash keeps the root cause's class and where it was thrown, never its message`() {
+        val cause = IllegalArgumentException("do not keep this: jdubb@consumerquest.online")
+        Diagnostics.crash(RuntimeException("do not keep this: jdubb@consumerquest.online", cause))
         val recorded = Diagnostics.recent().first { it.metric == Metric.APP_CRASH.key }
-        assertEquals("RuntimeException", recorded.category)
+        assertTrue(
+            recorded.category!!.startsWith("IllegalArgumentException @ DiagnosticsTest.kt:"),
+            recorded.category,
+        )
+        assertFalse(recorded.category!!.contains("jdubb"), recorded.category)
         assertFalse((recorded.detail ?: "").contains("jdubb"), recorded.detail.orEmpty())
         assertFalse((recorded.detail ?: "").contains("do not keep this"), recorded.detail.orEmpty())
     }

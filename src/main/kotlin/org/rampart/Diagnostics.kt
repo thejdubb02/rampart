@@ -443,17 +443,32 @@ enum class UpdateApplyCategory(override val value: String) : Category {
 }
 
 /**
- * `app.crash`'s category: the crashing exception's class name, and nothing else about it.
+ * `app.crash`'s category: the class of the exception at the bottom of the cause chain, and
+ * where in the code it was thrown, as `IllegalStateException @ SelectionManager.kt:412 <
+ * ReadingPane.kt:789`. Never the message.
+ *
+ * Code locations only: the first three frames, wherever they are, because a crash inside
+ * Compose is thrown from Compose, and the first three of our own, because that is the
+ * screen it happened on. A file name and a line number say nothing about whose mail it
+ * was, and without them a crash on somebody else's machine is a class name and a guess.
  *
  * Not an enum, because the set of exception classes is not ours to close off, but the
- * constructor is private so the only way to make one is [of], which takes the whole
- * exception and keeps only its class's simple name. Never the message, never a stack
- * trace: seeing "NullPointerException" fifty times is useful, seeing what the fiftieth one
- * happened to be pointing at when it was null is not worth what it costs to keep.
+ * constructor is private so the only way to make one is [of].
  */
 class CrashCategory private constructor(override val value: String) : Category {
     companion object {
-        fun of(e: Throwable): CrashCategory = CrashCategory((e::class.simpleName ?: "Unknown").take(80))
+        fun of(e: Throwable): CrashCategory {
+            val root = generateSequence(e) { it.cause }.last()
+            val stack = root.stackTrace.asList()
+            val frames = (stack.take(3) + stack.filter { it.className.startsWith("org.rampart.") }.take(3))
+                .distinct()
+                .joinToString(" < ") { "${it.fileName ?: it.className.substringAfterLast('.')}:${it.lineNumber}" }
+            val name = root::class.simpleName ?: "Unknown"
+            return CrashCategory((if (frames.isEmpty()) name else "$name @ $frames").take(MAX_LENGTH))
+        }
+
+        /** The server keeps a category up to this long. */
+        const val MAX_LENGTH = 400
     }
 }
 

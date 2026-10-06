@@ -131,11 +131,18 @@ fun main() {
         if (!SingleInstance.claim()) return
         // Before the first window, because it is read once when the scene is made.
         enableWebBody()
-        application { Rampart() }
+        application {
+            LaunchedEffect(Unit) { started = true }
+            Rampart()
+        }
     } catch (thrown: Throwable) {
         reportStartupFailure(thrown)
     }
 }
+
+/** Set once the first frame is up, so a later crash is not reported as a failed start. */
+@Volatile
+private var started = false
 
 /**
  * What Justin hit on 2026-09-21: a deferred update applied at close, the swap did not go
@@ -149,6 +156,20 @@ fun main() {
  */
 private fun reportStartupFailure(thrown: Throwable) {
     runCatching { Diagnostics.crash(thrown) }
+    // Sent now, because the process ends below and the next scheduled send never comes.
+    // Before this, every crash was recorded and then lost, so none had ever reached the
+    // server. A thread with a short wait, so a server that is down cannot hold the dialog.
+    Thread { runCatching { Diagnostics.flush() } }.apply { isDaemon = true; start() }.join(5_000)
+    if (started) {
+        JOptionPane.showMessageDialog(
+            null,
+            "Rampart hit an error and has to close.\n\n${thrown.javaClass.simpleName}\n\n" +
+                "Where it happened has been sent with the diagnostics, if they are on.",
+            "Rampart",
+            JOptionPane.ERROR_MESSAGE,
+        )
+        kotlin.system.exitProcess(1)
+    }
     val repair = JOptionPane.showConfirmDialog(
         null,
         "Rampart did not start.\n\n${thrown.message ?: thrown.javaClass.simpleName}\n\n" +
