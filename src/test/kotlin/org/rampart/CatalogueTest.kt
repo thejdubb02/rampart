@@ -13,6 +13,7 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.runBlocking
 
 /**
  * The catalogue is data, checked before it is read. These tests stay off the network:
@@ -285,6 +286,88 @@ class CatalogueTest {
     }
 
     @Test
+    fun `parseIndex accepts a prompt and skips a blank summary`() {
+        val items = parseIndex(
+            indexJson(
+                promptEntry(),
+                promptEntry(id = "blank", summary = ""),
+            ),
+        )
+        assertEquals(listOf("reply-to-a-lead"), items.map { it.id })
+        assertEquals("prompt", items.single().kind)
+        val preview = items.single().preview as CataloguePreview.Prompt
+        assertEquals("Reply to a lead in a few lines.", preview.summary)
+    }
+
+    @Test
+    fun `cataloguePrompt keeps the text and refuses one that is too long or hidden`() {
+        val good = cataloguePrompt("""{"name":"Reply to a lead","text":"Be brief."}""")
+        assertEquals(SavedPrompt("Reply to a lead", "Be brief."), good)
+
+        val tooLong = "x".repeat(SavedPrompts.TEXT_MAX + 1)
+        val longError = assertFailsWith<IllegalArgumentException> {
+            cataloguePrompt("""{"name":"Long","text":"$tooLong"}""")
+        }
+        assertEquals("This prompt is longer than a saved prompt can be, so it was not added.", longError.message)
+
+        val hiddenText = assertFailsWith<IllegalArgumentException> {
+            cataloguePrompt("""{"name":"Hidden","text":"see\u200Bthis"}""")
+        }
+        assertEquals("This prompt contains hidden characters, so it was not added.", hiddenText.message)
+
+        val hiddenName = assertFailsWith<IllegalArgumentException> {
+            cataloguePrompt("""{"name":"Go\u202Eback","text":"Be brief."}""")
+        }
+        assertEquals("This prompt contains hidden characters, so it was not added.", hiddenName.message)
+
+        val blank = assertFailsWith<IllegalArgumentException> {
+            cataloguePrompt("""{"name":"Blank","text":"  "}""")
+        }
+        assertEquals("This is not a saved prompt Rampart understands, so it was not added.", blank.message)
+
+        val kept = cataloguePrompt("""{"name":"Note","text":"line one\n\tline two"}""")
+        assertEquals(SavedPrompt("Note", "line one\n\tline two"), kept)
+    }
+
+    @Test
+    fun `preparePrompt is ready, already saved, or full`() {
+        val file = """{"name":"Reply to a lead","text":"Be brief."}"""
+        val ready = preparePrompt(file, emptyList()) as PromptStage.Ready
+        assertEquals(SavedPrompt("Reply to a lead", "Be brief."), ready.prompt)
+        assertFalse(ready.already)
+
+        val again = preparePrompt(file, listOf(SavedPrompt("REPLY TO A LEAD", "Old words."))) as PromptStage.Ready
+        assertTrue(again.already)
+
+        val full = (1..SavedPrompts.MOST).map { SavedPrompt("Name $it", "Body $it") }
+        val failed = preparePrompt(file, full) as PromptStage.Failed
+        assertEquals("There are already 50 saved prompts. Delete one first.", failed.reason)
+    }
+
+    @Test
+    fun `commitCataloguePrompt adds, replaces, and stops at fifty`() = runBlocking {
+        var saved = emptyList<SavedPrompt>()
+        val shelf = object : PromptShelf {
+            override val place = PromptPlace.LOCAL
+            override fun load(): List<SavedPrompt> = saved
+            override fun save(prompts: List<SavedPrompt>) {
+                saved = prompts
+            }
+        }
+        assertNull(commitCataloguePrompt(shelf, SavedPrompt("Reply to a lead", "Be brief.")))
+        assertEquals(listOf(SavedPrompt("Reply to a lead", "Be brief.")), saved)
+
+        assertNull(commitCataloguePrompt(shelf, SavedPrompt("reply to a lead", "Be warmer.")))
+        assertEquals(listOf(SavedPrompt("reply to a lead", "Be warmer.")), saved)
+
+        val full = (1..SavedPrompts.MOST).map { SavedPrompt("Name $it", "Body $it") }
+        saved = full
+        val refused = commitCataloguePrompt(shelf, SavedPrompt("One more", "No room."))
+        assertEquals("There are already 50 saved prompts. Delete one first.", refused)
+        assertEquals(full, saved)
+    }
+
+    @Test
     fun `added means the saved theme key or the saved template name`() {
         val theme = ThemeJson.decode(HYBRID)
         val themeItem = parseIndex(indexJson(themeEntry())).single()
@@ -396,6 +479,23 @@ private val DELETE_RECIPE = """
       "name": "Drop digests",
       "conditions": [{"field": "from", "comparator": "contains", "value": "news.example"}],
       "actions": [{"type": "delete"}]
+    }
+""".trimIndent()
+
+private fun promptEntry(
+    id: String = "reply-to-a-lead",
+    summary: String = "Reply to a lead in a few lines.",
+) = """
+    {
+      "kind": "prompt",
+      "id": "$id",
+      "name": "Reply to a lead",
+      "description": "A short reply.",
+      "author": "Rampart",
+      "path": "prompts/reply-to-a-lead.json",
+      "size": 80,
+      "sha256": "$SHA",
+      "preview": {"summary": "$summary"}
     }
 """.trimIndent()
 

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -63,12 +64,13 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 
 /**
- * Themes, message templates, and filters fetched from a catalogue.
+ * Themes, message templates, filters, and assistant prompts fetched from a catalogue.
  *
  * An item is colours, text, or a mail rule in the form already stored in a Sieve script.
- * Nothing downloaded here is executed, evaluated, loaded as a class, or used as a path
- * on disk. An add-on that ran code could read all your mail and your keys, so the
- * catalogue stays data.
+ * A prompt is text the person reads in full before it is saved; it goes to the model only
+ * when they pick it. Nothing downloaded here is executed, evaluated, loaded as a class,
+ * or used as a path on disk. An add-on that ran code could read all your mail and your
+ * keys, so the catalogue stays data.
  *
  * A filter is written onto one account's server. The server runs it at delivery. A
  * recipe that forwards mail is refused: that is the one way a data-only add-on can
@@ -76,7 +78,7 @@ import kotlinx.serialization.json.longOrNull
  *
  * Nothing in this file runs until the catalogue page is open. There is no startup fetch
  * and no timer. The index is trusted only for the size and SHA-256 it claims: the bytes
- * are checked against both before they are read as a theme, a template, or a filter.
+ * are checked against both before they are read as a theme, a template, a filter, or a prompt.
  */
 
 /** The catalogue Rampart ships with. Blank in settings means this address. */
@@ -101,7 +103,7 @@ internal const val CATALOGUE_NOT_A_FILTER = "This recipe is not a filter Rampart
 /** The index, and no more. Read one byte past this and the catalogue is refused. */
 internal const val CATALOGUE_INDEX_CAP = 256 * 1024
 
-/** One theme, template, or filter, and no more. An index entry larger than this is not downloaded. */
+/** One theme, template, filter, or prompt, and no more. An index entry larger than this is not downloaded. */
 internal const val CATALOGUE_ITEM_CAP = 8 * 1024
 
 private const val REDIRECT_LIMIT = 5
@@ -131,9 +133,9 @@ internal data class CatalogueItem(
  * The little the list draws, and nothing else.
  *
  * A theme preview is enough to paint a swatch. A template preview is the subject and the
- * first line. A filter preview is one line from the index. The rule in plain words is
- * built here from the parsed recipe, once it has been checked, and shown before it is
- * written. The full file is fetched only when the person adds it.
+ * first line. A filter preview is one line from the index, and so is a prompt preview.
+ * The rule in plain words is built here from the parsed recipe, once it has been checked,
+ * and shown before it is written. The full file is fetched only when the person adds it.
  */
 internal sealed interface CataloguePreview {
     data class Theme(
@@ -150,6 +152,8 @@ internal sealed interface CataloguePreview {
     data class Template(val subject: String, val firstLine: String) : CataloguePreview
 
     data class Filter(val summary: String) : CataloguePreview
+
+    data class Prompt(val summary: String) : CataloguePreview
 }
 
 /** A catalogue answer a person can read. Anything else thrown from the network is rewritten. */
@@ -179,7 +183,7 @@ internal fun parseIndex(text: String): List<CatalogueItem> {
 
 private fun readItem(obj: JsonObject): CatalogueItem? {
     val kind = text(obj, "kind") ?: return null
-    if (kind != "theme" && kind != "template" && kind != "filter") return null
+    if (kind != "theme" && kind != "template" && kind != "filter" && kind != "prompt") return null
     val id = text(obj, "id")?.takeIf { it.isNotBlank() } ?: return null
     val name = text(obj, "name")?.takeIf { it.isNotBlank() } ?: return null
     val path = text(obj, "path") ?: return null
@@ -191,7 +195,9 @@ private fun readItem(obj: JsonObject): CatalogueItem? {
     val preview = when (kind) {
         "theme" -> themePreview(previewObj)
         "template" -> templatePreview(previewObj)
-        else -> filterPreview(previewObj)
+        "filter" -> filterPreview(previewObj)
+        "prompt" -> promptPreview(previewObj)
+        else -> null
     }
     preview ?: return null
     return CatalogueItem(
@@ -237,6 +243,11 @@ private fun filterPreview(obj: JsonObject): CataloguePreview.Filter? {
     return CataloguePreview.Filter(summary)
 }
 
+private fun promptPreview(obj: JsonObject): CataloguePreview.Prompt? {
+    val summary = text(obj, "summary")?.takeIf { it.isNotBlank() } ?: return null
+    return CataloguePreview.Prompt(summary)
+}
+
 /**
  * The URL of one item, or null when [path] is not a relative file under the index.
  *
@@ -255,14 +266,14 @@ private fun plainHttps(uri: URI): Boolean =
     uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank() && uri.userInfo == null
 
 /**
- * A relative `themes/`, `templates/`, or `filters/` JSON file, or null.
+ * A relative `themes/`, `templates/`, `filters/`, or `prompts/` JSON file, or null.
  *
  * The checks are on the text, not on a normalised path: normalisation is what turns
  * `themes/../../secret` into something that looks safe after it has already escaped.
  */
 private fun safePath(path: String): String? {
     if (path.isEmpty() || path != path.trim()) return null
-    if (!(path.startsWith("themes/") || path.startsWith("templates/") || path.startsWith("filters/"))) return null
+    if (!(path.startsWith("themes/") || path.startsWith("templates/") || path.startsWith("filters/") || path.startsWith("prompts/"))) return null
     if (!path.endsWith(".json")) return null
     if ('\\' in path || '?' in path || '#' in path || ':' in path || '%' in path) return null
     if (".." in path || "//" in path) return null
@@ -345,8 +356,8 @@ internal fun catalogueTemplate(text: String): Template {
 
 /**
  * A theme is added when a custom theme already has the key its name would be saved under.
- * A template is added when one has its name. A filter is never "added" here: which
- * account it lands on is chosen when the person presses Add, so the button stays.
+ * A template is added when one has its name. A filter or a prompt is never "added" here:
+ * which account it lands on is chosen when the person presses Add, so the button stays.
  */
 internal fun catalogueAdded(item: CatalogueItem, themes: List<Theme>, templates: List<Template>): Boolean =
     when (item.kind) {
@@ -447,8 +458,9 @@ internal suspend fun loadIndex(address: String): List<CatalogueItem> = withConte
  *
  * Null when it was added. A sentence when it was not, in which case nothing was written.
  * The hash is checked before the bytes are parsed: parsing is what turns them into a
- * theme or a template, and an unverified file is not one. A filter is not saved here.
- * It has to be confirmed onto one account first. See [stageCatalogueFilter].
+ * theme or a template, and an unverified file is not one. A filter or a prompt is not
+ * saved here. Each has to be confirmed onto one account first. See [stageCatalogueFilter]
+ * and [stageCataloguePrompt].
  */
 internal suspend fun addCatalogueItem(indexAddress: String, item: CatalogueItem): String? = withContext(Dispatchers.IO) {
     try {
@@ -541,10 +553,120 @@ internal sealed interface FilterStage {
 }
 
 /**
+ * A saved prompt file: a name and the instruction, both strings.
+ *
+ * The text is kept whole. A blank text, or one longer than a saved prompt can be, is
+ * refused rather than cut, because a cut prompt is not the one the person was shown.
+ * A hidden character is refused too: the person approves what they can see, and text
+ * they cannot see must not ride along. A new line or a tab is ordinary text and stays.
+ */
+internal fun cataloguePrompt(text: String): SavedPrompt {
+    val root = runCatching { Json.parseToJsonElement(text) }.getOrNull() as? JsonObject
+    val name = root?.let { promptField(it, "name") }
+    val body = root?.let { promptField(it, "text") }
+    require(name != null && body != null && SavedPrompts.cleanName(name).isNotBlank() && body.isNotBlank()) {
+        "This is not a saved prompt Rampart understands, so it was not added."
+    }
+    require(body.trim().length <= SavedPrompts.TEXT_MAX) {
+        "This prompt is longer than a saved prompt can be, so it was not added."
+    }
+    require(!promptHidden(name) && !promptHidden(body)) {
+        "This prompt contains hidden characters, so it was not added."
+    }
+    return SavedPrompt(SavedPrompts.cleanName(name), body.trim())
+}
+
+/** A string field, or null when the key is missing or not a string. */
+private fun promptField(obj: JsonObject, name: String): String? =
+    (obj[name] as? JsonPrimitive)?.takeIf { it.isString }?.content
+
+/**
+ * A character the confirm step cannot show.
+ *
+ * Format characters cover a zero-width space or joiner, a bidi override or isolate, a
+ * byte order mark and a soft hyphen. An ISO control other than a new line, a return or
+ * a tab is the same kind of thing: it is in the file and not on the screen.
+ */
+private fun promptHidden(value: String): Boolean = value.any { ch ->
+    Character.getType(ch) == Character.FORMAT.toInt() ||
+        (ch.isISOControl() && ch != '\n' && ch != '\r' && ch != '\t')
+}
+
+/** A prompt the row can confirm, or the sentence that says why it cannot. */
+internal sealed interface PromptStage {
+    data class Ready(val prompt: SavedPrompt, val already: Boolean) : PromptStage
+    data class Failed(val reason: String) : PromptStage
+}
+
+/**
+ * [text] parsed and checked against [existing]. Nothing is written.
+ *
+ * A prompt of the same name, ignoring case, is ready to replace that one. A list that
+ * already holds fifty prompts of other names is refused, in [SavedPrompts.problem]'s words.
+ */
+internal fun preparePrompt(text: String, existing: List<SavedPrompt>): PromptStage {
+    val prompt = try {
+        cataloguePrompt(text)
+    } catch (e: IllegalArgumentException) {
+        return PromptStage.Failed(e.message ?: "This is not a saved prompt Rampart understands, so it was not added.")
+    }
+    val problem = SavedPrompts.problem(prompt.name, prompt.text, existing)
+    if (problem != null) return PromptStage.Failed(problem)
+    val already = existing.any { it.name.equals(prompt.name, ignoreCase = true) }
+    return PromptStage.Ready(prompt, already)
+}
+
+/**
+ * Download a prompt, check it, and describe it. Nothing is written.
+ *
+ * The size and the hash are checked before the file is read as a prompt. [shelf] is the
+ * account the person picked. A prompt that cannot be kept comes back as [PromptStage.Failed],
+ * and the shelf is left as it was.
+ */
+internal suspend fun stageCataloguePrompt(
+    indexAddress: String,
+    item: CatalogueItem,
+    shelf: PromptShelf,
+): PromptStage = withContext(Dispatchers.IO) {
+    try {
+        val text = fetchItem(indexAddress, item)
+        val existing = shelf.load()
+        preparePrompt(text, existing)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: CatalogueProblem) {
+        PromptStage.Failed(e.message ?: "That could not be added.")
+    } catch (e: Exception) {
+        PromptStage.Failed(e.message ?: "That could not be added.")
+    }
+}
+
+/**
+ * Write a prompt that was already confirmed.
+ *
+ * Null when it was added. A sentence when it was not, and the shelf is left as it was.
+ * The list is read again here, so a shelf that filled up since the confirm step is
+ * still refused.
+ */
+internal suspend fun commitCataloguePrompt(shelf: PromptShelf, prompt: SavedPrompt): String? =
+    withContext(Dispatchers.IO) {
+        try {
+            val existing = shelf.load()
+            SavedPrompts.problem(prompt.name, prompt.text, existing)?.let { return@withContext it }
+            shelf.save(SavedPrompts.upsert(existing, prompt))
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            e.message ?: "That could not be added."
+        }
+    }
+
+/**
  * The item's bytes, after the size and the hash have both matched.
  *
  * Throws [CatalogueProblem]. Parsing comes after this, so a file that did not match is
- * never turned into a theme, a template, or a filter.
+ * never turned into a theme, a template, a filter, or a prompt.
  */
 private fun fetchItem(indexAddress: String, item: CatalogueItem): String {
     if (item.size !in 1..CATALOGUE_ITEM_CAP) {
@@ -613,6 +735,33 @@ private fun hex(obj: JsonObject, name: String): String? {
     return value.takeIf { HEX_COLOUR.matches(it) }
 }
 
+private data class PromptChoice(val key: String, val label: String)
+
+private sealed interface PromptDraft {
+    val path: String
+
+    /** More than one account can keep a prompt, so the row asks which. */
+    data class Pick(override val path: String, val choices: List<PromptChoice>) : PromptDraft
+
+    /**
+     * The prompt in full, the account, and Add prompt or Cancel. Nothing is written yet.
+     * [placeWords] says where that account keeps its saved prompts.
+     */
+    data class Confirm(
+        override val path: String,
+        val accountKey: String,
+        val label: String,
+        val prompt: SavedPrompt,
+        val already: Boolean,
+        val placeWords: String,
+    ) : PromptDraft
+}
+
+private fun promptChoices(accounts: List<AccountMailboxes>): List<PromptChoice> = accounts.map { account ->
+    val label = account.email.ifBlank { account.name }.ifBlank { "This account" }
+    PromptChoice(account.key, label)
+}
+
 private data class FilterChoice(val key: String, val label: String, val reason: String?)
 
 private sealed interface FilterDraft {
@@ -647,7 +796,9 @@ private fun filterChoices(
  * fetch off startup and off any timer. Changing the address at the bottom loads again.
  *
  * A filter is confirmed in its row before it is written, and it is written to one
- * account's server rather than kept on this computer the way a theme is.
+ * account's server rather than kept on this computer the way a theme is. A prompt is
+ * confirmed the same way: the whole instruction is shown, and nothing is saved until
+ * the person adds it to one account.
  */
 @Composable
 internal fun CataloguePage(
@@ -668,6 +819,10 @@ internal fun CataloguePage(
     var busy by remember { mutableStateOf<String?>(null) }
     var filterTicket by remember { mutableStateOf(0) }
     var filterDraft by remember { mutableStateOf<FilterDraft?>(null) }
+    // A prompt added this visit, so the row says where it went instead of going quiet.
+    var promptAdded by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var promptTicket by remember { mutableStateOf(0) }
+    var promptDraft by remember { mutableStateOf<PromptDraft?>(null) }
     val scope = rememberCoroutineScope()
 
     fun commit(raw: String, force: Boolean = false) {
@@ -686,6 +841,8 @@ internal fun CataloguePage(
             rowErrors = emptyMap()
             filterTicket += 1
             filterDraft = null
+            promptTicket += 1
+            promptDraft = null
             busy = null
         }
     }
@@ -804,9 +961,81 @@ internal fun CataloguePage(
         }
     }
 
+    fun cancelPrompt() {
+        val path = promptDraft?.path
+        promptTicket += 1
+        promptDraft = null
+        if (path != null && busy == path) busy = null
+    }
+
+    fun stagePrompt(item: CatalogueItem, choice: PromptChoice) {
+        if (busy != null) return
+        promptTicket += 1
+        val ticket = promptTicket
+        busy = item.path
+        promptDraft = null
+        rowErrors = rowErrors - item.path
+        val index = address
+        val shelf = promptShelfOf(backendFor(choice.key), choice.key)
+        scope.launch {
+            try {
+                val outcome = stageCataloguePrompt(index, item, shelf)
+                if (ticket != promptTicket) return@launch
+                when (outcome) {
+                    is PromptStage.Failed -> rowErrors = rowErrors + (item.path to outcome.reason)
+                    is PromptStage.Ready -> promptDraft = PromptDraft.Confirm(
+                        path = item.path,
+                        accountKey = choice.key,
+                        label = choice.label,
+                        prompt = outcome.prompt,
+                        already = outcome.already,
+                        placeWords = shelf.place.words,
+                    )
+                }
+            } finally {
+                if (ticket == promptTicket && busy == item.path) busy = null
+            }
+        }
+    }
+
+    fun beginPrompt(item: CatalogueItem) {
+        if (busy != null) return
+        promptAdded = promptAdded - item.path
+        rowErrors = rowErrors - item.path
+        val choices = promptChoices(accounts)
+        when {
+            choices.size == 1 -> stagePrompt(item, choices.single())
+            choices.size > 1 -> promptDraft = PromptDraft.Pick(item.path, choices)
+            else -> rowErrors = rowErrors + (item.path to "Sign in to an account to keep saved prompts.")
+        }
+    }
+
+    fun commitPrompt(confirm: PromptDraft.Confirm) {
+        if (busy != null) return
+        promptTicket += 1
+        val ticket = promptTicket
+        busy = confirm.path
+        rowErrors = rowErrors - confirm.path
+        val shelf = promptShelfOf(backendFor(confirm.accountKey), confirm.accountKey)
+        scope.launch {
+            try {
+                val problem = commitCataloguePrompt(shelf, confirm.prompt)
+                if (ticket != promptTicket) return@launch
+                if (problem == null) {
+                    promptDraft = null
+                    promptAdded = promptAdded + (confirm.path to "Added to ${confirm.label}.")
+                } else {
+                    rowErrors = rowErrors + (confirm.path to problem)
+                }
+            } finally {
+                if (ticket == promptTicket && busy == confirm.path) busy = null
+            }
+        }
+    }
+
     Section(
         "Catalogue",
-        "Add a theme, a message template, or a filter. An item is data, and nothing else.",
+        "Add a theme, a message template, a filter, or an assistant prompt. An item is data, and nothing else.",
     )
     Text(
         "Opening this contacts ${catalogueHost(address)}.",
@@ -861,6 +1090,18 @@ internal fun CataloguePage(
                 onPick = { item, choice -> stageFilter(item, choice) },
                 onConfirm = { commitFilter(it) },
                 onCancel = { cancelFilter() },
+            )
+            Spacer(Modifier.height(8.dp))
+            PromptGroup(
+                rows = items.filter { it.kind == "prompt" },
+                draft = promptDraft,
+                rowErrors = rowErrors,
+                added = promptAdded,
+                busy = busy,
+                onAdd = { beginPrompt(it) },
+                onPick = { item, choice -> stagePrompt(item, choice) },
+                onConfirm = { commitPrompt(it) },
+                onCancel = { cancelPrompt() },
             )
         }
     }
@@ -998,6 +1239,101 @@ private fun FilterBelow(
 }
 
 @Composable
+private fun PromptGroup(
+    rows: List<CatalogueItem>,
+    draft: PromptDraft?,
+    rowErrors: Map<String, String>,
+    added: Map<String, String>,
+    busy: String?,
+    onAdd: (CatalogueItem) -> Unit,
+    onPick: (CatalogueItem, PromptChoice) -> Unit,
+    onConfirm: (PromptDraft.Confirm) -> Unit,
+    onCancel: () -> Unit,
+) {
+    Section(
+        "Assistant prompts",
+        "A saved instruction for the assistant. You read all of it before it is added.",
+    )
+    if (rows.isEmpty()) {
+        Text(
+            "None in this catalogue.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline,
+        )
+        return
+    }
+    rows.forEach { item ->
+        val here = draft?.takeIf { it.path == item.path }
+        CatalogueRow(
+            item = item,
+            added = false,
+            error = rowErrors[item.path],
+            busy = busy == item.path,
+            enabled = busy == null || busy == item.path,
+            onAdd = { onAdd(item) },
+            below = {
+                if (here == null) added[item.path]?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                }
+                PromptBelow(
+                    draft = here,
+                    busy = busy == item.path,
+                    enabled = busy == null || busy == item.path,
+                    onPick = { onPick(item, it) },
+                    onConfirm = onConfirm,
+                    onCancel = onCancel,
+                )
+            },
+            showAdd = here == null,
+        )
+    }
+}
+
+@Composable
+private fun PromptBelow(
+    draft: PromptDraft?,
+    busy: Boolean,
+    enabled: Boolean,
+    onPick: (PromptChoice) -> Unit,
+    onConfirm: (PromptDraft.Confirm) -> Unit,
+    onCancel: () -> Unit,
+) {
+    when (draft) {
+        null -> Unit
+        is PromptDraft.Pick -> {
+            Text("Which account?", style = MaterialTheme.typography.bodySmall)
+            draft.choices.forEach { choice ->
+                TextButton(onClick = { onPick(choice) }, enabled = enabled && !busy) { Text(choice.label) }
+            }
+            TextButton(onClick = onCancel, enabled = !busy) { Text("Cancel") }
+        }
+        is PromptDraft.Confirm -> {
+            Text(draft.prompt.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+            SelectionContainer {
+                Box(
+                    Modifier.fillMaxWidth()
+                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(6.dp))
+                        .padding(8.dp),
+                ) {
+                    Text(draft.prompt.text, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            Text(draft.label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+            Text(draft.placeWords, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+            if (draft.already) {
+                Text("Replaces your saved prompt of the same name.", style = MaterialTheme.typography.bodySmall)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { onConfirm(draft) }, enabled = enabled && !busy) {
+                    Text(if (busy) "Adding" else "Add prompt")
+                }
+                TextButton(onClick = onCancel, enabled = !busy) { Text("Cancel") }
+            }
+        }
+    }
+}
+
+@Composable
 private fun CatalogueRow(
     item: CatalogueItem,
     added: Boolean,
@@ -1021,6 +1357,7 @@ private fun CatalogueRow(
             }
             is CataloguePreview.Template -> Unit
             is CataloguePreview.Filter -> Unit
+            is CataloguePreview.Prompt -> Unit
         }
         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
             Text(item.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
@@ -1047,6 +1384,13 @@ private fun CatalogueRow(
                 )
             }
             if (item.preview is CataloguePreview.Filter) {
+                Text(
+                    item.preview.summary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+            if (item.preview is CataloguePreview.Prompt) {
                 Text(
                     item.preview.summary,
                     style = MaterialTheme.typography.bodySmall,
