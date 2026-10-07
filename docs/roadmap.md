@@ -78,7 +78,7 @@ Released since the last reset: Rook safety (RAM-125), Rook reliability (RAM-126)
 3. **RAM-44, the fifty thousand message test.** A repeatable speed and memory check, so a slowdown is a number rather than a feeling. First pass done 2026-10-06: the checks, their numbers and the line each must stay under are in `docs/performance.md`. It found and fixed one slowdown (the first scroll to the bottom of a 50,000 message folder, 64 s of local work down to 6 s). Still to measure: a full sync against a real server, and memory after an hour and after a day.
 4. **RAM-135, the catalogue's next kind:** assistant shortcuts, with the full text shown before adding. Then AI provider presets, then icon packs once they are files.
 5. **RAM-39, Gmail and Microsoft sign-in.** Needs client IDs registered with Google and Microsoft.
-6. **RAM-41, tray icon, unread badge and notification actions.**
+6. **RAM-41, tray icon, unread badge and notification actions.** Linux part done 2026-10-07 (Archive and Mark read on a one-message notification, see below). Next: the same buttons on Windows, which need proper Windows toasts and so work in the installed version only.
 7. **RAM-126 follow-up:** try the same Rook requests on DeepSeek, Gemini and an OpenAI-compatible model.
 
 Waiting on a decision from Justin: RAM-111 (may Rook run on open, or only on a button press) and RAM-116 (whether our mail server has room for ClamAV).
@@ -249,6 +249,15 @@ burst was ready. The unread count sits on the Windows taskbar button through ITa
 on the macOS dock through AWT's badge. Quiet hours (synced) and a switch per account (this
 computer only) are in Settings, Notifications. `NotifyRules.kt` is the logic,
 `DesktopShell.kt` the platform seam, `NotifyRulesTest.kt` the check.
+
+**Notification buttons and close-to-tray fixes (RAM-41, Linux), 2026-10-07.** A notification
+for a single message carries Archive and Mark read on Linux; a burst carries neither, since
+a button there would not say which message it acts on. Found while testing it: closing to the
+tray took the window out of the composition, and the mail check lives in the window, so the
+tray count froze and notifications stopped the moment the window closed. The window is now
+hidden instead. And Rampart aborted a few seconds after start on any Linux desktop with a
+notification service, because the GLib loop it ran for libnotify was on the default context
+and ran JavaFX WebKit's sources on the wrong thread; it now runs a context of its own.
 
 ---
 

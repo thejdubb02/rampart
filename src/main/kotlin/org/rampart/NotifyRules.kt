@@ -18,8 +18,11 @@ internal data class MailRef(val account: String, val summary: Summary)
 /** A message that arrived, and the account it arrived in. */
 internal data class Arrival(val account: String, val summary: Summary)
 
-/** What a notification says, and the message a click on it opens. */
-internal data class MailNotice(val title: String, val body: String, val opens: MailRef?)
+/**
+ * What a notification says, and the message a click on it opens. [single] when it is about
+ * that one message only, which is when its buttons can act on it.
+ */
+internal data class MailNotice(val title: String, val body: String, val opens: MailRef?, val single: Boolean = false)
 
 /**
  * Arrivals gathered into bursts.
@@ -92,7 +95,7 @@ internal fun burstNotice(arrivals: List<Arrival>): MailNotice? {
     val opens = MailRef(newest.account, newest.summary)
     if (arrivals.size == 1) {
         val only = arrivals[0].summary
-        return MailNotice(sender(only), only.subject.ifBlank { "(no subject)" }, opens)
+        return MailNotice(sender(only), only.subject.ifBlank { "(no subject)" }, opens, single = true)
     }
     val people = arrivals.map { sender(it.summary) }.distinctBy { it.lowercase() }
     val title = if (people.size == 1) {

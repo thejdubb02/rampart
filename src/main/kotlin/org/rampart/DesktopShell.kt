@@ -18,10 +18,11 @@ import java.awt.image.BufferedImage
 internal interface DesktopShell {
     /**
      * Shows one notification. [onClick] runs, on some thread, if the person clicks it and
-     * this platform can say so. Nothing else is promised: a platform that cannot report a
-     * click still shows the words.
+     * this platform can say so, and each of [actions] is a button where the platform has
+     * them. Nothing else is promised: a platform that cannot report a click still shows the
+     * words.
      */
-    fun notify(title: String, body: String, onClick: () -> Unit)
+    fun notify(title: String, body: String, actions: List<NoticeAction> = emptyList(), onClick: () -> Unit)
 
     /**
      * The tray icon was activated. Where the platform reports a click on a notification as
@@ -33,9 +34,12 @@ internal interface DesktopShell {
     fun unread(count: Int, window: Window?) {}
 }
 
+/** A button on a notification. [run] is called on whatever thread the platform reports it on. */
+internal class NoticeAction(val label: String, val run: () -> Unit)
+
 /** Does nothing, for tests, for a desktop without a tray, and as the fallback for every failure. */
 internal object NoShell : DesktopShell {
-    override fun notify(title: String, body: String, onClick: () -> Unit) {}
+    override fun notify(title: String, body: String, actions: List<NoticeAction>, onClick: () -> Unit) {}
 }
 
 /**
@@ -61,7 +65,7 @@ internal class TrayShell(
 ) : DesktopShell {
     @Volatile private var pending: Pair<Long, () -> Unit>? = null
 
-    override fun notify(title: String, body: String, onClick: () -> Unit) {
+    override fun notify(title: String, body: String, actions: List<NoticeAction>, onClick: () -> Unit) {
         pending = clock() to onClick
         send(title, body)
     }
@@ -82,7 +86,7 @@ internal class SplitShell(
     private val notices: DesktopShell,
     private val count: DesktopShell,
 ) : DesktopShell {
-    override fun notify(title: String, body: String, onClick: () -> Unit) = notices.notify(title, body, onClick)
+    override fun notify(title: String, body: String, actions: List<NoticeAction>, onClick: () -> Unit) = notices.notify(title, body, actions, onClick)
     override fun trayActivated() = notices.trayActivated()
     override fun unread(count: Int, window: Window?) = this.count.unread(count, window)
 }
@@ -95,7 +99,7 @@ internal class SplitShell(
  * overlay support, used when [WindowsTaskbar] could not be started. Anything else, nothing.
  */
 internal object AwtBadge : DesktopShell {
-    override fun notify(title: String, body: String, onClick: () -> Unit) {}
+    override fun notify(title: String, body: String, actions: List<NoticeAction>, onClick: () -> Unit) {}
 
     override fun unread(count: Int, window: Window?) {
         runCatching {

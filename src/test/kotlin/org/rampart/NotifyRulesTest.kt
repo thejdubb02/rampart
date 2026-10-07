@@ -148,6 +148,30 @@ class NotifyRulesTest {
         assertEquals("Dana", noticeFor(burst, inbox, true, emptySet(), night, LocalTime.NOON)!!.title)
     }
 
+    // Notification buttons
+
+    @Test
+    fun `a one-message notification carries Archive and Mark read, a burst carries none`() {
+        val shown = mutableListOf<List<NoticeAction>>()
+        val before = NewMailNotices.shell
+        NewMailNotices.shell = object : DesktopShell {
+            override fun notify(title: String, body: String, actions: List<NoticeAction>, onClick: () -> Unit) {
+                shown += actions
+            }
+        }
+        try {
+            NewMailNotices.show(burstNotice(listOf(arrival("1", "Dana")))!!)
+            NewMailNotices.show(burstNotice(listOf(arrival("1", "Dana"), arrival("2", "Alex")))!!)
+        } finally {
+            NewMailNotices.shell = before
+        }
+        assertEquals(listOf("Archive", "Mark read"), shown[0].map { it.label })
+        assertTrue(shown[1].isEmpty(), "archiving the newest of five would look like archiving all five")
+        shown[0][0].run()
+        val (ref, role) = NewMailNotices.acts.tryReceive().getOrThrow()
+        assertEquals("1" to "archive", ref.summary.id to role)
+    }
+
     // The tray route's click
 
     @Test

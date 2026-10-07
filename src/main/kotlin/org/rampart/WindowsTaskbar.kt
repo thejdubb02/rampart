@@ -52,7 +52,7 @@ internal class WindowsTaskbar private constructor(
     /** The icon last handed to the shell, destroyed once the next one has replaced it. */
     private var shown: WinDef.HICON? = null
 
-    override fun notify(title: String, body: String, onClick: () -> Unit) {}
+    override fun notify(title: String, body: String, actions: List<NoticeAction>, onClick: () -> Unit) {}
 
     override fun unread(count: Int, window: Window?) {
         if (window == null) return

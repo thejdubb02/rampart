@@ -280,12 +280,16 @@ private fun ApplicationScope.Rampart() {
         )
     }
 
-    // Closed to the tray is closed, not quit: the window goes away, the count stays, and
-    // mail keeps arriving. Only where there is a tray to go to, or it would be a close
-    // button that loses the application.
-    if (closed) return
-
+    /*
+     * Closed to the tray is hidden, not disposed: the window goes away, the count stays, and
+     * mail keeps arriving. The mail check, the count and the notifications all live in the
+     * window's content, so taking the window out of the composition, which is what this
+     * did until 2026-10-07, froze the tray count and silenced every notification the moment
+     * the window closed. Only where there is a tray to go to, or it would be a close button
+     * that loses the application.
+     */
     Window(
+        visible = !closed,
         onCloseRequest = {
             if (isTraySupported && Settings.closeToTray()) {
                 remember()
@@ -4065,7 +4069,7 @@ private fun Reader(
      * nothing and say nothing. The server is asked anyway, and a backend that cannot
      * say falls back to those rows, or to this one message.
      */
-    fun fileConversation(message: Summary, role: String, verb: String) {
+    fun fileConversation(message: Summary, role: String, verb: String, from: String? = null) {
         val key = accountOf(message) ?: return
         val flight = key + "\u0000" + message.threadId.ifBlank { message.id }
         // A second click on the same conversation while this one is in flight. Ignored,
@@ -4077,7 +4081,7 @@ private fun Reader(
             report(noSuchFolder(role))
             return
         }
-        val folder = sourceFolder(key)
+        val folder = from ?: sourceFolder(key)
         scope.launch {
             try {
                 /*
@@ -4140,6 +4144,18 @@ private fun Reader(
                 undo = folder?.let { Undoable(listOf(Move(key, ids, it, into)), verb) }
             } finally {
                 filing.remove(flight)
+            }
+        }
+    }
+
+    // A button on a new-mail notification. The message is in its inbox whatever folder is
+    // on screen, so that is the folder it is filed from.
+    LaunchedEffect(Unit) {
+        for ((ref, role) in NewMailNotices.acts) {
+            val message = ref.summary.copy(account = ref.account)
+            when (role) {
+                "read" -> markRead(message, true)
+                else -> fileConversation(message, role, pastTense(role), folderFor("inbox", mailboxes[ref.account].orEmpty())?.id)
             }
         }
     }

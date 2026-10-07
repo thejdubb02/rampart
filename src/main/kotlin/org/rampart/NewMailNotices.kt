@@ -28,6 +28,9 @@ internal object NewMailNotices {
      */
     val opens = Channel<MailRef>(Channel.CONFLATED)
 
+    /** A notification button pressed: the message, and "archive" or "read". Every press counts. */
+    val acts = Channel<Pair<MailRef, String>>(Channel.UNLIMITED)
+
     /** Called by the poll with what it found new in one account's inbox. */
     fun arrived(account: String, fresh: List<Summary>, now: Long = System.currentTimeMillis()) {
         if (fresh.isEmpty()) return
@@ -61,6 +64,11 @@ internal object NewMailNotices {
     }
 
     fun show(notice: MailNotice) {
-        shell.notify(notice.title, notice.body) { notice.opens?.let { opens.trySend(it) } }
+        val ref = notice.opens?.takeIf { notice.single }
+        val buttons = if (ref == null) emptyList() else listOf(
+            NoticeAction("Archive") { acts.trySend(ref to "archive") },
+            NoticeAction("Mark read") { acts.trySend(ref to "read") },
+        )
+        shell.notify(notice.title, notice.body, buttons) { notice.opens?.let { opens.trySend(it) } }
     }
 }
