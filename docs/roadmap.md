@@ -78,7 +78,7 @@ Released since the last reset: Rook safety (RAM-125), Rook reliability (RAM-126)
 3. **RAM-44, the fifty thousand message test.** A repeatable speed and memory check, so a slowdown is a number rather than a feeling. First pass done 2026-10-06: the checks, their numbers and the line each must stay under are in `docs/performance.md`. It found and fixed one slowdown (the first scroll to the bottom of a 50,000 message folder, 64 s of local work down to 6 s). Still to measure: a full sync against a real server, and memory after an hour and after a day.
 4. **RAM-135, the catalogue's next kind:** assistant shortcuts, with the full text shown before adding. Then AI provider presets, then icon packs once they are files.
 5. **RAM-39, Gmail and Microsoft sign-in.** Needs client IDs registered with Google and Microsoft.
-6. **RAM-41, tray icon, unread badge and notification actions.** Linux part done 2026-10-07 (Archive and Mark read on a one-message notification, see below). Next: the same buttons on Windows, which need proper Windows toasts and so work in the installed version only.
+6. **RAM-41, tray icon, unread badge and notification actions.** Linux part done 2026-10-07 (Archive and Mark read on a one-message notification, see below). Windows part built 2026-10-07 (real toasts with the same buttons, installed version only) and not yet tried on a Windows machine.
 7. **RAM-126 follow-up:** try the same Rook requests on DeepSeek, Gemini and an OpenAI-compatible model.
 
 Waiting on a decision from Justin: RAM-111 (may Rook run on open, or only on a button press) and RAM-116 (whether our mail server has room for ClamAV).
@@ -258,6 +258,18 @@ tray count froze and notifications stopped the moment the window closed. The win
 hidden instead. And Rampart aborted a few seconds after start on any Linux desktop with a
 notification service, because the GLib loop it ran for libnotify was on the default context
 and ran JavaFX WebKit's sources on the wrong thread; it now runs a context of its own.
+
+**Notification buttons on Windows (RAM-41), 2026-10-07.** The installed build now shows a
+real Windows toast instead of a tray balloon, because a balloon cannot carry buttons. Each
+button, and the toast itself, is a link in the `io.github.thejdubb02.rampart:` scheme that the
+package registers. Windows answers a click by starting a second copy with the link as its
+argument; that copy loses the single-instance check and passes the link down the same loopback
+socket to the copy already running, which presses the button. That is protocol activation, and
+it was chosen over a COM toast activator, which would mean implementing a WinRT class through
+JNA. A side effect is that clicking the copy left in the Action Centre now opens the message,
+which the balloon could not do. Only the installed package has an app identity and the scheme,
+so every other build, and any toast that fails to show, keeps the balloon. Not yet checked on
+Windows: this box is Linux, and it needs a release installed to see it.
 
 ---
 

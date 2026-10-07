@@ -32,6 +32,12 @@ internal interface DesktopShell {
 
     /** The unread count, shown on the taskbar button or the dock. Zero clears it. */
     fun unread(count: Int, window: Window?) {}
+
+    /**
+     * A link from a notification, handed over by a second copy Windows started.
+     * True if this shell knew it.
+     */
+    fun opened(link: String): Boolean = false
 }
 
 /** A button on a notification. [run] is called on whatever thread the platform reports it on. */
@@ -45,15 +51,14 @@ internal object NoShell : DesktopShell {
 /**
  * Notifications through the tray icon, which is what Compose's Tray already owns.
  *
- * On Windows this is also how a click is heard, and it is the deliberate choice over the
- * WinRT toast API. A balloon from `TrayIcon.displayMessage` is drawn by Windows 10 and 11 as
- * an ordinary toast, and clicking it sends NIN_BALLOONUSERCLICK to the icon, which AWT turns
- * into the same ActionEvent as activating the icon: Compose passes that to `Tray(onAction)`.
- * The toast API proper would need a registered AppUserModelID and Start menu shortcut before
- * Windows shows anything at all, plus a COM activator implemented through JNA vtables for
- * the click, and an unpackaged or portable install has neither. The tray route needs
- * nothing, and the only thing lost is a click on the copy left in the Action Centre after
- * the toast has gone, which lands as opening the window rather than the message.
+ * On Windows a click on a balloon is heard here. A balloon from `TrayIcon.displayMessage`
+ * is drawn by Windows 10 and 11 as an ordinary toast, and clicking it sends
+ * NIN_BALLOONUSERCLICK to the icon, which AWT turns into the same ActionEvent as activating
+ * the icon: Compose passes that to `Tray(onAction)`. The installed build now uses
+ * [WindowsToast], because a balloon cannot carry buttons. Balloons remain the fallback
+ * for every other build, and for a toast that could not be shown. The only thing a balloon
+ * still loses is a click on the copy left in the Action Centre after it has gone, which
+ * lands as opening the window rather than the message.
  *
  * Because the click and the icon share one event, a click is taken to mean the notification
  * only while that notification is plausibly still on screen, [window] milliseconds.
@@ -88,6 +93,7 @@ internal class SplitShell(
 ) : DesktopShell {
     override fun notify(title: String, body: String, actions: List<NoticeAction>, onClick: () -> Unit) = notices.notify(title, body, actions, onClick)
     override fun trayActivated() = notices.trayActivated()
+    override fun opened(link: String) = notices.opened(link)
     override fun unread(count: Int, window: Window?) = this.count.unread(count, window)
 }
 
@@ -149,7 +155,7 @@ internal fun desktopShell(tray: ((String, String) -> Unit)?): DesktopShell {
     val os = System.getProperty("os.name").orEmpty().lowercase()
     val balloons: DesktopShell = tray?.let { TrayShell(it) } ?: NoShell
     return when {
-        "windows" in os -> SplitShell(balloons, runCatching { WindowsTaskbar.start() }.getOrNull() ?: AwtBadge)
+        "windows" in os -> SplitShell(WindowsToast.start(balloons) ?: balloons, runCatching { WindowsTaskbar.start() }.getOrNull() ?: AwtBadge)
         "linux" in os -> SplitShell(runCatching { LibNotify.start() }.getOrNull() ?: balloons, AwtBadge)
         else -> SplitShell(balloons, AwtBadge)
     }

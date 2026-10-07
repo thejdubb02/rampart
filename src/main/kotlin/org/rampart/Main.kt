@@ -119,7 +119,7 @@ import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.CancellationException
 
-fun main() {
+fun main(args: Array<String>) {
     // Catches a startup crash on whichever thread it lands on, Swing's event thread
     // included: a deferred Windows package update that half-applied is exactly the kind
     // of thing that breaks composition on the first frame rather than in this function's
@@ -128,7 +128,9 @@ fun main() {
     Thread.setDefaultUncaughtExceptionHandler { _, thrown -> reportStartupFailure(thrown) }
     try {
         // Before anything is drawn, so a second copy costs a moment rather than a window.
-        if (!SingleInstance.claim()) return
+        // The argument is a toast link when Windows started this copy from a button, and
+        // absent every other time. The copy already running hears it, and this one exits.
+        if (!SingleInstance.claim(link = args.firstOrNull())) return
         // Before the first window, because it is read once when the scene is made.
         enableWebBody()
         application {
@@ -341,6 +343,9 @@ private fun ApplicationScope.Rampart() {
                     window.requestFocus()
                 }
             }
+            // A toast button starts a second copy whose only argument is the button's link.
+            // False means the link was not one of ours, and the window is raised instead.
+            SingleInstance.onLink { NewMailNotices.shell.opened(it) }
         }
         // Two axes, on purpose. Somebody who likes the dark palette and wants heavier
         // glyphs should not have to choose between them. The font scale multiplies the
