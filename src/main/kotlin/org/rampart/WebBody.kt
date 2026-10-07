@@ -197,6 +197,23 @@ internal fun WebBody(
         delay(6_000)
         if (!measured) onBlank()
     }
+    /*
+     * A box shorter than its own text, after the height was given.
+     *
+     * Seen once on Windows, 0.1.463: a six-line message cut off after a line and a half, with
+     * nothing on screen saying more was there, and it would not reproduce anywhere else.
+     * The page knows how tall it is and how tall the panel it got really is, so when the two
+     * disagree for a message that was meant to fit, it is logged with the pixels hidden and
+     * the panel is nudged once so the layout outside runs again.
+     */
+    var nudged by remember(document) { mutableStateOf(false) }
+    val clipped: (Int, Int) -> Unit = clipped@{ css, shown ->
+        val hidden = hiddenPixels(css, shown, bridge.zoom)
+        if (hidden <= 0 || nudged) return@clipped
+        nudged = true
+        Diagnostics.count(Metric.MESSAGE_BODY_CLIPPED, hidden)
+        height = appliedHeight(css, bridge.zoom) + 1
+    }
     bridge.onScroll = onScroll
     // A page that already produced a height did draw. Reporting it blank then swaps in
     // the block renderer under a message the reader is looking at.
@@ -282,6 +299,7 @@ internal fun WebBody(
                             view,
                             { if (generation == documentGeneration.get()) bridge.onHeight(it) },
                             { if (generation == documentGeneration.get()) bridge.onBlank() },
+                            { css, shown -> if (generation == documentGeneration.get()) clipped(css, shown) },
                         ),
                     )
                 }
@@ -367,7 +385,12 @@ internal fun WebBody(
  * pane is laid out after the document loads, pictures decode later still, and the
  * measurement that counts is whichever one lands after all of that. Stops on its own.
  */
-private fun measure(view: WebView, report: (Int) -> Unit, blank: () -> Unit): javafx.animation.Timeline {
+private fun measure(
+    view: WebView,
+    report: (Int) -> Unit,
+    blank: () -> Unit,
+    clipped: (Int, Int) -> Unit,
+): javafx.animation.Timeline {
     val timeline = javafx.animation.Timeline()
     // Fifteen seconds rather than six. A picture fetched from the sender's own server, which
     // is what agreeing to remote pictures means, can decode long after the document loads,
@@ -375,6 +398,7 @@ private fun measure(view: WebView, report: (Int) -> Unit, blank: () -> Unit): ja
     // it with the rest scrolling inside a box.
     timeline.cycleCount = 60
     var ticks = 0
+    var last = 0
     val tick = javafx.event.EventHandler<javafx.event.ActionEvent> {
         ticks++
         /*
@@ -391,6 +415,14 @@ private fun measure(view: WebView, report: (Int) -> Unit, blank: () -> Unit): ja
         // Raw page pixels. Zoom is applied once, where the height is stored, so a later
         // report from the page cannot put back a shorter unscaled number.
         if (tall != null && tall > 0) report(tall.toInt())
+        // Checked against the panel only once the height has held still for a tick, so a
+        // page that is still growing towards the height it just asked for is not counted.
+        val now = tall?.toInt() ?: 0
+        if (ticks > 8 && now > 0 && now == last) {
+            val shown = runCatching { (view.engine.executeScript("window.innerHeight") as? Number)?.toInt() }.getOrNull()
+            if (shown != null && shown > 0) clipped(now, shown)
+        }
+        last = now
         // Three seconds in, and the engine either will not answer or is answering that it
         // has a document with nothing in it. Asked once rather than every tick, because a
         // page part way through loading is legitimately empty and this is not a race to
@@ -733,7 +765,12 @@ private val WIRING = """
   tell();
   window.addEventListener('load', again);
   window.addEventListener('resize', again);
-  if (window.ResizeObserver) new ResizeObserver(again).observe(document.documentElement);
+  // The body as well: the root is the viewport, so text that reflows later (a font
+  // arriving, a style applied late) changes the body and never the root.
+  if (window.ResizeObserver) {
+    new ResizeObserver(again).observe(document.documentElement);
+    if (document.body) new ResizeObserver(again).observe(document.body);
+  }
   // A picture finishing is the ordinary reason a first measurement is short.
   Array.prototype.forEach.call(document.images, function (img) {
     img.addEventListener('load', again);
@@ -864,6 +901,18 @@ internal fun openingHeight(remembered: Int?, pane: Int, cap: Int = TALLEST): Int
 internal fun appliedHeight(cssPixels: Int, zoom: Double, cap: Int = TALLEST): Int {
     if (cssPixels <= 0 || zoom <= 0.0) return 0
     return (cssPixels * zoom).toInt().coerceIn(1, cap)
+}
+
+/**
+ * Page pixels a message hides below its panel, or 0 when it all shows.
+ *
+ * [css] is the page's height and [shown] its viewport, both in page pixels. A page past
+ * [TALLEST] scrolls inside its panel by design, so that is never counted. Two pixels of
+ * slack for rounding between the page's pixels and the window's.
+ */
+internal fun hiddenPixels(css: Int, shown: Int, zoom: Double, cap: Int = TALLEST): Int {
+    if (css <= 0 || shown <= 0 || zoom <= 0.0 || css * zoom >= cap) return 0
+    return (css - shown).takeIf { it > 2 } ?: 0
 }
 
 /**

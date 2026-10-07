@@ -91,7 +91,7 @@ class DiagnosticsTest {
     fun `the metric allowlist is exactly the catalog this was built against`() {
         val expected = setOf(
             "message.open.total", "message.open.fetch", "message.open.render",
-            "message.open.cache_hit", "message.open.read_ahead_hit",
+            "message.open.cache_hit", "message.open.read_ahead_hit", "message.body.clipped",
             "list.load.cold", "list.load.warm", "list.page.load", "list.commands",
             "search.query", "search.fallback",
             "send.compose_to_sent", "send.failure",

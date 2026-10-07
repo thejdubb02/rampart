@@ -1924,11 +1924,12 @@ private fun DiagnosticsPage() {
     val fetches = events.filter { it.metric == Metric.MESSAGE_OPEN_FETCH.key }.take(8)
     val renders = events.filter { it.metric == Metric.MESSAGE_OPEN_RENDER.key }.take(8)
     val commands = events.filter { it.metric == Metric.LIST_COMMANDS.key }
+    val clips = events.filter { it.metric == Metric.MESSAGE_BODY_CLIPPED.key }
     // Outcomes that are fine (an update found, already current, staged) are not trouble.
     val fine = setOf("newer-found", "current", "staged", "not-ready")
     val troubles = events.filter { it.category != null && it.category !in fine }.take(8)
 
-    if (totals.isEmpty() && commands.isEmpty() && troubles.isEmpty()) {
+    if (totals.isEmpty() && commands.isEmpty() && troubles.isEmpty() && clips.isEmpty()) {
         Text(
             "Nothing yet this session. Open a few messages and a folder or two, then come " +
                 "back here.",
@@ -1949,6 +1950,11 @@ private fun DiagnosticsPage() {
     if (renders.isNotEmpty()) {
         Text("Render, of the same", style = MaterialTheme.typography.labelLarge)
         Text(renders.joinToString("   ") { msText(it.value) }, style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(6.dp))
+    }
+    if (clips.isNotEmpty()) {
+        Text("Messages shown cut short, then resized", style = MaterialTheme.typography.labelLarge)
+        Text(clips.joinToString("   ") { "${it.value?.toInt() ?: 0} px hidden" }, style = MaterialTheme.typography.bodySmall)
         Spacer(Modifier.height(6.dp))
     }
     if (commands.isNotEmpty()) {

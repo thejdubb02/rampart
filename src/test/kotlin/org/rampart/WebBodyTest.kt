@@ -96,6 +96,18 @@ class WebBodyTest {
     }
 
     @Test
+    fun `a message cut short by its panel is counted, one meant to scroll is not`() {
+        // The 0.1.463 report: six lines in a box a line and a half tall.
+        assertEquals(110, hiddenPixels(css = 150, shown = 40, zoom = 1.0, cap = 3000))
+        assertEquals(0, hiddenPixels(css = 150, shown = 150, zoom = 1.0, cap = 3000))
+        assertEquals(0, hiddenPixels(css = 150, shown = 148, zoom = 1.0, cap = 3000))
+        // Past the cap the page scrolls itself on purpose, at any zoom.
+        assertEquals(0, hiddenPixels(css = 2500, shown = 2000, zoom = 1.5, cap = 3000))
+        assertEquals(500, hiddenPixels(css = 2500, shown = 2000, zoom = 1.0, cap = 3000))
+        assertEquals(0, hiddenPixels(css = 150, shown = 0, zoom = 1.0, cap = 3000))
+    }
+
+    @Test
     fun `a measurement replaces a shorter start and is only capped at the panel limit`() {
         // The opening estimate, and a height remembered from last time, are not a ceiling.
         assertEquals(2200, nextBodyHeight(current = 480, measured = 2200, cap = 3000))

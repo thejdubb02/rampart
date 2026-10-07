@@ -343,6 +343,8 @@ enum class Metric(val key: String) {
     MESSAGE_OPEN_RENDER("message.open.render"),
     MESSAGE_OPEN_CACHE_HIT("message.open.cache_hit"),
     MESSAGE_OPEN_READ_AHEAD_HIT("message.open.read_ahead_hit"),
+    /** A message shown in a box shorter than its text; the amount is the page pixels hidden. */
+    MESSAGE_BODY_CLIPPED("message.body.clipped"),
     LIST_LOAD_COLD("list.load.cold"),
     LIST_LOAD_WARM("list.load.warm"),
     LIST_PAGE_LOAD("list.page.load"),
