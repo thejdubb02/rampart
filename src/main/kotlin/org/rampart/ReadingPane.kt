@@ -773,7 +773,10 @@ internal fun Message(
                                                 "via $host",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = MaterialTheme.colorScheme.outline,
-                                                modifier = Modifier.clip(MaterialTheme.shapes.small)
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                // Capped so a long relay host never squeezes the sender's name out.
+                                                modifier = Modifier.widthIn(max = 160.dp).clip(MaterialTheme.shapes.small)
                                                     .background(MaterialTheme.colorScheme.surfaceVariant)
                                                     .padding(horizontal = 7.dp, vertical = 2.dp),
                                             )

@@ -1576,7 +1576,7 @@ private fun AccountsPage(
     /** How full each account is, by account key. Absent where the server keeps no limit. */
     quotas: Map<String, List<MailQuota>> = emptyMap(),
 ) {
-    Section("Accounts", "Signed in on this computer. Passwords stay in Windows, never in a file.")
+    Section("Accounts", "Signed in on this computer. Passwords stay in this computer's credential store, never in a file.")
     accounts.forEach { account ->
         Row(
             Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).rowHover().padding(vertical = 6.dp),

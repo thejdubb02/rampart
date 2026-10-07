@@ -91,6 +91,17 @@ class DetailsTest {
     }
 
     @Test
+    fun `SPF is read for the envelope sender, not the HELO name Stalwart writes first`() {
+        val gmail = "mail.willhitestrategy.org; dkim=pass header.d=gmail.com; " +
+            "spf=none (no record) smtp.helo=mail-pj2-f11.google.com; " +
+            "spf=pass (sender allowed) smtp.mailfrom=sara@gmail.com; dmarc=pass header.from=gmail.com"
+        assertNull(sentVia("sara@gmail.com", gmail))
+        val spf = authChecks(gmail).first { it.label == "SPF" }
+        assertEquals(Check.PASS, spf.verdict)
+        assertEquals("sara@gmail.com", spf.value)
+    }
+
+    @Test
     fun `sizes read the way a mail client shows them`() {
         assertEquals("", humanBytes(0))
         assertEquals("812 B", humanBytes(812))

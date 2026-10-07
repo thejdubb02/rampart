@@ -22,7 +22,7 @@ internal data class Detail(val label: String, val value: String, val verdict: Ch
 internal fun authChecks(authenticationResults: String?): List<Detail> {
     val line = topLine(authenticationResults)
     return listOf(
-        Detail("SPF", propertyOf(line, SPF_DOMAIN), verdictOf(line, "spf")),
+        spfClause(line).let { Detail("SPF", propertyOf(it, SPF_DOMAIN), verdictOf(it, "spf")) },
         Detail("DKIM", propertyOf(line, DKIM_DOMAIN), verdictOf(line, "dkim")),
         Detail("DMARC", propertyOf(line, DMARC_POLICY).let { if (it.isBlank()) "" else "policy: $it" },
             verdictOf(line, "dmarc")),
@@ -93,7 +93,7 @@ internal fun shownRecipients(all: List<String>, upTo: Int = 2): Pair<List<String
  */
 internal fun sentVia(fromEmail: String, authenticationResults: String?): String? {
     val line = topLine(authenticationResults)
-    val envelope = propertyOf(line, SPF_DOMAIN).substringAfterLast('@').lowercase()
+    val envelope = propertyOf(spfClause(line), SPF_DOMAIN).substringAfterLast('@').lowercase()
     val claimed = fromEmail.substringAfterLast('@').trim().lowercase()
     if (envelope.isBlank() || claimed.isBlank()) return null
     // Same registrable-looking tail is not "via" anything: mail from bounces.example.com
@@ -106,6 +106,18 @@ private fun unfold(header: String) = header.replace(Regex("\\r?\\n[ \\t]+"), " "
 
 private fun topLine(header: String?) =
     unfold(header.orEmpty()).lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
+
+/**
+ * The SPF result for the envelope sender, not the HELO name.
+ *
+ * Stalwart checks both and writes the HELO one first, so reading the first spf= on the line
+ * reported "none" against Google's sending host on ordinary Gmail mail and put a false
+ * "via mail-pj2-f11.google.com" chip next to the sender (2026-10-07).
+ */
+private fun spfClause(line: String): String {
+    val clauses = line.split(';').filter { Regex("(?i)\\bspf\\s*=").containsMatchIn(it) }
+    return clauses.firstOrNull { it.contains("smtp.mailfrom", ignoreCase = true) } ?: clauses.firstOrNull().orEmpty()
+}
 
 private fun verdictOf(line: String, mechanism: String): Check {
     val found = Regex("(?i)\\b$mechanism\\s*=\\s*([a-zA-Z]+)").find(line)?.groupValues?.get(1)?.lowercase()

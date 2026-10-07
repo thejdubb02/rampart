@@ -56,6 +56,7 @@ internal fun emailDocument(
     val source = Jsoup.parse(collapseBlankRuns(withoutTofu(html))).also(::scrubTofu)
     val clean = Cleaner(EMAIL_SAFELIST).clean(source)
     clean.outputSettings().prettyPrint(false)
+    keepWordBlankLines(clean)
     val held = resolveImages(clean, carried, remoteImages)
     val policy = if (remoteImages) REMOTE_POLICY else LOCAL_POLICY
     val css = stylesheet(source, remoteImages)
@@ -93,6 +94,24 @@ internal fun emailDocument(
 </head><body>$body</body></html>""",
         held,
     )
+}
+
+/**
+ * Gives Outlook's blank lines their height back.
+ *
+ * Outlook writes a blank line as a paragraph of its own holding one space, often inside a
+ * span. Word draws that as a line. A browser engine collapses a paragraph of nothing but
+ * whitespace to no height at all, so every gap the sender typed vanished and the lines ran
+ * together ("Re: layout", 2026-10-07). A no-break space is not collapsed, which is what
+ * Outlook usually writes and what this puts back. Only Word's own paragraphs, the ones
+ * with an `Mso` class, so an empty paragraph in a designed newsletter is left at the zero
+ * height every webmail gives it.
+ */
+private fun keepWordBlankLines(document: Document) {
+    for (p in document.select("p[class^=Mso]")) {
+        if (p.text().isNotBlank() || p.select("img, br, table, hr").isNotEmpty()) continue
+        (p.select("*").lastOrNull { it.childrenSize() == 0 } ?: p).appendText("\u00A0")
+    }
 }
 
 /**

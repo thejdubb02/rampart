@@ -348,4 +348,17 @@ class EmailDocumentTest {
 
         assertFalse(page(html).document.contains("word-break: break-word"), "a real design was overridden")
     }
+
+    @Test
+    fun `an Outlook blank line keeps its height, an empty designed paragraph does not gain one`() {
+        val outlook = page(
+            "<p class=MsoNoSpacing><span style='font-size:12pt'>Good morning,<o:p></o:p></span></p>" +
+                "<p class=MsoNoSpacing><span style='font-size:12pt'> <o:p></o:p></span></p>" +
+                "<p class=MsoNoSpacing><span style='font-size:12pt'>Lisa<o:p></o:p></span></p>",
+        ).document
+        val body = outlook.substringAfter("<body")
+        assertTrue("\u00A0</span>" in body || "&nbsp;</span>" in body, body)
+        val designed = page("<p>Hi</p><p> </p><p>There</p>").document
+        assertFalse("\u00A0" in designed.substringAfter("<body") || "&nbsp;" in designed.substringAfter("<body"), designed.substringAfter("<body"))
+    }
 }
