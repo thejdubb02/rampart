@@ -66,6 +66,13 @@ causes, both in writing each page to the local copy:
 
 - **A full sync from empty against a real server.** The tests above stand in for the
   server. The page count and the local work are known, the wire time is not.
-- **Memory after an hour, and after a day.** The soak opens 500 messages and checks the
-  heap, which catches a leak per message. It does not cover the embedded browser engine's
-  own memory, which lives outside the Java heap, or a window left open overnight.
+- **Memory after a day.** The soak opens 500 messages and checks the heap, which catches
+  a leak per message. A window left open overnight is still unmeasured.
+
+## Memory with the app left open (2026-10-08)
+
+The real app ran against the test mailbox under a virtual display for 37 minutes, sampled
+every minute. Process memory (including the embedded browser engine, which lives outside
+the Java heap) moved between 1.1 and 1.7 GB, the Java heap between 170 and 655 MB, and the
+thread count held at 125 to 126. Both rose and fell with garbage collection and showed no
+steady climb. The run was cut short at 37 of the planned 60 minutes when the session ended.
