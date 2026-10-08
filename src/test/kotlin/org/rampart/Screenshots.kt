@@ -474,7 +474,7 @@ class Screenshots {
                 onClear = {},
                 onClose = {},
                 onSettings = {},
-                model = "anthropic/claude-haiku-4-5",
+                model = "anthropic/claude-haiku-5.5",
             )
         }
         // The other icon pack, so a change to either set is visible in a diff.

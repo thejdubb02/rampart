@@ -57,10 +57,10 @@ data class AssistantConfig(
     val mode: AssistantMode = AssistantMode.OFF,
     /** Chat-completions base, without the `/chat/completions` on the end. */
     val baseUrl: String = "https://openrouter.ai/api/v1",
-    val model: String = "anthropic/claude-haiku-4-5",
+    val model: String = "anthropic/claude-haiku-5.5",
     /** Dollars per million tokens in and out, for the running total. */
-    val dollarsIn: Double = 1.0,
-    val dollarsOut: Double = 5.0,
+    val dollarsIn: Double = 0.10,
+    val dollarsOut: Double = 0.50,
     /**
      * Dollars a month, after which the features stop rather than warn.
      *
@@ -74,7 +74,7 @@ data class AssistantConfig(
 data class Spend(val calls: Int, val tokensIn: Int, val tokensOut: Int, val dollars: Double)
 
 object Assistant {
-    /** Where an answer came from, shown under it: `local:qwen2.5:14b` or `cloud:anthropic/claude-haiku-4-5`. */
+    /** Where an answer came from, shown under it: `local:qwen2.5:14b` or `cloud:anthropic/claude-haiku-5.5`. */
     fun provenance(config: AssistantConfig): String =
         (if (config.mode == AssistantMode.LOCAL) "local:" else "cloud:") + config.model
 
