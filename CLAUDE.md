@@ -84,24 +84,8 @@ scrubbed.
 
 ## Releasing is deliberate, not automatic
 
-Every push runs the tests. Only a manual run packages and publishes:
-
-    gh workflow run build.yml --field release=true
-
-It used to release on every push, which gave a version number to every commit and
-asked an installed copy to restart for a one line change. Packaging is also the
-slowest and least reliable step by a wide margin: on 2026-09-17 three of five
-runs died partway through uploading to GitHub, each time with a different file
-and nothing wrong with the code.
-
-When a release does fail halfway, the release object already exists and Conveyor
-refuses to publish over one, so a re-run fails for a second, different reason.
-Clear it first, then re-run:
-
-    gh release delete 0.1.<n> --yes --cleanup-tag
-
-The version is the commit count either way, so it keeps climbing between
-releases and a released version is simply the count at the moment it went out.
+Every push runs the tests; only a manual workflow run packages and publishes. The
+command, why, and how to recover a release that failed halfway: `docs/shipping.md`.
 
 ## The issues are the status, and they are kept current as we go
 

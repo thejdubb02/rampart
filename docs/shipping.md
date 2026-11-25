@@ -1,13 +1,35 @@
 # Shipping Rampart
 
-One install, then it keeps itself current. A push to `main` is the release.
+One install, then it keeps itself current. A push to `main` runs the tests; a release is a
+deliberate manual run (below).
+
+## Releasing is deliberate, not automatic
+
+Every push runs the tests. Only a manual run packages and publishes:
+
+    gh workflow run build.yml --field release=true
+
+It used to release on every push, which gave a version number to every commit and
+asked an installed copy to restart for a one line change. Packaging is also the
+slowest and least reliable step by a wide margin: on 2026-09-17 three of five
+runs died partway through uploading to GitHub, each time with a different file
+and nothing wrong with the code.
+
+When a release does fail halfway, the release object already exists and Conveyor
+refuses to publish over one, so a re-run fails for a second, different reason.
+Clear it first, then re-run:
+
+    gh release delete 0.1.<n> --yes --cleanup-tag
+
+The version is the commit count either way, so it keeps climbing between
+releases and a released version is simply the count at the moment it went out.
 
 ## What happens on a push
 
 GitHub Actions runs on Linux and does all of it, for every platform:
 
 1. `./gradlew test jar` runs the tests and renders the screenshots.
-2. Conveyor cross-builds the Windows and Linux packages, signs them, and replaces
+2. On a release run only, Conveyor cross-builds the Windows and Linux packages, signs them, and replaces
    the GitHub release that installed copies read.
 
 There is no Windows machine anywhere in the chain. Conveyor builds Windows packages
